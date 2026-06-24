@@ -1,6 +1,7 @@
 """Streamlit app entry point for the IELTS Writing Correction Skill."""
 
 import base64
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -9,7 +10,7 @@ from dotenv import load_dotenv
 
 from src.ai_grader import AIGraderError, grade_essay
 from src.error_book import append_error_book
-from src.storage import extract_overall_score, list_correction_history, save_markdown_record
+from src.storage import list_correction_history, save_markdown_record
 from src.text_utils import count_words, word_count_warning
 
 
@@ -17,6 +18,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).parent
 BACKGROUND_IMAGE = BASE_DIR / "assets" / "hawaii-background.png"
+SCORE_PATTERN = re.compile(r"(?:Likely Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
 
 
 def image_to_base64(path: Path) -> str:
@@ -212,6 +214,15 @@ def render_score_card(label: str, value: str, note: str = "") -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def extract_overall_score(markdown: str) -> float | None:
+    """Extract the likely overall band score from the latest report text."""
+    match = SCORE_PATTERN.search(markdown)
+    if not match:
+        return None
+
+    return float(match.group(1))
 
 
 def render_history() -> None:
