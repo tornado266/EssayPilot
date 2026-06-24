@@ -4,7 +4,13 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from openai import APIConnectionError, APIStatusError, OpenAI, OpenAIError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    DefaultHttpxClient,
+    OpenAI,
+    OpenAIError,
+)
 
 from src.prompts import build_grading_prompt
 
@@ -12,7 +18,8 @@ from src.prompts import build_grading_prompt
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
+REQUEST_TIMEOUT_SECONDS = 60.0
 
 
 class AIGraderError(Exception):
@@ -62,6 +69,8 @@ def get_provider_config(provider: str) -> tuple[str, str | None, str]:
     if provider == "DeepSeek":
         base_url = os.getenv("DEEPSEEK_BASE_URL", DEEPSEEK_DEFAULT_BASE_URL).strip()
         base_url = base_url.rstrip("/") or DEEPSEEK_DEFAULT_BASE_URL
+        if base_url == "https://api.deepseek.com":
+            base_url = DEEPSEEK_DEFAULT_BASE_URL
         return (
             "DEEPSEEK_API_KEY",
             os.getenv("DEEPSEEK_API_KEY"),
@@ -72,8 +81,13 @@ def get_provider_config(provider: str) -> tuple[str, str | None, str]:
 
 
 def build_client(provider: str) -> OpenAI:
-    """Create an API client for DeepSeek or OpenAI."""
+    """Create an API client for OpenAI-compatible providers."""
     key_name, api_key, base_url = get_provider_config(provider)
+    http_client = DefaultHttpxClient(
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        trust_env=False,
+    )
+
     if provider == "DeepSeek":
         if not api_key:
             raise ValueError(
@@ -84,7 +98,8 @@ def build_client(provider: str) -> OpenAI:
             api_key=api_key,
             base_url=base_url,
             max_retries=0,
-            timeout=60.0,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            http_client=http_client,
         )
 
     if not api_key:
@@ -92,7 +107,12 @@ def build_client(provider: str) -> OpenAI:
             f"{key_name} is missing. Please set it before running the app."
         )
 
-    return OpenAI(api_key=api_key, max_retries=0, timeout=60.0)
+    return OpenAI(
+        api_key=api_key,
+        max_retries=0,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        http_client=http_client,
+    )
 
 
 def grade_essay(provider: str, task_type: str, topic: str, essay: str, model: str) -> str:
