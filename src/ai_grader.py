@@ -10,7 +10,9 @@ def build_client(provider: str) -> OpenAI:
     if provider == "DeepSeek":
         api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
-            raise ValueError("DEEPSEEK_API_KEY is missing. Please set it before running the app.")
+            raise ValueError(
+                "DEEPSEEK_API_KEY is missing. Please set it before running the app."
+            )
 
         return OpenAI(
             api_key=api_key,
@@ -19,7 +21,9 @@ def build_client(provider: str) -> OpenAI:
 
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY is missing. Please set it before running the app.")
+        raise ValueError(
+            "OPENAI_API_KEY is missing. Please set it before running the app."
+        )
 
     return OpenAI(api_key=api_key)
 

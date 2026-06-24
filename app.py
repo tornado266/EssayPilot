@@ -5,7 +5,9 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from src.ai_grader import grade_essay
+from src.error_book import append_error_book
 from src.storage import save_markdown_record
+from src.text_utils import count_words, word_count_warning
 
 
 load_dotenv()
@@ -39,7 +41,12 @@ def inject_page_style() -> None:
         }}
 
         [data-testid="stSidebar"] > div:first-child {{
-            background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(223, 250, 255, 0.78));
+            background:
+                linear-gradient(
+                    180deg,
+                    rgba(255, 255, 255, 0.86),
+                    rgba(223, 250, 255, 0.78)
+                );
             backdrop-filter: blur(18px);
             border-right: 1px solid rgba(255, 255, 255, 0.55);
         }}
@@ -159,7 +166,10 @@ def show_markdown_file(path: Path) -> None:
 
 
 st.title("IELTS Writing Correction Skill")
-st.caption("A beginner-friendly IELTS essay checker powered by Python, Streamlit, and AI APIs.")
+st.caption(
+    "A beginner-friendly IELTS essay checker powered by Python, "
+    "Streamlit, and AI APIs."
+)
 
 with st.sidebar:
     st.header("Settings")
@@ -173,12 +183,14 @@ with st.sidebar:
             """
             1. Overall Band Score
             2. Four Criteria Scores
-            3. Main Problems
-            4. Sentence-level Corrections
-            5. Paragraph-level Feedback
-            6. Band 7.5 Rewrite
-            7. Useful Expressions
-            8. Next Practice Task
+            3. Top 3 Score-Boosting Priorities
+            4. Main Problems
+            5. Sentence-level Corrections
+            6. Paragraph-level Feedback
+            7. Band 7.5 Rewrite
+            8. Useful Expressions
+            9. Seven-Day Training Plan
+            10. Next Practice Task
             """
         )
 
@@ -193,6 +205,18 @@ essay = st.text_area(
     height=320,
     placeholder="Paste your full essay here.",
 )
+
+word_count = count_words(essay)
+minimum_words = 150 if task_type == "Task 1" else 250
+count_label = f"Word count: {word_count} / {minimum_words}+"
+if essay.strip():
+    warning = word_count_warning(task_type, word_count)
+    if warning:
+        st.warning(warning)
+    else:
+        st.success(count_label)
+else:
+    st.caption(count_label)
 
 submitted = st.button("Grade My Essay", type="primary")
 
@@ -214,6 +238,12 @@ if submitted:
                     topic=topic,
                     essay=essay,
                     report=report,
+                    word_count=word_count,
+                )
+                error_book_path = append_error_book(
+                    task_type=task_type,
+                    topic=topic,
+                    report=report,
                 )
             except Exception as exc:
                 st.error(f"Something went wrong: {exc}")
@@ -229,3 +259,5 @@ if submitted:
                     st.subheader("Saved Record")
                     st.write(str(saved_path))
                     show_markdown_file(saved_path)
+                    st.subheader("Error Book")
+                    st.write(str(error_book_path))

@@ -3,6 +3,16 @@
 This is a beginner-friendly IELTS Writing correction project.
 It supports DeepSeek by default and can also use OpenAI.
 
+## Project Highlights
+
+- Portfolio-ready Streamlit web app with a bright tropical UI
+- DeepSeek-first API design for lower-cost IELTS writing practice
+- IELTS Task 1 and Task 2 scoring prompts with different examiner focus
+- Word count warnings for IELTS minimum word requirements
+- Markdown correction history saved locally
+- Error book that collects grammar, vocabulary, logic, and structure issues
+- Band range scoring, Band 7.5 rewrite, useful expressions, and a 7-day plan
+
 It works like a simple "Skill":
 
 1. You enter an IELTS Writing question.
@@ -19,8 +29,25 @@ It works like a simple "Skill":
 - Give paragraph-by-paragraph advice
 - Rewrite the essay in a Band 7.5 style
 - Generate high-scoring expressions to memorize
+- Warn when Task 1 is under 150 words or Task 2 is under 250 words
+- Save common mistakes to `records/error_book.md`
 - Give the next practice task
 - Save each correction in the `records` folder
+
+## Screenshots
+
+Place portfolio screenshots in this folder:
+
+```text
+screenshots/
+```
+
+Suggested screenshots:
+
+- Home page with the Hawaii-style background
+- A completed correction report
+- The saved Markdown record
+- The generated error book
 
 ## Project Structure
 
@@ -30,11 +57,14 @@ ielts-writing-skill/
   requirements.txt
   README.md
   .env.example
+  screenshots/
   src/
     __init__.py
     ai_grader.py
+    error_book.py
     prompts.py
     storage.py
+    text_utils.py
   records/
     .gitkeep
 ```
@@ -73,9 +103,15 @@ cd ielts-writing-skill
 
 Windows PowerShell:
 
-```bash
+```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks activation, run this once:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
 macOS or Linux:
@@ -95,7 +131,7 @@ pip install -r requirements.txt
 
 Windows PowerShell:
 
-```bash
+```powershell
 $env:DEEPSEEK_API_KEY="your_deepseek_api_key_here"
 ```
 
@@ -157,10 +193,13 @@ This project uses the official OpenAI Python SDK because DeepSeek provides an Op
 The default DeepSeek model is `deepseek-chat`.
 The model name is editable in the sidebar. If a model is not available in your account, replace it with another text model you can access.
 
-## Possible Future Improvements
+## Future Development Roadmap
 
 - Add a history page
-- Add word count checking
-- Add separate prompts for Task 1 and Task 2
+- Add score trend charts
+- Add filters for grammar, vocabulary, logic, and structure mistakes
 - Export correction records as PDF
+- Add a screenshot gallery for portfolio presentation
+- Add sample essays for quick demo mode
+- Add tests for word count and error-book extraction
 - Track band score progress over time

@@ -6,7 +6,13 @@ from textwrap import dedent
 RECORDS_DIR = Path("records")
 
 
-def save_markdown_record(task_type: str, topic: str, essay: str, report: str) -> Path:
+def save_markdown_record(
+    task_type: str,
+    topic: str,
+    essay: str,
+    report: str,
+    word_count: int,
+) -> Path:
     """Save one correction record as a local markdown file."""
     RECORDS_DIR.mkdir(exist_ok=True)
 
@@ -18,6 +24,7 @@ def save_markdown_record(task_type: str, topic: str, essay: str, report: str) ->
         # IELTS Writing Correction Record
 
         - Task Type: {task_type}
+        - Word Count: {word_count}
         - Created At: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
         ## Essay Question
