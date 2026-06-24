@@ -14,9 +14,9 @@ from src.storage import save_markdown_record
 from src.text_utils import count_words, word_count_warning
 
 
-load_dotenv()
-
 BASE_DIR = Path(__file__).parent
+load_dotenv(BASE_DIR / ".env")
+
 BACKGROUND_IMAGE = BASE_DIR / "assets" / "hawaii-background.png"
 SCORE_PATTERN = re.compile(r"(?:Likely Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
 
@@ -279,7 +279,7 @@ with st.sidebar:
     st.header("Settings")
     task_type = st.radio("IELTS task type", ["Task 2", "Task 1"], horizontal=True)
     provider = st.selectbox("AI provider", ["DeepSeek", "OpenAI"])
-    default_model = "deepseek-chat" if provider == "DeepSeek" else "gpt-4.1-mini"
+    default_model = "deepseek-v4-flash" if provider == "DeepSeek" else "gpt-4.1-mini"
     model = st.text_input("Model", value=default_model)
     st.info("For DeepSeek, set DEEPSEEK_API_KEY. For OpenAI, set OPENAI_API_KEY.")
     with st.expander("Examiner report includes", expanded=False):

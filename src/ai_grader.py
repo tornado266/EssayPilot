@@ -1,11 +1,16 @@
 """AI provider client and IELTS grading request."""
 
 import os
+from pathlib import Path
 
+from dotenv import load_dotenv
 from openai import APIConnectionError, APIStatusError, OpenAI, OpenAIError
 
 from src.prompts import build_grading_prompt
 
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
 
 DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
 
@@ -55,10 +60,12 @@ class AIGraderError(Exception):
 def get_provider_config(provider: str) -> tuple[str, str | None, str]:
     """Return environment variable name, API key, and base URL for a provider."""
     if provider == "DeepSeek":
+        base_url = os.getenv("DEEPSEEK_BASE_URL", DEEPSEEK_DEFAULT_BASE_URL).strip()
+        base_url = base_url.rstrip("/") or DEEPSEEK_DEFAULT_BASE_URL
         return (
             "DEEPSEEK_API_KEY",
             os.getenv("DEEPSEEK_API_KEY"),
-            os.getenv("DEEPSEEK_BASE_URL", DEEPSEEK_DEFAULT_BASE_URL),
+            base_url,
         )
 
     return ("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"), "https://api.openai.com/v1")
@@ -76,6 +83,8 @@ def build_client(provider: str) -> OpenAI:
         return OpenAI(
             api_key=api_key,
             base_url=base_url,
+            max_retries=0,
+            timeout=60.0,
         )
 
     if not api_key:
@@ -83,7 +92,7 @@ def build_client(provider: str) -> OpenAI:
             f"{key_name} is missing. Please set it before running the app."
         )
 
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key, max_retries=0, timeout=60.0)
 
 
 def grade_essay(provider: str, task_type: str, topic: str, essay: str, model: str) -> str:
