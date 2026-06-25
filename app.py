@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-from src.ai_grader import AIGraderError, grade_essay
+from src.ai_grader import AIGraderError, grade_essay, test_deepseek_connection
 from src.error_book import append_error_book
 from src.storage import save_markdown_record
 from src.text_utils import count_words, word_count_warning
@@ -262,6 +262,12 @@ def render_history() -> None:
         st.info("No scored history yet. Complete a correction to build your trend chart.")
         return
 
+    if len(scored_history) == 1:
+        item = scored_history[0]
+        render_score_card("Latest Score", f"{item['score']:.1f}", item["created_at"])
+        st.info("Need at least 2 essays to generate progress trend")
+        return
+
     chart_data = pd.DataFrame(
         {
             "Practice": [item["created_at"] for item in scored_history[-10:]],
@@ -282,6 +288,41 @@ with st.sidebar:
     default_model = "deepseek-chat" if provider == "DeepSeek" else "gpt-4.1-mini"
     model = st.text_input("Model", value=default_model)
     st.info("For DeepSeek, set DEEPSEEK_API_KEY. For OpenAI, set OPENAI_API_KEY.")
+
+    st.divider()
+    st.subheader("System Status")
+    if "deepseek_status" not in st.session_state:
+        st.session_state.deepseek_status = {
+            "state": "unknown",
+            "message": "Not checked yet",
+            "latency_ms": None,
+        }
+
+    if st.button("Test DeepSeek Connection", use_container_width=True):
+        try:
+            result = test_deepseek_connection()
+            st.session_state.deepseek_status = {
+                "state": "success",
+                "message": str(result["reply"]),
+                "latency_ms": result["latency_ms"],
+            }
+        except AIGraderError as exc:
+            st.session_state.deepseek_status = {
+                "state": "failed",
+                "message": exc.user_message(),
+                "latency_ms": None,
+            }
+
+    status = st.session_state.deepseek_status
+    if status["state"] == "success":
+        st.success(f"DeepSeek API online ({status['latency_ms']} ms)")
+        st.caption(f"Reply: {status['message']}")
+    elif status["state"] == "failed":
+        st.error("DeepSeek API failed")
+        st.caption(status["message"])
+    else:
+        st.caption("DeepSeek API status has not been checked.")
+
     with st.expander("Examiner report includes", expanded=False):
         st.markdown(
             """
@@ -353,7 +394,7 @@ with result_col:
         if not topic.strip() or not essay.strip():
             st.error("Please enter both the essay question and your essay.")
         else:
-            with st.spinner("The examiner is scoring, diagnosing, and rewriting..."):
+            with st.spinner("AI is evaluating your essay..."):
                 try:
                     report = grade_essay(
                         provider=provider,
@@ -378,15 +419,10 @@ with result_col:
                     st.session_state.latest_saved_path = saved_path
                     st.session_state.latest_error_book_path = error_book_path
                 except AIGraderError as exc:
-                    st.error("The AI request failed. Full diagnostic details are below.")
-                    st.code(str(exc), language="text")
+                    st.error(exc.user_message())
+                    st.info("Use the sidebar connection test to confirm your DeepSeek setup.")
                 except Exception as exc:
-                    st.error("Unexpected app error. Full diagnostic details are below.")
-                    st.code(
-                        f"Exception Type: {type(exc).__name__}\n\n"
-                        f"{type(exc).__name__}:\n{exc}",
-                        language="text",
-                    )
+                    st.error("Something went wrong while preparing the report. Please try again.")
 
     if st.session_state.latest_report:
         score = extract_overall_score(st.session_state.latest_report)
