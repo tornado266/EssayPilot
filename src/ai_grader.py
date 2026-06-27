@@ -1,25 +1,13 @@
 """AI provider client and IELTS grading request."""
 
 import os
-import time
-from pathlib import Path
 
-import requests
-from dotenv import load_dotenv
-from openai import (
-    APIConnectionError,
-    APIStatusError,
-    OpenAI,
-    OpenAIError,
-)
+from openai import APIConnectionError, APIStatusError, OpenAI, OpenAIError
 
 from src.prompts import build_grading_prompt
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
-
-DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
 
 
 class AIGraderError(Exception):
@@ -33,7 +21,6 @@ class AIGraderError(Exception):
         api_key_loaded: bool,
         original_error: Exception,
         status_code: int | None = None,
-        raw_response_text: str | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
@@ -41,7 +28,6 @@ class AIGraderError(Exception):
         self.api_key_loaded = api_key_loaded
         self.original_error = original_error
         self.status_code = status_code
-        self.raw_response_text = raw_response_text or ""
         super().__init__(self._build_message())
 
     def _format_error_chain(self, error: BaseException) -> str:
@@ -65,58 +51,22 @@ class AIGraderError(Exception):
             f"Full Exception Chain:\n{self._format_error_chain(self.original_error)}"
         )
 
-    def user_message(self) -> str:
-        """Return a short message that is useful for non-technical users."""
-        error_text = str(self.original_error)
-        if not self.api_key_loaded:
-            return "DeepSeek API key is missing. Add DEEPSEEK_API_KEY to your .env file, then restart the app."
-        if self.status_code == 401:
-            return "DeepSeek rejected the API key. Check that DEEPSEEK_API_KEY is correct."
-        if self.status_code in {402, 429}:
-            return "DeepSeek could not process the request. Check your account balance, quota, or rate limit."
-        if self.status_code:
-            return f"DeepSeek returned HTTP {self.status_code}. Please try again or check your API account."
-        if "timed out" in error_text.lower() or "timeout" in error_text.lower():
-            return "The request timed out. Please try again with a stable network connection."
-        if "connection" in error_text.lower() or "winerror" in error_text.lower():
-            return "The app could not connect to DeepSeek from this Streamlit session."
-        return "The AI request failed. Please check the setup and try again."
-
-    def debug_details(self) -> str:
-        """Return technical details for a collapsed debug expander."""
-        parts = [
-            f"provider: {self.provider}",
-            f"model: {self.model}",
-            f"status_code: {self.status_code if self.status_code is not None else 'N/A'}",
-            f"api_key_loaded: {self.api_key_loaded}",
-            "",
-            str(self),
-        ]
-        if self.raw_response_text:
-            parts.extend(["", "raw_response_text:", self.raw_response_text])
-        return "\n".join(parts)
-
 
 def get_provider_config(provider: str) -> tuple[str, str | None, str]:
     """Return environment variable name, API key, and base URL for a provider."""
     if provider == "DeepSeek":
-        base_url = os.getenv("DEEPSEEK_BASE_URL", DEEPSEEK_DEFAULT_BASE_URL).strip()
-        base_url = base_url.rstrip("/") or DEEPSEEK_DEFAULT_BASE_URL
-        if base_url == "https://api.deepseek.com":
-            base_url = DEEPSEEK_DEFAULT_BASE_URL
         return (
             "DEEPSEEK_API_KEY",
             os.getenv("DEEPSEEK_API_KEY"),
-            base_url,
+            os.getenv("DEEPSEEK_BASE_URL", DEEPSEEK_DEFAULT_BASE_URL),
         )
 
     return ("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"), "https://api.openai.com/v1")
 
 
 def build_client(provider: str) -> OpenAI:
-    """Create an API client for OpenAI-compatible providers."""
+    """Create an API client for DeepSeek or OpenAI."""
     key_name, api_key, base_url = get_provider_config(provider)
-
     if provider == "DeepSeek":
         if not api_key:
             raise ValueError(
@@ -136,79 +86,10 @@ def build_client(provider: str) -> OpenAI:
     return OpenAI(api_key=api_key)
 
 
-def build_deepseek_http_error(response: requests.Response) -> RuntimeError:
-    """Include DeepSeek status code and response body in request errors."""
-    return RuntimeError(
-        f"DeepSeek request failed.\n"
-        f"Status code: {response.status_code}\n"
-        f"Response text:\n{response.text}"
-    )
-
-
-def call_deepseek(messages: list[dict[str, str]]) -> str:
-    """Send messages to DeepSeek with a direct HTTP request."""
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise ValueError("DEEPSEEK_API_KEY is missing.")
-
-    response = requests.post(
-        "https://api.deepseek.com/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": "deepseek-chat",
-            "messages": messages,
-        },
-        timeout=60,
-    )
-    response.raise_for_status()
-    result = response.json()
-    return result["choices"][0]["message"]["content"]
-
-
-def test_deepseek_connection() -> dict[str, object]:
-    """Send a tiny DeepSeek request for the sidebar connection test."""
-    try:
-        started_at = time.perf_counter()
-        reply = call_deepseek([{"role": "user", "content": "hello"}])
-        latency_ms = round((time.perf_counter() - started_at) * 1000)
-        return {
-            "ok": True,
-            "latency_ms": latency_ms,
-            "reply": reply,
-        }
-    except requests.HTTPError as exc:
-        response = exc.response
-        status_code = response.status_code if response is not None else None
-        error = (
-            build_deepseek_http_error(response)
-            if response is not None
-            else RuntimeError(str(exc))
-        )
-        raise AIGraderError(
-            provider="DeepSeek",
-            model="deepseek-chat",
-            base_url=DEEPSEEK_DEFAULT_BASE_URL,
-            api_key_loaded=bool(os.getenv("DEEPSEEK_API_KEY")),
-            original_error=error,
-            status_code=status_code,
-            raw_response_text=response.text if response is not None else "",
-        ) from exc
-    except Exception as exc:
-        raise AIGraderError(
-            provider="DeepSeek",
-            model="deepseek-chat",
-            base_url=DEEPSEEK_DEFAULT_BASE_URL,
-            api_key_loaded=bool(os.getenv("DEEPSEEK_API_KEY")),
-            original_error=exc,
-        ) from exc
-
-
 def grade_essay(provider: str, task_type: str, topic: str, essay: str, model: str) -> str:
     """Send the IELTS essay to an AI provider and return a markdown correction report."""
     _, api_key, base_url = get_provider_config(provider)
+    client = build_client(provider)
 
     prompt = build_grading_prompt(
         task_type=task_type,
@@ -216,55 +97,319 @@ def grade_essay(provider: str, task_type: str, topic: str, essay: str, model: st
         essay=essay,
     )
 
-    messages = [
-        {
-            "role": "system",
-            "content": "You are a strict but helpful IELTS Writing Task 2 examiner. Return valid JSON only.",
-        },
-        {"role": "user", "content": prompt},
-    ]
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert IELTS Writing examiner.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=8000,
+        )
+    except APIStatusError as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+            status_code=exc.status_code,
+        ) from exc
+    except (APIConnectionError, OpenAIError) as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+        ) from exc
+    except Exception as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+        ) from exc
 
-    if provider == "DeepSeek":
-        base_url = "https://api.deepseek.com/v1"
-        model = "deepseek-chat"
-        api_key = os.getenv("DEEPSEEK_API_KEY")
+    report = response.choices[0].message.content or ""
+
+    if "单句提分训练" not in report:
+        fallback_prompt = f"""
+The previous IELTS report missed its final training section.
+Create only the missing final section below, based strictly on the student's essay.
+
+Requirements:
+- Choose several of the weakest sentences from the student's essay.
+- Ask the student to rewrite these sentences.
+- Do not provide reference rewrites.
+- Return only this section in Markdown.
+- Use exactly this structure:
+
+## 11. 单句提分训练
+
+【练习任务】
+请改写下面这几句话，使其更符合雅思6.5-7分水平：
+
+1. "（原句）"
+2. "（原句）"
+3. "（原句）"
+
+IELTS task type:
+{task_type}
+
+Essay question:
+{topic}
+
+Student essay:
+{essay}
+""".strip()
 
         try:
-            result_text = call_deepseek(messages)
-        except requests.HTTPError as exc:
-            response = exc.response
-            status_code = response.status_code if response is not None else None
-            error = (
-                build_deepseek_http_error(response)
-                if response is not None
-                else RuntimeError(str(exc))
+            fallback_response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert IELTS Writing examiner.",
+                    },
+                    {"role": "user", "content": fallback_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=1600,
             )
-            raise AIGraderError(
-                provider=provider,
-                model=model,
-                base_url=base_url,
-                api_key_loaded=bool(api_key),
-                original_error=error,
-                status_code=status_code,
-                raw_response_text=response.text if response is not None else "",
-            ) from exc
-        except Exception as exc:
-            raise AIGraderError(
-                provider=provider,
-                model=model,
-                base_url=base_url,
-                api_key_loaded=bool(api_key),
-                original_error=exc,
-            ) from exc
+            extra_section = fallback_response.choices[0].message.content or ""
+            if extra_section.strip():
+                report = f"{report.rstrip()}\n\n{extra_section.strip()}"
+        except Exception:
+            report = (
+                f"{report.rstrip()}\n\n"
+                "## 11. 单句提分训练\n\n"
+                "【练习任务】\n"
+                "请从你的作文中选择几句表达最简单或最不准确的句子，"
+                "改写成更符合雅思6.5-7分水平的句子。\n\n"
+                "本部分原句提取失败，请重新点击批改生成练习句子。"
+            )
 
-        return result_text
+    if "写作提升验证" not in report:
+        logic_prompt = f"""
+The previous IELTS report missed the writing improvement validation section.
+Create only the missing section below, based strictly on the student's essay.
 
+Requirements:
+- Choose 2-3 core logic or structure problems.
+- Choose one original paragraph or key fragment for each task.
+- Give one rewrite task for each fragment.
+- Do not review the student's rewrite here.
+- Return only this section in Markdown.
+- Use exactly this structure:
+
+## 12. 写作提升验证
+
+【提升练习】
+请根据刚才的问题，重写你文章中的一个关键部分：
+
+### 任务 1
+问题：论点不清 / 段落没有发展 / 例子不支持观点
+
+任务：
+改写/重写下面内容，使其逻辑更清晰、更符合雅思6.5水平：
+
+"（原文片段）"
+
+要求：
+- 2-4句话
+- 要有清晰论点 + 解释 + 例子
+
+IELTS task type:
+{task_type}
+
+Essay question:
+{topic}
+
+Student essay:
+{essay}
+""".strip()
+
+        try:
+            logic_response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert IELTS Writing examiner.",
+                    },
+                    {"role": "user", "content": logic_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=1800,
+            )
+            logic_section = logic_response.choices[0].message.content or ""
+            if logic_section.strip():
+                report = f"{report.rstrip()}\n\n{logic_section.strip()}"
+        except Exception:
+            report = (
+                f"{report.rstrip()}\n\n"
+                "## 12. 写作提升验证\n\n"
+                "【提升练习】\n"
+                "请根据刚才的问题，重写你文章中的一个关键部分。\n\n"
+                "本部分生成失败，请重新点击批改生成提升练习。"
+            )
+
+    return report
+
+
+def review_sentence_rewrite(
+    provider: str,
+    original_sentence: str,
+    student_rewrite: str,
+    model: str,
+) -> str:
+    """Review a student's rewritten sentence and return coaching feedback."""
+    _, api_key, base_url = get_provider_config(provider)
     client = build_client(provider)
+
+    prompt = f"""
+You are an IELTS Writing sentence coach for a Chinese high school student.
+Review the student's rewritten sentence against the original sentence.
+
+Original sentence:
+{original_sentence}
+
+Student rewrite:
+{student_rewrite}
+
+Give concise feedback in Chinese. Use this exact Markdown structure:
+
+### AI点评
+
+**大概水平：** Band X.X-X.X
+
+**做得好的地方：**
+- ...
+
+**还需要改的地方：**
+- ...
+
+**更自然的6.5-7分版本：**
+"..."
+
+**记住这个表达：**
+- ...
+
+Rules:
+- Be encouraging but specific.
+- Focus on grammar, vocabulary, naturalness, and IELTS suitability.
+- Do not make the sentence overly advanced.
+- Keep the improved version close to the student's meaning.
+""".strip()
 
     try:
         response = client.chat.completions.create(
             model=model,
-            messages=messages,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert IELTS Writing sentence coach.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=900,
+        )
+    except APIStatusError as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+            status_code=exc.status_code,
+        ) from exc
+    except (APIConnectionError, OpenAIError) as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+        ) from exc
+    except Exception as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+        ) from exc
+
+    return response.choices[0].message.content or ""
+
+
+def review_logic_rewrite(
+    provider: str,
+    problem: str,
+    original_fragment: str,
+    student_rewrite: str,
+    model: str,
+) -> str:
+    """Review a student's logic-level rewrite and return coaching feedback."""
+    _, api_key, base_url = get_provider_config(provider)
+    client = build_client(provider)
+
+    prompt = f"""
+You are an IELTS Writing logic and structure coach for a Chinese high school student.
+Review the student's rewritten paragraph or key fragment.
+
+Core problem:
+{problem}
+
+Original fragment:
+{original_fragment}
+
+Student rewrite:
+{student_rewrite}
+
+Give concise feedback in Chinese. Use this exact Markdown structure:
+
+### 对比反馈
+
+**大概水平：** Band X.X-X.X
+
+**是否改善逻辑结构：**
+- ...
+
+**是否更清晰：**
+- ...
+
+**是否更接近Band 6.5+：**
+- ...
+
+**下一步修改建议：**
+- ...
+
+Rules:
+- Be specific and evidence-based.
+- Focus on argument clarity, explanation, example support, and paragraph development.
+- Keep the advice practical for Band 6.5-7.0 improvement.
+""".strip()
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert IELTS Writing logic coach.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=1000,
         )
     except APIStatusError as exc:
         raise AIGraderError(
