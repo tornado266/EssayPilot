@@ -5,6 +5,7 @@ import hashlib
 import re
 from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
@@ -867,7 +868,34 @@ def render_history() -> None:
             "Band Score": [item["score"] for item in scored_history[-10:]],
         }
     )
-    st.line_chart(chart_data, x="Practice", y="Band Score")
+    trend_chart = (
+        alt.Chart(chart_data)
+        .mark_line(point=alt.OverlayMarkDef(filled=True, size=85), strokeWidth=3)
+        .encode(
+            x=alt.X(
+                "Practice:N",
+                sort=None,
+                title=None,
+                axis=alt.Axis(labelAngle=-25, labelLimit=150),
+            ),
+            y=alt.Y(
+                "Band Score:Q",
+                title="Band Score",
+                scale=alt.Scale(domain=[3, 9], clamp=True),
+                axis=alt.Axis(values=[3, 4, 5, 6, 7, 8, 9]),
+            ),
+            tooltip=[
+                alt.Tooltip("Practice:N", title="Practice"),
+                alt.Tooltip("Band Score:Q", title="Band Score", format=".1f"),
+            ],
+        )
+        .properties(height=300)
+        .configure_view(strokeWidth=0)
+        .configure_axis(gridColor="#d9e8ea", labelColor="#526d73", titleColor="#294e56")
+        .configure_line(color="#287d86")
+        .configure_point(color="#e87961")
+    )
+    st.altair_chart(trend_chart, width="stretch")
     st.caption("Showing the latest 10 saved correction records with extractable scores.")
 
 
