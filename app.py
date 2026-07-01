@@ -626,6 +626,35 @@ def report_before_interactive_practice(markdown: str) -> str:
     return report
 
 
+def render_grouped_examiner_report(markdown: str) -> None:
+    """Render the static examiner report as focused learning sections."""
+    report = report_before_interactive_practice(markdown)
+    groups = [
+        ("评分依据", (1, 2)),
+        ("核心提分方向", (3, 4)),
+        ("逐句与段落批改", (5, 6)),
+        ("Band 7.5 示范改写", (7,)),
+        ("表达积累与下一步", (8, 9)),
+    ]
+
+    rendered_any = False
+    for label, section_numbers in groups:
+        sections = [
+            extract_report_section(report, number)
+            for number in section_numbers
+        ]
+        content = "\n\n".join(section for section in sections if section)
+        if not content:
+            continue
+        rendered_any = True
+        with st.expander(label, expanded=False):
+            st.markdown(content)
+
+    if not rendered_any:
+        with st.expander("完整评分报告", expanded=False):
+            st.markdown(report)
+
+
 def extract_practice_sentences(markdown: str) -> list[str]:
     """Extract original sentences from the single-sentence practice section."""
     section_match = re.search(
@@ -1084,8 +1113,7 @@ with st.container():
             render_criteria_overview(st.session_state.latest_report)
 
             st.divider()
-            with st.expander("Full Examiner Report", expanded=False):
-                st.markdown(report_before_interactive_practice(st.session_state.latest_report))
+            render_grouped_examiner_report(st.session_state.latest_report)
 
             st.divider()
             with st.expander("Practice Task", expanded=False):
