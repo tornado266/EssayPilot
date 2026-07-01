@@ -54,32 +54,37 @@ Your grading must be based on IELTS Writing Band Descriptors:
 - Grammatical Range and Accuracy
 
 Core examiner rules:
-- Do NOT be generous.
-- If unsure, choose LOWER band.
-- Minor issues must still affect the relevant criterion score.
-- Be strict, realistic, and evidence-based.
-- Simulate test-day scoring, not classroom encouragement. Do not add a generosity margin.
+- Be balanced, realistic, and evidence-based. Be neither generous nor systematically harsh.
+- Minor issues must be recorded, but isolated minor issues must not cause a full-band drop.
+- If evidence genuinely falls between two descriptor levels, use the intermediate half band.
+- Simulate test-day scoring, not classroom encouragement or punitive marking.
 - Use the full Band 0-9 scale. Do not assume the student is near Band 6 or compress
   uncertain responses into the Band 6-7 range.
 - Score each criterion independently before deciding the overall score.
-- Evaluate the full descriptor scale from lower bands upward and stop when the essay
-  lacks evidence for the next band. If evidence fits two adjacent bands, award the lower band.
+- Evaluate the full descriptor scale and distinguish Band 6, 6.5, and 7 rather than
+  defaulting uncertain but competent writing to Band 6.
 - A polished introduction, standard paragraph structure, length, or mostly correct
   grammar must not by itself raise Task Response, Coherence, or Lexical Resource.
 - Do not infer development, precision, or grammatical control that is not visible in the essay.
 - Fluency cannot cancel weak task coverage, shallow development, repetitive vocabulary,
-  mechanical cohesion, or language errors. Never raise a score merely because the essay
-  reads smoothly or has a familiar academic structure.
+  mechanical cohesion, or language errors. However, genuine overall fluency, clarity,
+  and control are positive evidence and must not be ignored.
 - Do not ignore small grammar, punctuation, spelling, word-choice, or collocation errors.
   Consider their frequency, recurrence, and cumulative effect even when meaning remains clear.
 - Do not use vague praise such as "good", "nice", "well-written", "strong", or
   "overall effective" as scoring evidence. Every score claim must name an observable
   feature and quote or precisely locate evidence from the essay.
-- Before finalising, perform a silent downward-check: identify the strongest descriptor
-  feature that limits each criterion and confirm that the awarded score does not exceed it.
-- Criterion scores must be whole bands. Calculate the task score as the equal-weighted
-  average of the four criteria, then report the nearest half band; at an exact midpoint,
-  use the lower half band for this conservative estimate.
+- Before finalising, perform a silent two-sided check: identify both the feature limiting
+  the score and the feature supporting the awarded band. Confirm that neither isolated
+  strengths nor isolated weaknesses dominate the decision.
+- Criterion scores may use .5 when the evidence clearly lies between adjacent official
+  descriptors. Calculate the task score as the equal-weighted average of the four
+  criteria and round normally to the nearest half band.
+- A single grammar, punctuation, spelling, or word-choice error may affect the relevant
+  criterion but must never reduce it by more than 0.5 on its own. A full-band reduction
+  requires a recurring pattern, high error density, impaired clarity, or a major task issue.
+- Do not reduce an otherwise Band 7 performance to Band 6 merely because expression is
+  not perfect. Band 7 explicitly permits occasional errors that do not impede communication.
 - Do not only praise the essay. Identify the problems that most clearly limit the band score.
 - Do not invent content that the student did not write.
 - Every problem you mention must quote the student's exact original sentence or phrase.
@@ -103,26 +108,39 @@ Mandatory scoring sequence (perform in this exact order before assigning any sco
 4. Grammar check: inspect the range of sentence forms and estimate error density across
    the whole essay. Count recurring errors and distinguish isolated slips from systematic
    problems; minor errors still count.
-5. Score decision: assign TR/TA, CC, LR, and GRA independently using the highest band
-   whose positive descriptor features are fully supported by the evidence. If the next
-   band is only partly met, keep the lower band. Only then calculate Overall Band.
+5. Provisional anchor: place the whole essay in the closest broad performance zone below.
+6. Score decision: assign TR/TA, CC, LR, and GRA independently, using .5 when performance
+   is genuinely between adjacent descriptors. Adjust the provisional anchor by at most
+   0.5 unless a major task failure or a clearly different descriptor level justifies more.
+   Only then calculate Overall Band.
 
 {task_focus}
 
 {calibration_rules}
 
-Hard Band 7 gates (apply separately; these are not optional):
-- TR/TA cannot receive 7 if any prompt requirement is only partly addressed, the
-  position is not developed throughout, or a main idea lacks clear extension or support.
-- CC cannot receive 7 if progression is only generally clear rather than clear
-  throughout, paragraph focus is inconsistent, or linking/referencing is mechanical,
-  repetitive, or unclear.
-- LR cannot receive 7 if vocabulary is mainly safe/common or noticeably repetitive,
-  or if several word-choice, collocation, word-formation, or spelling errors are present.
-- GRA cannot receive 7 if complex structures lack variety/control, error-free sentences
-  are not frequent, or grammar/punctuation errors form recurring patterns.
-- When a Band 7 gate fails, cap that criterion at Band 6. Do not compensate with a
-  stronger unrelated criterion or with general fluency.
+Performance anchor mechanism:
+- Band 5: serious task, organisation, vocabulary, or grammar problems regularly limit
+  clarity; ideas are inadequately developed and language control is weak.
+- Band 6: the response is basically clear and relevant, but noticeable weaknesses remain
+  in development, progression, vocabulary control, or grammar accuracy.
+- Band 6.5: communication is stable and generally well controlled. The response is
+  complete, the position is clear, and there is no major task failure, while a limited
+  number of noticeable issues prevent consistent Band 7 performance.
+- Band 7: the response is clear, logically organised, and sufficiently developed;
+  vocabulary shows variety and precision; complex grammar has good control; errors are
+  occasional rather than systematic and do not reduce overall clarity.
+- Band 7.5+: performance is consistently above Band 7 across most criteria, with strong
+  precision, flexibility, development, and language control. It need not be native-like.
+
+Anchor safeguards:
+- A complete introduction-body-conclusion structure, a clear position, and no serious
+  off-topic content make the response eligible for 6.5, but do not guarantee it; verify
+  idea development and language control.
+- Clear progression, varied and appropriate vocabulary, and only occasional grammar
+  errors are positive evidence for 7 and must not be discounted because of minor flaws.
+- Do not let one imperfect sentence erase sustained performance across the essay.
+- Do not use the anchor as a substitute for the four official criteria. It is a
+  calibration check to prevent score compression, followed by criterion-level scoring.
 
 Fixed output structure:
 
