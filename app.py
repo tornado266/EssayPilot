@@ -26,6 +26,26 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent
 BACKGROUND_IMAGE = BASE_DIR / "assets" / "hawaii-background.png"
 SCORE_PATTERN = re.compile(r"(?:Likely Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
+SAMPLE_TOPIC = (
+    "Some people believe that university students should only study their main "
+    "subjects, while others think they should also study other subjects. "
+    "Discuss both views and give your own opinion."
+)
+SAMPLE_ESSAY = """Nowadays, there is a debate about whether university students should focus only on their major or learn some other subjects as well. Both choices have advantages, but I believe students should mainly study their major while taking a small number of other useful courses.
+
+On the one hand, concentrating on one subject can help students gain deeper knowledge. University courses are often difficult and students have limited time. For example, a computer science student needs to spend many hours learning programming, mathematics and completing projects. If this student also takes too many unrelated classes, it may be hard to develop strong professional skills. Therefore, focusing on the major can prepare students better for their future career.
+
+On the other hand, studying different subjects can make students more well-rounded. In modern workplaces, people often need skills from several areas. A business student who learns basic technology may communicate better with software developers, while an engineering student who studies communication can present ideas more clearly. Other subjects can also make university life more interesting and help students discover new interests.
+
+In my opinion, the best choice is to find a balance. Students should spend most of their time on their main subject because it is the foundation of their career. However, universities should allow them to choose one or two additional courses that support their goals or personal interests. This approach gives students specialist knowledge without making their education too narrow.
+
+In conclusion, focusing on a major develops professional ability, whereas studying other subjects provides broader skills. I believe a balanced programme, with the major as the priority, is the most practical option for university students."""
+
+
+def load_sample_essay() -> None:
+    """Load the Band 6 sample into the writing fields."""
+    st.session_state.topic_input = SAMPLE_TOPIC
+    st.session_state.essay_input = SAMPLE_ESSAY
 
 
 def image_to_base64(path: Path) -> str:
@@ -899,8 +919,24 @@ def render_history() -> None:
     st.caption("Showing the latest 10 saved correction records with extractable scores.")
 
 
-st.title("IELTS Writing Correction Skill")
-st.caption("A calm AI writing desk for IELTS feedback, revision, and progress tracking.")
+title_column, sample_column = st.columns([5, 1], vertical_alignment="top")
+with title_column:
+    st.title("IELTS Writing Correction Skill")
+    st.caption("A calm AI writing desk for IELTS feedback, revision, and progress tracking.")
+with sample_column:
+    with st.popover("试用范文", use_container_width=True):
+        st.subheader("Band 6 试用作文")
+        st.caption("复制下面的题目和作文，或直接一键填入输入区。")
+        st.markdown("**Essay question**")
+        st.code(SAMPLE_TOPIC, language=None, wrap_lines=True)
+        st.markdown("**Sample essay**")
+        st.code(SAMPLE_ESSAY, language=None, wrap_lines=True)
+        st.button(
+            "一键填入",
+            on_click=load_sample_essay,
+            use_container_width=True,
+            key="load_sample_button",
+        )
 
 with st.sidebar:
     st.header("Settings")
@@ -934,12 +970,14 @@ with st.container():
         "Essay question",
         height=120,
         placeholder="Paste the IELTS Writing question here.",
+        key="topic_input",
     )
 
     essay = st.text_area(
         "Your essay",
         height=360,
         placeholder="Paste your full essay here.",
+        key="essay_input",
     )
 
     word_count = count_words(essay)
