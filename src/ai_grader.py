@@ -115,7 +115,7 @@ def completion_options(
             "max_completion_tokens": max_output_tokens,
             "reasoning_effort": "low",
         }
-    return {"temperature": 0.2, "max_tokens": max_output_tokens}
+    return {"temperature": 0.0, "max_tokens": max_output_tokens}
 
 
 def grade_essay(provider: str, task_type: str, topic: str, essay: str, model: str) -> str:

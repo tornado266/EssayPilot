@@ -1,5 +1,20 @@
 """IELTS Writing examiner prompt templates."""
 
+import json
+from pathlib import Path
+
+
+SAMPLE_ANCHORS_PATH = Path(__file__).resolve().parents[1] / "data" / "band_samples.json"
+
+
+def load_band_sample_anchors() -> str:
+    """Load concise local calibration anchors for repeatable scoring."""
+    try:
+        anchors = json.loads(SAMPLE_ANCHORS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return "\n".join(f"- Band {band}: {description}" for band, description in anchors.items())
+
 
 def build_grading_prompt(task_type: str, topic: str, essay: str) -> str:
     """Build the prompt used by the IELTS correction Skill."""
@@ -43,8 +58,10 @@ Official calibration rule: award a band only when the response fits the positive
 features of that descriptor. Negative descriptor features limit the rating.
 """
 
+    sample_anchors = load_band_sample_anchors()
+
     return f"""
-You are a strict IELTS examiner.
+You are a strict and stable IELTS examiner for EssayPilot.
 Complete the scoring decision before giving any coaching or improvement advice.
 
 Your grading must be based on IELTS Writing Band Descriptors:
@@ -54,6 +71,8 @@ Your grading must be based on IELTS Writing Band Descriptors:
 - Grammatical Range and Accuracy
 
 Core examiner rules:
+- Reproducibility is more important than stylistic variety in your feedback. Apply the
+  same descriptor interpretation and decision order every time.
 - Be balanced, realistic, and evidence-based. Be neither generous nor systematically harsh.
 - Minor issues must be recorded, but isolated minor issues must not cause a full-band drop.
 - Criterion ratings use whole bands, as in examiner descriptor decisions. Represent
@@ -109,10 +128,14 @@ Mandatory scoring sequence (perform in this exact order before assigning any sco
 4. Grammar check: inspect the range of sentence forms and estimate error density across
    the whole essay. Count recurring errors and distinguish isolated slips from systematic
    problems; minor errors still count.
-5. Provisional anchor: place the whole essay in the closest broad performance zone below.
+5. Mandatory classification: choose exactly one provisional level from
+   5, 5.5, 6, 6.5, 7, or 7.5. Make this decision silently and do not output a separate
+   classification explanation. If evidence is balanced between two levels, choose the
+   lower level. Do not skip directly from 6 to 7 without testing the Band 6.5 anchor.
 6. Score decision: assign whole-band TR/TA, CC, LR, and GRA ratings independently.
    Adjust the provisional overall anchor only when the criterion evidence justifies it.
-   Only then calculate Overall Band from the four ratings.
+   The calculated Overall Band may differ from the provisional classification by at
+   most 0.5. Only then calculate and report Overall Band from the four ratings.
 
 {task_focus}
 
@@ -131,6 +154,11 @@ Performance anchor mechanism:
   occasional rather than systematic and do not reduce overall clarity.
 - Band 7.5+: performance is consistently above Band 7 across most criteria, with strong
   precision, flexibility, development, and language control. It need not be native-like.
+
+EssayPilot sample-anchor alignment (mandatory):
+{sample_anchors}
+- Use these anchors only as calibration profiles. The official four IELTS descriptors
+  remain the basis of every criterion score.
 
 Anchor safeguards:
 - A complete introduction-body-conclusion structure, a clear position, and no serious
