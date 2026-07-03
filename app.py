@@ -14,12 +14,14 @@ from dotenv import load_dotenv
 
 from src.ai_grader import (
     AIGraderError,
+    compare_draft_progress,
     grade_essay,
     review_logic_rewrite,
     review_sentence_rewrite,
 )
 from src.admin_dashboard import is_admin_request, render_admin_dashboard
 from src.analytics import record_grading_event
+from src.draft_training import list_draft_training_history, save_draft_training_record
 from src.error_book import append_error_book
 from src.storage import markdown_to_pdf, save_markdown_record
 from src.text_utils import count_words, word_count_warning
@@ -396,6 +398,171 @@ def calculate_overall_band(markdown: str) -> float | None:
 
     average = sum(numeric_scores) / len(numeric_scores)
     return math.floor(average * 2 + 0.5) / 2
+
+
+def extract_score_snapshot(markdown: str) -> dict[str, float | None]:
+    """Return the five comparable scores used by Draft 2 training."""
+    criteria = extract_criteria_scores(markdown)
+
+    def numeric(label: str) -> float | None:
+        match = re.search(r"\d(?:\.\d)?", criteria.get(label, ""))
+        return float(match.group(0)) if match else None
+
+    return {
+        "Overall Band": calculate_overall_band(markdown),
+        "Task Response": numeric("Task Response"),
+        "Coherence & Cohesion": numeric("Coherence"),
+        "Lexical Resource": numeric("Lexical Resource"),
+        "Grammar Range & Accuracy": numeric("Grammar"),
+    }
+
+
+def draft_training_focus(scores: dict[str, float | None]) -> list[str]:
+    """Choose one or two practical priorities from the lowest criteria."""
+    guidance = {
+        "Task Response": "加强论证深度，补充具体解释或例子，避免观点停留在概括层面。",
+        "Coherence & Cohesion": "优化主题句、段落衔接和逻辑推进，让每段围绕一个中心展开。",
+        "Lexical Resource": "减少重复词，优先使用准确、自然的学术表达和搭配。",
+        "Grammar Range & Accuracy": "增加可控的句式变化，同时检查语法、标点和从句准确性。",
+    }
+    available = [
+        (label, score)
+        for label, score in scores.items()
+        if label != "Overall Band" and score is not None
+    ]
+    available.sort(key=lambda item: (item[1], list(guidance).index(item[0])))
+    return [f"**{label}：** {guidance[label]}" for label, _ in available[:2]]
+
+
+def render_score_change(
+    draft_1_scores: dict[str, float | None],
+    draft_2_scores: dict[str, float | None],
+) -> None:
+    """Show compact Draft 1 to Draft 2 score changes."""
+    st.subheader("分数变化")
+    for label in draft_1_scores:
+        before = draft_1_scores.get(label)
+        after = draft_2_scores.get(label)
+        before_text = f"{before:.1f}" if before is not None else "-"
+        after_text = f"{after:.1f}" if after is not None else "-"
+        st.write(f"**{label}:** {before_text} → {after_text}")
+
+
+def render_draft_2_training(
+    *,
+    provider: str,
+    model: str,
+    task_type: str,
+    user_id: str,
+) -> None:
+    """Render and process the complete Draft 2 learning cycle."""
+    draft_1 = st.session_state.get("draft_1_snapshot")
+    if not isinstance(draft_1, dict):
+        st.info("请先完成第一稿批改。")
+        return
+
+    st.subheader("第二稿训练")
+    with st.expander("查看第一稿", expanded=False):
+        st.write(draft_1["text"])
+
+    st.markdown("#### 第一稿简要结果")
+    score_columns = st.columns(5)
+    short_labels = ["Overall", "TR", "CC", "LR", "GRA"]
+    for column, short_label, score in zip(
+        score_columns,
+        short_labels,
+        draft_1["scores"].values(),
+        strict=False,
+    ):
+        column.metric(short_label, f"{score:.1f}" if score is not None else "-")
+
+    st.markdown("#### 本次重写重点")
+    for focus in draft_training_focus(draft_1["scores"]):
+        st.markdown(f"- {focus}")
+
+    draft_2_text = st.text_area(
+        "请根据上方反馈写第二稿",
+        height=360,
+        key="draft_2_text",
+    )
+    submit_draft_2 = st.button(
+        "提交第二稿",
+        type="primary",
+        key="submit_draft_2",
+        use_container_width=True,
+    )
+
+    if submit_draft_2:
+        if not draft_2_text.strip():
+            st.warning("请先完成第二稿。")
+        elif draft_2_text.strip() == draft_1["text"].strip():
+            st.warning("第二稿与第一稿完全相同，请根据反馈完成修改后再提交。")
+        else:
+            with st.spinner("正在评分第二稿并生成两稿对比报告..."):
+                try:
+                    draft_2_report = grade_essay(
+                        provider=provider,
+                        task_type=task_type,
+                        topic=draft_1["topic"],
+                        essay=draft_2_text,
+                        model=model,
+                    )
+                    draft_2_scores = extract_score_snapshot(draft_2_report)
+                    progress_report = compare_draft_progress(
+                        provider=provider,
+                        task_question=draft_1["topic"],
+                        draft_1_text=draft_1["text"],
+                        draft_1_scores=draft_1["scores"],
+                        draft_2_text=draft_2_text,
+                        draft_2_scores=draft_2_scores,
+                        model=model,
+                    )
+                    save_markdown_record(
+                        task_type=task_type,
+                        topic=draft_1["topic"],
+                        essay=draft_2_text,
+                        report=draft_2_report,
+                        word_count=count_words(draft_2_text),
+                        user_id=user_id,
+                    )
+                    training_path = save_draft_training_record(
+                        user_id=user_id,
+                        task_question=draft_1["topic"],
+                        draft_1_text=draft_1["text"],
+                        draft_1_scores=draft_1["scores"],
+                        draft_1_feedback=draft_1["feedback"],
+                        draft_2_text=draft_2_text,
+                        draft_2_scores=draft_2_scores,
+                        draft_2_feedback=draft_2_report,
+                        progress_report=progress_report,
+                    )
+                    record_grading_event(
+                        user_id=user_id,
+                        overall_band=draft_2_scores["Overall Band"],
+                        essay_word_count=count_words(draft_2_text),
+                        model_name=model,
+                    )
+                    st.session_state.draft_2_result = {
+                        "scores": draft_2_scores,
+                        "report": draft_2_report,
+                        "progress_report": progress_report,
+                        "path": training_path,
+                    }
+                except AIGraderError as exc:
+                    st.error("第二稿评分失败。完整诊断信息如下。")
+                    st.code(str(exc), language="text")
+                except Exception as exc:
+                    st.error("第二稿训练出现意外错误。")
+                    st.code(f"{type(exc).__name__}: {exc}", language="text")
+
+    result = st.session_state.get("draft_2_result")
+    if isinstance(result, dict):
+        st.divider()
+        st.header("两稿对比进步报告")
+        render_score_change(draft_1["scores"], result["scores"])
+        st.markdown(result["progress_report"])
+        with st.expander("查看第二稿完整评分", expanded=False):
+            st.markdown(result["report"])
 
 
 def extract_criteria_details(markdown: str) -> dict[str, dict[str, str]]:
@@ -932,47 +1099,61 @@ def render_history(user_id: str) -> None:
     """Render local score history and trend chart."""
     history = list_correction_history(user_id)
     scored_history = [item for item in history if item["score"] is not None]
+    training_history = list_draft_training_history(user_id)
 
     st.subheader("History Trend")
     if not scored_history:
         st.info("No scored history yet. Complete a correction to build your trend chart.")
-        return
-
-    chart_data = pd.DataFrame(
-        {
-            "Practice": [item["created_at"] for item in scored_history[-10:]],
-            "Band Score": [item["score"] for item in scored_history[-10:]],
-        }
-    )
-    trend_chart = (
-        alt.Chart(chart_data)
-        .mark_line(point=alt.OverlayMarkDef(filled=True, size=85), strokeWidth=3)
-        .encode(
-            x=alt.X(
-                "Practice:N",
-                sort=None,
-                title=None,
-                axis=alt.Axis(labelAngle=-25, labelLimit=150),
-            ),
-            y=alt.Y(
-                "Band Score:Q",
-                title="Band Score",
-                scale=alt.Scale(domain=[3, 9], clamp=True),
-                axis=alt.Axis(values=[3, 4, 5, 6, 7, 8, 9]),
-            ),
-            tooltip=[
-                alt.Tooltip("Practice:N", title="Practice"),
-                alt.Tooltip("Band Score:Q", title="Band Score", format=".1f"),
-            ],
+    else:
+        chart_data = pd.DataFrame(
+            {
+                "Practice": [item["created_at"] for item in scored_history[-10:]],
+                "Band Score": [item["score"] for item in scored_history[-10:]],
+            }
         )
-        .properties(height=300)
-        .configure_view(strokeWidth=0)
-        .configure_axis(gridColor="#d9e8ea", labelColor="#526d73", titleColor="#294e56")
-        .configure_line(color="#287d86")
-        .configure_point(color="#e87961")
-    )
-    st.altair_chart(trend_chart, width="stretch")
-    st.caption("Showing the latest 10 saved correction records with extractable scores.")
+        trend_chart = (
+            alt.Chart(chart_data)
+            .mark_line(point=alt.OverlayMarkDef(filled=True, size=85), strokeWidth=3)
+            .encode(
+                x=alt.X(
+                    "Practice:N",
+                    sort=None,
+                    title=None,
+                    axis=alt.Axis(labelAngle=-25, labelLimit=150),
+                ),
+                y=alt.Y(
+                    "Band Score:Q",
+                    title="Band Score",
+                    scale=alt.Scale(domain=[3, 9], clamp=True),
+                    axis=alt.Axis(values=[3, 4, 5, 6, 7, 8, 9]),
+                ),
+                tooltip=[
+                    alt.Tooltip("Practice:N", title="Practice"),
+                    alt.Tooltip("Band Score:Q", title="Band Score", format=".1f"),
+                ],
+            )
+            .properties(height=300)
+            .configure_view(strokeWidth=0)
+            .configure_axis(gridColor="#d9e8ea", labelColor="#526d73", titleColor="#294e56")
+            .configure_line(color="#287d86")
+            .configure_point(color="#e87961")
+        )
+        st.altair_chart(trend_chart, width="stretch")
+        st.caption("Showing the latest 10 saved correction records with extractable scores.")
+
+    if training_history:
+        st.subheader("Draft 2 Training History")
+        for record in reversed(training_history[-5:]):
+            draft_1_score = record.get("draft_1_scores", {}).get("Overall Band")
+            draft_2_score = record.get("draft_2_scores", {}).get("Overall Band")
+            before = f"{draft_1_score:.1f}" if isinstance(draft_1_score, (int, float)) else "-"
+            after = f"{draft_2_score:.1f}" if isinstance(draft_2_score, (int, float)) else "-"
+            with st.expander(
+                f"Draft 1 → Draft 2 · Overall: {before} → {after}",
+                expanded=False,
+            ):
+                st.caption(str(record.get("timestamp", "")))
+                st.markdown(str(record.get("progress_report", "")))
 
 
 title_column, sample_column = st.columns([5, 1], vertical_alignment="top")
@@ -1116,6 +1297,15 @@ with st.container():
                     st.session_state.latest_report = report
                     st.session_state.latest_saved_path = saved_path
                     st.session_state.latest_error_book_path = error_book_path
+                    st.session_state.draft_1_snapshot = {
+                        "topic": topic,
+                        "text": essay,
+                        "feedback": report,
+                        "scores": extract_score_snapshot(report),
+                    }
+                    st.session_state.draft_2_active = False
+                    st.session_state.draft_2_result = None
+                    st.session_state.draft_2_text = ""
                 except AIGraderError as exc:
                     st.error("The AI request failed. Full diagnostic details are below.")
                     st.code(str(exc), language="text")
@@ -1153,6 +1343,21 @@ with st.container():
             with st.expander("Logic Check", expanded=False):
                 logic_tasks = extract_logic_practice_tasks(st.session_state.latest_report)
                 render_logic_practice(logic_tasks, provider, model)
+
+            st.divider()
+            if st.button(
+                "开始第二稿训练",
+                key="start_draft_2",
+                use_container_width=True,
+            ):
+                st.session_state.draft_2_active = True
+            if st.session_state.get("draft_2_active"):
+                render_draft_2_training(
+                    provider=provider,
+                    model=model,
+                    task_type=task_type,
+                    user_id=user_id,
+                )
         with tab_files:
             if st.session_state.latest_saved_path:
                 st.write(str(st.session_state.latest_saved_path))

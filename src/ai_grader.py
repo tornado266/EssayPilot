@@ -465,3 +465,189 @@ Rules:
         ) from exc
 
     return response.choices[0].message.content or ""
+
+
+def _compare_draft_progress_legacy(
+    provider: str,
+    task_question: str,
+    draft_1_text: str,
+    draft_1_scores: dict[str, float | None],
+    draft_2_text: str,
+    draft_2_scores: dict[str, float | None],
+    model: str,
+) -> str:
+    """Compare two drafts after both have been scored by the main examiner."""
+    _, api_key, base_url = get_provider_config(provider)
+    client = build_client(provider)
+    prompt = f"""
+You are an IELTS revision coach comparing two versions of the same essay.
+Do not rescore either essay. Treat the supplied scores as final.
+Compare only evidence visible in the two drafts and give concise Chinese feedback.
+
+Essay question:
+{task_question}
+
+Draft 1 scores:
+{draft_1_scores}
+
+Draft 1:
+{draft_1_text}
+
+Draft 2 scores:
+{draft_2_scores}
+
+Draft 2:
+{draft_2_text}
+
+Return only Markdown with exactly these sections:
+
+### 已经改善的问题
+- Identify concrete improvements in argument, structure, vocabulary, or grammar.
+- Name the criterion with the largest score improvement.
+
+### 仍然存在的问题
+- Identify recurring weaknesses and criteria without clear improvement.
+- Explain briefly why the next band has not yet been reached.
+
+### 下一次训练重点
+- Give only one or two specific priorities.
+
+Rules:
+- Quote short evidence from both drafts when useful.
+- Never invent changes that are not visible.
+- Do not repeat the score table.
+- Keep the response practical and concise.
+""".strip()
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a precise IELTS revision comparison coach.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            **completion_options(provider, model, 1400),
+        )
+    except APIStatusError as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+            status_code=exc.status_code,
+        ) from exc
+    except (APIConnectionError, OpenAIError) as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+        ) from exc
+    except Exception as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+        ) from exc
+
+    return response.choices[0].message.content or ""
+
+
+def compare_draft_progress(
+    provider: str,
+    task_question: str,
+    draft_1_text: str,
+    draft_1_scores: dict[str, float | None],
+    draft_2_text: str,
+    draft_2_scores: dict[str, float | None],
+    model: str,
+) -> str:
+    """Compare two scored drafts and return concise Chinese coaching."""
+    _, api_key, base_url = get_provider_config(provider)
+    client = build_client(provider)
+    prompt = f"""
+You are an IELTS revision coach comparing two versions of the same essay.
+Do not rescore either essay. Treat the supplied scores as final.
+Compare only evidence visible in the two drafts and give concise Chinese feedback.
+
+Essay question:
+{task_question}
+
+Draft 1 scores:
+{draft_1_scores}
+
+Draft 1:
+{draft_1_text}
+
+Draft 2 scores:
+{draft_2_scores}
+
+Draft 2:
+{draft_2_text}
+
+Return only Markdown with exactly these sections:
+
+### \u5df2\u7ecf\u6539\u5584\u7684\u95ee\u9898
+- Identify concrete improvements in argument, structure, vocabulary, or grammar.
+- Name the criterion with the largest score improvement.
+
+### \u4ecd\u7136\u5b58\u5728\u7684\u95ee\u9898
+- Identify recurring weaknesses and criteria without clear improvement.
+- Explain briefly why the next band has not yet been reached.
+
+### \u4e0b\u4e00\u6b21\u8bad\u7ec3\u91cd\u70b9
+- Give only one or two specific priorities.
+
+Rules:
+- Quote short evidence from both drafts when useful.
+- Never invent changes that are not visible.
+- Do not repeat the score table.
+- Keep the response practical and concise.
+""".strip()
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a precise IELTS revision comparison coach.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            **completion_options(provider, model, 1400),
+        )
+    except APIStatusError as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+            status_code=exc.status_code,
+        ) from exc
+    except (APIConnectionError, OpenAIError) as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+        ) from exc
+    except Exception as exc:
+        raise AIGraderError(
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+        ) from exc
+
+    return response.choices[0].message.content or ""
