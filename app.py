@@ -32,6 +32,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent
 BACKGROUND_IMAGE = BASE_DIR / "assets" / "hawaii-background.png"
 SCORE_PATTERN = re.compile(r"(?:Likely Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
+SAMPLE_POPOVER_TITLE = "试用作文"
 SAMPLE_TOPIC = (
     "Some people believe university students should only study their main subjects, "
     "while others think they should also study other subjects. "
@@ -1162,7 +1163,7 @@ with title_column:
     st.caption("A calm AI writing desk for IELTS feedback, revision, and progress tracking.")
 with sample_column:
     with st.popover("试用范文", use_container_width=True):
-        st.subheader("试用作文")
+        st.subheader(SAMPLE_POPOVER_TITLE)
         st.caption("复制下面的题目和作文，或直接一键填入输入区。")
         st.markdown("**Essay question**")
         st.code(SAMPLE_TOPIC, language=None, wrap_lines=True)
