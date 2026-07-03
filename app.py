@@ -1162,7 +1162,7 @@ with title_column:
     st.caption("A calm AI writing desk for IELTS feedback, revision, and progress tracking.")
 with sample_column:
     with st.popover("试用范文", use_container_width=True):
-        st.subheader("Band 7 试用作文")
+        st.subheader("试用作文")
         st.caption("复制下面的题目和作文，或直接一键填入输入区。")
         st.markdown("**Essay question**")
         st.code(SAMPLE_TOPIC, language=None, wrap_lines=True)
