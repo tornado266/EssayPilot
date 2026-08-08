@@ -350,21 +350,33 @@ def inject_page_style() -> None:
             margin-bottom: 0.18rem;
         }}
 
+        [data-testid="stElementContainer"]:has(.bookmark-rail) {{
+            position: sticky !important;
+            top: 1rem;
+            z-index: 999;
+            height: 0;
+            overflow: visible;
+            pointer-events: none;
+        }}
+
         .bookmark-rail {{
-            position: fixed;
-            right: 18px;
-            top: 168px;
+            position: absolute;
+            right: -132px;
+            top: 120px;
             z-index: 999;
             display: flex;
             flex-direction: column;
             gap: 0.38rem;
-            width: 108px;
+            width: 116px;
+            max-height: calc(100vh - 160px);
             padding: 0.65rem;
             border: 1px solid rgba(255, 255, 255, 0.74);
             border-radius: 18px;
             background: rgba(245, 253, 253, 0.82);
             backdrop-filter: blur(16px);
             box-shadow: 0 16px 40px rgba(15, 76, 88, 0.13);
+            overflow-y: auto;
+            pointer-events: auto;
         }}
 
         .bookmark-rail span {{
@@ -443,6 +455,7 @@ def inject_page_style() -> None:
                 z-index: 999;
                 height: 52px;
                 margin-bottom: 0.5rem;
+                pointer-events: auto;
             }}
 
             .bookmark-rail {{
@@ -1080,15 +1093,15 @@ def render_grouped_examiner_report(markdown: str) -> None:
     """Render the static examiner report as focused learning sections."""
     report = report_before_interactive_practice(markdown)
     groups = [
-        ("评分依据", (1, 2)),
-        ("核心提分方向", (3, 4)),
-        ("逐句与段落批改", (5, 6)),
-        ("Band 7.5 示范改写", (7,)),
-        ("表达积累与下一步", (8, 9)),
+        ("评分依据", "report-basis", (1, 2)),
+        ("核心提分方向", "report-priorities", (3, 4)),
+        ("逐句与段落批改", "report-corrections", (5, 6)),
+        ("Band 7.5 示范改写", "report-rewrite", (7,)),
+        ("表达积累与下一步", "report-next", (8, 9)),
     ]
 
     rendered_any = False
-    for label, section_numbers in groups:
+    for label, anchor_id, section_numbers in groups:
         sections = [
             extract_report_section(report, number)
             for number in section_numbers
@@ -1097,6 +1110,7 @@ def render_grouped_examiner_report(markdown: str) -> None:
         if not content:
             continue
         rendered_any = True
+        render_anchor(anchor_id)
         with st.expander(label, expanded=False):
             st.markdown(content)
 
@@ -1432,8 +1446,8 @@ def render_product_hero(is_demo: bool = False) -> None:
     eyebrow = "ZERO-TOKEN WALKTHROUGH" if is_demo else "IELTS WRITING · FOCUSED PRACTICE"
     title = "看懂一篇作文，如何一步步提分" if is_demo else "从一篇作文，到清楚的下一步"
     description = (
-        "用一篇固定范文完整展示输入、评分、诊断、改写与训练。"
-        "所有内容已经生成，不调用模型，也不消耗 Token。"
+        "用一份已经生成的 gpt-5.4-mini 报告，完整展示输入、评分、诊断、改写、训练与第二稿。"
+        "浏览本页不会再次调用模型，也不消耗 Token。"
         if is_demo
         else "保留熟悉的清新海岛感，把评分、证据、改写与下一次训练整理成一条更容易跟随的学习路径。"
     )
@@ -1467,6 +1481,7 @@ def render_demo_page() -> None:
             ("诊断", "demo-diagnosis"),
             ("改写", "demo-rewrite"),
             ("训练", "demo-practice"),
+            ("二稿", "demo-draft2"),
         ]
     )
     render_product_hero(is_demo=True)
@@ -1559,6 +1574,35 @@ def render_demo_page() -> None:
         with st.container(border=True):
             st.markdown(extract_report_section(report, 12))
 
+    render_anchor("demo-draft2")
+    st.divider()
+    st.markdown('<div class="demo-step">STEP 7 · SECOND-DRAFT LOOP</div>', unsafe_allow_html=True)
+    st.subheader("第二稿训练：把反馈真正写进自己的作文")
+    st.caption("示范报告来自 gpt-5.4-mini；第二稿环节展示用户如何消化反馈，而不是让模型再代写一篇。")
+    st.markdown(
+        """
+        <div class="feature-strip">
+            <div class="feature-chip"><strong>第一稿基线 · 7.0</strong>先保留原文、四项分数和完整反馈</div>
+            <div class="feature-chip"><strong>本轮重点 · LR 6</strong>减少 study / subjects / learn 重复，换成准确搭配</div>
+            <div class="feature-chip"><strong>提交第二稿</strong>对比两稿分数、已改善问题、剩余问题和下一轮重点</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.container(border=True):
+        st.markdown(
+            """
+            #### 完整训练顺序
+
+            1. 展开第一稿，确认原始作文和四项分数。
+            2. 按系统给出的两个最低项制定本轮修改重点。
+            3. 学生独立重写整篇第二稿；第 7 部分的 Band 7.5 改写只作为完成后的参考。
+            4. 提交第二稿后，系统逐项显示 **第一稿 → 第二稿** 的分数变化。
+            5. 系统给出“已经改善 / 仍需修改 / 下一轮优先级”的进步报告，并保存训练记录。
+            """
+        )
+    st.info("正式使用时，需要先完成第一稿批改，再点击“开始第二稿训练”。示范页只展示流程，因此仍然是 0 Token。")
+
     st.success("这就是一次完整批改会经历的全部步骤。查看本页不会调用任何模型。")
     bottom_back, bottom_fill = st.columns(2)
     with bottom_back:
@@ -1584,10 +1628,14 @@ if st.session_state.page_mode == "demo":
 
 render_bookmark_rail(
     [
-        ("开始", "workspace-top"),
-        ("输入", "writing-input"),
-        ("报告", "examiner-workspace"),
-        ("历史", "history-trend"),
+        ("评分依据", "report-basis"),
+        ("提分方向", "report-priorities"),
+        ("逐句批改", "report-corrections"),
+        ("示范改写", "report-rewrite"),
+        ("表达积累", "report-next"),
+        ("单句训练", "practice-task"),
+        ("逻辑训练", "logic-check"),
+        ("第二稿", "draft-2-training"),
     ]
 )
 render_anchor("workspace-top")
@@ -1777,6 +1825,7 @@ with st.container():
             render_grouped_examiner_report(st.session_state.latest_report)
 
             st.divider()
+            render_anchor("practice-task")
             with st.expander("Practice Task", expanded=False):
                 practice_sentences = extract_practice_sentences(st.session_state.latest_report)
                 sentence_references = extract_sentence_references(st.session_state.latest_report)
@@ -1788,11 +1837,13 @@ with st.container():
                 )
 
             st.divider()
+            render_anchor("logic-check")
             with st.expander("Logic Check", expanded=False):
                 logic_tasks = extract_logic_practice_tasks(st.session_state.latest_report)
                 render_logic_practice(logic_tasks, provider, model)
 
             st.divider()
+            render_anchor("draft-2-training")
             if st.button(
                 "开始第二稿训练",
                 key="start_draft_2",
