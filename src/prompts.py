@@ -5,6 +5,9 @@ from pathlib import Path
 
 
 SAMPLE_ANCHORS_PATH = Path(__file__).resolve().parents[1] / "data" / "band_samples.json"
+IELTS_WRITING_SKILL_PATH = (
+    Path(__file__).resolve().parents[1] / "skills" / "ielts-writing" / "SKILL.md"
+)
 
 
 def load_band_sample_anchors() -> str:
@@ -14,6 +17,22 @@ def load_band_sample_anchors() -> str:
     except (OSError, json.JSONDecodeError):
         return ""
     return "\n".join(f"- Band {band}: {description}" for band, description in anchors.items())
+
+
+def load_skill_scoring_rules() -> str:
+    """Load only the four-criterion scoring section from the installed skill."""
+    try:
+        skill_text = IELTS_WRITING_SKILL_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+    start_marker = "### Phase 2：四维评分"
+    end_marker = "### Phase 3：句子级标注"
+    start = skill_text.find(start_marker)
+    end = skill_text.find(end_marker, start + len(start_marker))
+    if start == -1 or end == -1:
+        return ""
+    return skill_text[start:end].strip()
 
 
 def build_grading_prompt(task_type: str, topic: str, essay: str) -> str:
@@ -59,6 +78,7 @@ features of that descriptor. Negative descriptor features limit the rating.
 """
 
     sample_anchors = load_band_sample_anchors()
+    installed_skill_scoring_rules = load_skill_scoring_rules()
 
     return f"""
 You are a strict and stable IELTS examiner for EssayPilot.
@@ -69,6 +89,12 @@ Your grading must be based on IELTS Writing Band Descriptors:
 - Coherence and Cohesion
 - Lexical Resource
 - Grammatical Range and Accuracy
+
+Installed fixed scoring logic (authoritative for the four scoring criteria):
+{installed_skill_scoring_rules}
+
+Use the installed section only to decide scores. Keep EssayPilot's existing report
+structure, coaching sections, training tasks, and UI-facing wording unchanged.
 
 Core examiner rules:
 - Reproducibility is more important than stylistic variety in your feedback. Apply the

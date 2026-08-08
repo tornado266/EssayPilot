@@ -31,6 +31,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).parent
 BACKGROUND_IMAGE = BASE_DIR / "assets" / "hawaii-background.png"
+DEMO_REPORT_PATH = BASE_DIR / "data" / "demo_report.md"
 SCORE_PATTERN = re.compile(r"(?:Likely Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
 SAMPLE_POPOVER_TITLE = "试用作文"
 SAMPLE_TOPIC = (
@@ -53,6 +54,59 @@ def load_sample_essay() -> None:
     """Load the Band 6 sample into the writing fields."""
     st.session_state.topic_input = SAMPLE_TOPIC
     st.session_state.essay_input = SAMPLE_ESSAY
+
+
+def show_workspace() -> None:
+    """Return to the live grading workspace."""
+    st.session_state.page_mode = "workspace"
+    st.session_state.scroll_target = "workspace-top"
+
+
+def show_demo() -> None:
+    """Open the zero-token walkthrough."""
+    st.session_state.page_mode = "demo"
+    st.session_state.scroll_target = "demo-top"
+
+
+def load_sample_and_show_workspace() -> None:
+    """Load the sample without running the grader and return to the workspace."""
+    load_sample_essay()
+    st.session_state.page_mode = "workspace"
+    st.session_state.scroll_target = "writing-input"
+
+
+def apply_pending_scroll() -> None:
+    """Move the parent page to the requested section after a Streamlit rerun."""
+    target = st.session_state.pop("scroll_target", None)
+    if not target:
+        return
+    st.html(
+        f"""
+        <script>
+        requestAnimationFrame(() => {{
+            const target = document.getElementById("{target}");
+            if (target) target.scrollIntoView({{ behavior: "instant", block: "start" }});
+        }});
+        </script>
+        """,
+        unsafe_allow_javascript=True,
+    )
+
+
+def render_anchor(anchor_id: str) -> None:
+    """Create a stable in-page scroll target."""
+    st.markdown(f'<div id="{anchor_id}" class="scroll-anchor"></div>', unsafe_allow_html=True)
+
+
+def render_bookmark_rail(items: list[tuple[str, str]]) -> None:
+    """Render a compact floating table of contents."""
+    links = "".join(
+        f'<a href="#{anchor}">{label}</a>' for label, anchor in items
+    )
+    st.markdown(
+        f'<nav class="bookmark-rail"><span>BOOKMARKS</span>{links}</nav>',
+        unsafe_allow_html=True,
+    )
 
 
 def image_to_base64(path: Path) -> str:
@@ -98,10 +152,11 @@ def inject_page_style() -> None:
             max-width: 1240px;
             padding-top: 2.2rem;
             padding-bottom: 3rem;
-            background: rgba(255, 255, 255, 0.64);
-            border: 1px solid rgba(255, 255, 255, 0.54);
-            border-radius: 8px;
-            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.68);
+            border: 1px solid rgba(255, 255, 255, 0.72);
+            border-radius: 28px;
+            backdrop-filter: blur(18px) saturate(125%);
+            box-shadow: 0 28px 80px rgba(19, 67, 78, 0.12);
         }}
 
         h1 {{
@@ -139,7 +194,7 @@ def inject_page_style() -> None:
         div[data-testid="stTextInput"] input {{
             background: rgba(255, 255, 255, 0.9);
             border: 1px solid rgba(14, 116, 144, 0.22);
-            border-radius: 8px;
+            border-radius: 16px;
             color: #12343b;
             box-shadow: 0 14px 30px rgba(8, 51, 68, 0.08);
         }}
@@ -161,7 +216,7 @@ def inject_page_style() -> None:
             background: #eaf7ff;
             color: #17465f;
             border: 1px solid #b8ddf2;
-            border-radius: 8px;
+            border-radius: 14px;
             min-height: 3rem;
             font-weight: 700;
             box-shadow: 0 12px 24px rgba(72, 155, 196, 0.16);
@@ -188,11 +243,17 @@ def inject_page_style() -> None:
         }}
 
         .score-card {{
-            padding: 1rem;
+            padding: 1.15rem 1.2rem;
             border: 1px solid rgba(31, 111, 120, 0.16);
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.86);
-            box-shadow: 0 14px 28px rgba(8, 51, 68, 0.08);
+            border-radius: 18px;
+            background: linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(235, 249, 250, 0.84));
+            box-shadow: 0 16px 38px rgba(8, 51, 68, 0.09);
+            transition: transform 180ms ease, box-shadow 180ms ease;
+        }}
+
+        .score-card:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 20px 44px rgba(8, 51, 68, 0.13);
         }}
 
         .score-label {{
@@ -208,10 +269,160 @@ def inject_page_style() -> None:
         }}
 
         .workspace-note {{
-            padding: 1rem;
+            padding: 1.15rem 1.25rem;
             border: 1px solid rgba(31, 111, 120, 0.14);
-            border-radius: 8px;
+            border-radius: 18px;
             background: rgba(255, 255, 255, 0.74);
+        }}
+
+        .hero-shell {{
+            position: relative;
+            overflow: hidden;
+            padding: 2rem 2.1rem;
+            margin-bottom: 0.75rem;
+            border: 1px solid rgba(255, 255, 255, 0.78);
+            border-radius: 24px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(220, 247, 250, 0.78));
+            box-shadow: 0 22px 58px rgba(20, 91, 102, 0.11);
+        }}
+
+        .hero-shell::after {{
+            content: "";
+            position: absolute;
+            width: 230px;
+            height: 230px;
+            right: -70px;
+            top: -110px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(94, 212, 203, 0.25), rgba(94, 212, 203, 0));
+        }}
+
+        .eyebrow {{
+            display: inline-flex;
+            padding: 0.36rem 0.68rem;
+            margin-bottom: 0.65rem;
+            border: 1px solid rgba(14, 116, 144, 0.18);
+            border-radius: 999px;
+            background: rgba(232, 249, 252, 0.86);
+            color: #177184;
+            font-size: 0.74rem;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+        }}
+
+        .hero-shell h1 {{
+            margin: 0;
+            max-width: 760px;
+            font-size: clamp(2.15rem, 4vw, 3.65rem);
+            line-height: 1.04;
+            letter-spacing: -0.045em;
+        }}
+
+        .hero-shell p {{
+            max-width: 720px;
+            margin: 0.85rem 0 0;
+            color: #486870;
+            font-size: 1.02rem;
+            line-height: 1.75;
+        }}
+
+        .feature-strip {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.75rem;
+            margin: 0.65rem 0 1.3rem;
+        }}
+
+        .feature-chip {{
+            padding: 0.85rem 1rem;
+            border: 1px solid rgba(31, 111, 120, 0.12);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.72);
+            color: #385c64;
+            font-size: 0.88rem;
+            box-shadow: 0 10px 24px rgba(8, 51, 68, 0.06);
+        }}
+
+        .feature-chip strong {{
+            display: block;
+            color: #173c45;
+            font-size: 0.98rem;
+            margin-bottom: 0.18rem;
+        }}
+
+        .bookmark-rail {{
+            position: fixed;
+            right: 18px;
+            top: 168px;
+            z-index: 999;
+            display: flex;
+            flex-direction: column;
+            gap: 0.38rem;
+            width: 108px;
+            padding: 0.65rem;
+            border: 1px solid rgba(255, 255, 255, 0.74);
+            border-radius: 18px;
+            background: rgba(245, 253, 253, 0.82);
+            backdrop-filter: blur(16px);
+            box-shadow: 0 16px 40px rgba(15, 76, 88, 0.13);
+        }}
+
+        .bookmark-rail span {{
+            padding: 0.1rem 0.35rem 0.28rem;
+            color: #719097;
+            font-size: 0.58rem;
+            font-weight: 900;
+            letter-spacing: 0.13em;
+        }}
+
+        .bookmark-rail a {{
+            padding: 0.48rem 0.58rem;
+            border-radius: 11px;
+            color: #24515b !important;
+            font-size: 0.76rem;
+            font-weight: 750;
+            text-decoration: none;
+            transition: background 160ms ease, transform 160ms ease;
+        }}
+
+        .bookmark-rail a:hover {{
+            background: #dff4f7;
+            transform: translateX(-2px);
+        }}
+
+        .scroll-anchor {{
+            scroll-margin-top: 5.5rem;
+        }}
+
+        .section-kicker {{
+            margin-bottom: -0.45rem;
+            color: #278493;
+            font-size: 0.72rem;
+            font-weight: 850;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }}
+
+        .demo-step {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            margin: 0 0 0.7rem;
+            padding: 0.38rem 0.68rem;
+            border-radius: 999px;
+            background: #e6f7f8;
+            color: #176b78;
+            font-size: 0.72rem;
+            font-weight: 850;
+            letter-spacing: 0.06em;
+        }}
+
+        [data-testid="stExpander"] {{
+            border: 1px solid rgba(31, 111, 120, 0.12);
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.68);
+            box-shadow: 0 10px 26px rgba(8, 51, 68, 0.05);
+            overflow: hidden;
         }}
 
         [data-testid="stMarkdownContainer"] table {{
@@ -222,7 +433,64 @@ def inject_page_style() -> None:
         }}
 
         [data-testid="stAlert"] {{
-            border-radius: 8px;
+            border-radius: 16px;
+        }}
+
+        @media (max-width: 980px) {{
+            [data-testid="stElementContainer"]:has(.bookmark-rail) {{
+                position: sticky !important;
+                top: 0.5rem;
+                z-index: 999;
+                height: 52px;
+                margin-bottom: 0.5rem;
+            }}
+
+            .bookmark-rail {{
+                position: relative;
+                top: 0;
+                bottom: auto;
+                left: 0;
+                right: 0;
+                width: auto;
+                margin: 0;
+                padding: 0.45rem;
+                flex-direction: row;
+                justify-content: flex-start;
+                overflow-x: auto;
+                border-radius: 14px;
+                z-index: 999;
+            }}
+
+            .bookmark-rail span {{
+                display: none;
+            }}
+
+            .bookmark-rail a {{
+                flex: 0 0 auto;
+                white-space: nowrap;
+                padding: 0.52rem 0.72rem;
+            }}
+
+            .feature-strip {{
+                grid-template-columns: 1fr;
+            }}
+
+            .block-container {{
+                border-radius: 20px;
+                padding-top: 1.2rem;
+                padding-bottom: 5.5rem;
+            }}
+
+            .hero-shell {{
+                padding: 1.4rem;
+                border-radius: 20px;
+            }}
+        }}
+
+        @media (max-width: 640px) {{
+            .block-container {{
+                border-radius: 0;
+            }}
         }}
         </style>
         """,
@@ -238,6 +506,8 @@ st.set_page_config(
 
 if "user_id" not in st.session_state:
     st.session_state.user_id = str(uuid.uuid4())
+if "page_mode" not in st.session_state:
+    st.session_state.page_mode = "workspace"
 
 user_id = st.session_state.user_id
 
@@ -1157,30 +1427,207 @@ def render_history(user_id: str) -> None:
                 st.markdown(str(record.get("progress_report", "")))
 
 
-title_column, sample_column = st.columns([5, 1], vertical_alignment="top")
-with title_column:
-    st.title("IELTS Writing Correction Skill")
-    st.caption("A calm AI writing desk for IELTS feedback, revision, and progress tracking.")
-with sample_column:
-    with st.popover("试用范文", use_container_width=True):
-        st.subheader(SAMPLE_POPOVER_TITLE)
-        st.caption("复制下面的题目和作文，或直接一键填入输入区。")
-        st.markdown("**Essay question**")
-        st.code(SAMPLE_TOPIC, language=None, wrap_lines=True)
-        st.markdown("**Sample essay**")
-        st.code(SAMPLE_ESSAY, language=None, wrap_lines=True)
+def render_product_hero(is_demo: bool = False) -> None:
+    """Render the shared editorial-style product hero."""
+    eyebrow = "ZERO-TOKEN WALKTHROUGH" if is_demo else "IELTS WRITING · FOCUSED PRACTICE"
+    title = "看懂一篇作文，如何一步步提分" if is_demo else "从一篇作文，到清楚的下一步"
+    description = (
+        "用一篇固定范文完整展示输入、评分、诊断、改写与训练。"
+        "所有内容已经生成，不调用模型，也不消耗 Token。"
+        if is_demo
+        else "保留熟悉的清新海岛感，把评分、证据、改写与下一次训练整理成一条更容易跟随的学习路径。"
+    )
+    st.markdown(
+        f"""
+        <section class="hero-shell">
+            <div class="eyebrow">{eyebrow}</div>
+            <h1>{title}</h1>
+            <p>{description}</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_demo_page() -> None:
+    """Render a complete static walkthrough without any AI request."""
+    try:
+        report = DEMO_REPORT_PATH.read_text(encoding="utf-8")
+    except OSError:
+        st.error("示范报告文件缺失，请返回批改页。")
+        return
+
+    render_anchor("demo-top")
+    apply_pending_scroll()
+    render_bookmark_rail(
+        [
+            ("流程", "demo-flow"),
+            ("原稿", "demo-input"),
+            ("评分", "demo-score"),
+            ("诊断", "demo-diagnosis"),
+            ("改写", "demo-rewrite"),
+            ("训练", "demo-practice"),
+        ]
+    )
+    render_product_hero(is_demo=True)
+
+    back_column, fill_column, spacer_column = st.columns([1.15, 1.45, 3.4])
+    with back_column:
         st.button(
-            "一键填入",
-            on_click=load_sample_essay,
+            "← 返回批改页",
+            on_click=show_workspace,
             use_container_width=True,
-            key="load_sample_button",
+            key="demo_back_top",
         )
+    with fill_column:
+        st.button(
+            "把范文填入输入区",
+            on_click=load_sample_and_show_workspace,
+            use_container_width=True,
+            key="demo_fill_top",
+        )
+
+    render_anchor("demo-flow")
+    st.markdown('<div class="section-kicker">THE LEARNING JOURNEY</div>', unsafe_allow_html=True)
+    st.subheader("一眼看懂完整批改流程")
+    st.markdown(
+        """
+        <div class="feature-strip">
+            <div class="feature-chip"><strong>01 · Diagnose</strong>先看分数与证据，不先堆修改建议</div>
+            <div class="feature-chip"><strong>02 · Compare</strong>用原句与改写对照，看见真实差距</div>
+            <div class="feature-chip"><strong>03 · Practise</strong>把问题变成下一次可以完成的练习</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    render_anchor("demo-input")
+    st.markdown('<div class="demo-step">STEP 1 · SAMPLE INPUT</div>', unsafe_allow_html=True)
+    st.subheader("先看原始题目与学生作文")
+    question_column, essay_column = st.columns([0.82, 1.38], gap="large")
+    with question_column:
+        with st.container(border=True):
+            st.markdown("**Essay question**")
+            st.write(SAMPLE_TOPIC)
+            st.caption("Task 2 · Discussion + Opinion")
+    with essay_column:
+        with st.container(border=True):
+            st.markdown("**Student essay · 239 words**")
+            st.write(SAMPLE_ESSAY)
+
+    render_anchor("demo-score")
+    st.divider()
+    st.markdown('<div class="demo-step">STEP 2 · SCORE WITH EVIDENCE</div>', unsafe_allow_html=True)
+    st.subheader("分数先给结论，再给可核对的依据")
+    render_overall_band(calculate_overall_band(report))
+    st.markdown(extract_report_section(report, 2))
+
+    render_anchor("demo-diagnosis")
+    st.divider()
+    st.markdown('<div class="demo-step">STEP 3 · PRIORITISED DIAGNOSIS</div>', unsafe_allow_html=True)
+    st.subheader("只抓最影响提分的问题")
+    priorities_column, problems_column = st.columns(2, gap="large")
+    with priorities_column:
+        st.markdown(extract_report_section(report, 3))
+    with problems_column:
+        st.markdown(extract_report_section(report, 4))
+
+    st.markdown('<div class="demo-step">STEP 4 · LOCAL CORRECTION</div>', unsafe_allow_html=True)
+    st.subheader("从句子到段落，逐层看哪里出了问题")
+    st.markdown(extract_report_section(report, 5))
+    st.markdown(extract_report_section(report, 6))
+
+    render_anchor("demo-rewrite")
+    st.divider()
+    st.markdown('<div class="demo-step">STEP 5 · MODEL THE DIFFERENCE</div>', unsafe_allow_html=True)
+    st.subheader("Band 7.5 示范改写")
+    st.caption("保留学生原始立场，只升级论证、搭配和句型控制。")
+    with st.container(border=True):
+        st.markdown(extract_report_section(report, 7))
+
+    render_anchor("demo-practice")
+    st.divider()
+    st.markdown('<div class="demo-step">STEP 6 · TURN FEEDBACK INTO PRACTICE</div>', unsafe_allow_html=True)
+    st.subheader("表达积累与下一次训练")
+    st.markdown(extract_report_section(report, 8))
+    st.markdown(extract_report_section(report, 9))
+    practice_column, logic_column = st.columns(2, gap="large")
+    with practice_column:
+        with st.container(border=True):
+            st.markdown(extract_report_section(report, 11))
+    with logic_column:
+        with st.container(border=True):
+            st.markdown(extract_report_section(report, 12))
+
+    st.success("这就是一次完整批改会经历的全部步骤。查看本页不会调用任何模型。")
+    bottom_back, bottom_fill = st.columns(2)
+    with bottom_back:
+        st.button(
+            "返回主页",
+            on_click=show_workspace,
+            use_container_width=True,
+            key="demo_back_bottom",
+        )
+    with bottom_fill:
+        st.button(
+            "用这篇范文开始练习",
+            on_click=load_sample_and_show_workspace,
+            use_container_width=True,
+            key="demo_fill_bottom",
+        )
+
+
+if st.session_state.page_mode == "demo":
+    render_demo_page()
+    st.stop()
+
+
+render_bookmark_rail(
+    [
+        ("开始", "workspace-top"),
+        ("输入", "writing-input"),
+        ("报告", "examiner-workspace"),
+        ("历史", "history-trend"),
+    ]
+)
+render_anchor("workspace-top")
+apply_pending_scroll()
+render_product_hero()
+
+action_primary, action_demo, action_note = st.columns([1.1, 1.45, 2.8], vertical_alignment="center")
+with action_primary:
+    st.button(
+        "开始批改 ↓",
+        on_click=show_workspace,
+        use_container_width=True,
+        key="hero_start",
+    )
+with action_demo:
+    st.button(
+        "查看完整示范 · 0 Token",
+        on_click=show_demo,
+        use_container_width=True,
+        key="hero_demo",
+    )
+with action_note:
+    st.caption("先看完整流程，再决定是否提交自己的作文。")
+
+st.markdown(
+    """
+    <div class="feature-strip">
+        <div class="feature-chip"><strong>四维评分</strong>每个分数都有原文证据</div>
+        <div class="feature-chip"><strong>对照改写</strong>从原句看到目标表达</div>
+        <div class="feature-chip"><strong>连续训练</strong>句子、逻辑与第二稿衔接</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 with st.sidebar:
     st.header("Settings")
     task_type = st.radio("IELTS task type", ["Task 2", "Task 1"], horizontal=True)
     provider = st.selectbox("AI provider", ["DeepSeek", "OpenAI"])
-    default_model = "deepseek-chat" if provider == "DeepSeek" else "gpt-5.4-mini"
+    default_model = "deepseek-v4-flash" if provider == "DeepSeek" else "gpt-5.4-mini"
     model = st.text_input(
         "Model",
         value=default_model,
