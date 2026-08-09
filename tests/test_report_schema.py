@@ -15,6 +15,7 @@ ESSAY = "Public transport reduces traffic. Governments should improve bus servic
 
 def valid_result():
     return {
+        "essay_topic_category": "cities_transport",
         "summary": "立场清楚，但论证仍然偏简略。",
         "criteria": [
             {"criterion": label, "score": score, "reason": "表达清楚，但展开有限。", "evidence": ["Public transport reduces traffic."], "next_band_limit": "进一步解释观点。"}
@@ -25,7 +26,11 @@ def valid_result():
         "sentence_corrections": [{"original": "Public transport reduces traffic.", "problem": "论证简略", "improved": "Reliable public transport can reduce urban congestion."}] * 3,
         "paragraph_feedback": [{"paragraph": 1, "strength": "观点清楚", "limitation": "展开不足", "improvement": "增加因果解释"}],
         "band_75_rewrite": "Reliable public transport can reduce urban congestion.",
-        "useful_expressions": [{"expression": "urban congestion", "meaning": "城市拥堵", "example": "It reduces urban congestion."}] * 3,
+        "useful_expressions": [{
+            "expression": "urban congestion", "meaning": "城市拥堵",
+            "usage_note": "用于城市交通题。", "example": "It reduces urban congestion.",
+            "function_category": "core_collocation",
+        }] * 6,
         "next_practice": {"task": "Write a paragraph about public transport.", "sentence_pattern": "If..., then...", "warning": "避免没有解释的断言。"},
         "sentence_training": [{"original": "Public transport reduces traffic.", "goal": "展开这一观点", "reference": "Reliable public transport can reduce congestion."}] * 2,
         "logic_training": [{"problem": "观点简略", "original": "Public transport reduces traffic.", "task": "补充因果链", "requirements": ["增加一层解释"]}],

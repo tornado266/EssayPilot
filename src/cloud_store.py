@@ -278,13 +278,22 @@ class SupabaseStore:
             payload=rows,
         )
 
-    def list_learning_items(self, user: CloudUser, limit: int = 200) -> list[dict[str, Any]]:
+    def upsert_learning_item(self, user: CloudUser, row: dict[str, Any]) -> dict[str, Any]:
+        """Create a catalog-derived personal row on first use and return its id."""
+        result = self._request(
+            "POST", "/rest/v1/learning_items", access_token=user.access_token,
+            params={"on_conflict": "user_id,item_key"},
+            prefer="resolution=merge-duplicates,return=representation", payload=row,
+        )
+        return result[0] if isinstance(result, list) and result else {}
+
+    def list_learning_items(self, user: CloudUser, limit: int = 1000) -> list[dict[str, Any]]:
         result = self._request(
             "GET",
             "/rest/v1/learning_items",
             access_token=user.access_token,
             params={
-                "select": "id,grading_run_id,item_key,item_type,category,source_text,target_text,explanation,status,review_count,last_reviewed_at,created_at,updated_at",
+                "select": "id,grading_run_id,item_key,item_type,category,source_text,target_text,explanation,origin,topic_category,function_category,usage_note,favorite,status,review_count,last_reviewed_at,created_at,updated_at,grading_runs(created_at,essays(question))",
                 "order": "updated_at.desc",
                 "limit": str(limit),
             },
@@ -296,10 +305,15 @@ class SupabaseStore:
         user: CloudUser,
         item_id: str,
         *,
-        status: str,
+        status: str | None = None,
         review_count: int | None = None,
+        favorite: bool | None = None,
     ) -> None:
-        payload: dict[str, Any] = {"status": status}
+        payload: dict[str, Any] = {}
+        if status is not None:
+            payload["status"] = status
+        if favorite is not None:
+            payload["favorite"] = favorite
         if review_count is not None:
             payload["review_count"] = review_count
             payload["last_reviewed_at"] = datetime.now(timezone.utc).isoformat()
@@ -311,6 +325,42 @@ class SupabaseStore:
             prefer="return=minimal",
             payload=payload,
         )
+
+    def save_expression_attempt(
+        self,
+        user: CloudUser,
+        *,
+        learning_item_id: str,
+        submitted_sentence: str,
+        result: dict[str, Any],
+        model: str,
+        prompt_version: str,
+    ) -> None:
+        self._request(
+            "POST", "/rest/v1/expression_attempts", access_token=user.access_token,
+            prefer="return=minimal",
+            payload={
+                "user_id": user.id,
+                "learning_item_id": learning_item_id,
+                "submitted_sentence": submitted_sentence,
+                "feedback_zh": str(result.get("feedback_zh") or ""),
+                "improved_sentence_en": str(result.get("improved_sentence_en") or ""),
+                "appropriate": bool(result.get("appropriate")),
+                "mastered": bool(result.get("mastered")),
+                "model": model,
+                "prompt_version": prompt_version,
+            },
+        )
+
+    def list_expression_attempts(self, user: CloudUser, limit: int = 100) -> list[dict[str, Any]]:
+        result = self._request(
+            "GET", "/rest/v1/expression_attempts", access_token=user.access_token,
+            params={
+                "select": "id,learning_item_id,submitted_sentence,feedback_zh,improved_sentence_en,appropriate,mastered,model,prompt_version,created_at",
+                "order": "created_at.desc", "limit": str(limit),
+            },
+        )
+        return result if isinstance(result, list) else []
 
     def update_learning_item_for_practice(
         self,

@@ -65,13 +65,18 @@ create table if not exists public.draft_revisions (
 create table if not exists public.learning_items (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  grading_run_id uuid not null references public.grading_runs(id) on delete cascade,
+  grading_run_id uuid references public.grading_runs(id) on delete cascade,
   item_key text not null,
   item_type text not null check (item_type in ('error', 'expression')),
   category text not null,
   source_text text not null,
   target_text text not null default '',
   explanation text not null default '',
+  origin text not null default 'report' check (origin in ('catalog', 'report')),
+  topic_category text not null default 'society_family',
+  function_category text not null default 'core_collocation',
+  usage_note text not null default '',
+  favorite boolean not null default false,
   status text not null default 'new' check (status in ('new', 'practicing', 'mastered')),
   review_count integer not null default 0 check (review_count >= 0),
   last_reviewed_at timestamptz,
@@ -80,11 +85,26 @@ create table if not exists public.learning_items (
   unique(user_id, item_key)
 );
 
+create table if not exists public.expression_attempts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  learning_item_id uuid not null references public.learning_items(id) on delete cascade,
+  submitted_sentence text not null,
+  feedback_zh text not null,
+  improved_sentence_en text not null,
+  appropriate boolean not null default false,
+  mastered boolean not null default false,
+  model text not null,
+  prompt_version text not null,
+  created_at timestamptz not null default now()
+);
+
 alter table public.essays enable row level security;
 alter table public.grading_runs enable row level security;
 alter table public.practice_attempts enable row level security;
 alter table public.draft_revisions enable row level security;
 alter table public.learning_items enable row level security;
+alter table public.expression_attempts enable row level security;
 
 create or replace function public.set_updated_at() returns trigger
 language plpgsql as $$ begin new.updated_at = now(); return new; end; $$;
@@ -108,6 +128,8 @@ drop policy if exists "owners manage revisions" on public.draft_revisions;
 create policy "owners manage revisions" on public.draft_revisions for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 drop policy if exists "owners manage learning items" on public.learning_items;
 create policy "owners manage learning items" on public.learning_items for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+drop policy if exists "owners manage expression attempts" on public.expression_attempts;
+create policy "owners manage expression attempts" on public.expression_attempts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create or replace function public.save_grading_cycle(
   p_question text,
@@ -160,6 +182,7 @@ $$;
 grant execute on function public.save_grading_cycle(text,text,integer,text,numeric,jsonb,jsonb,text,text,text,text) to authenticated;
 grant select, insert, update, delete on public.essays, public.grading_runs, public.practice_attempts, public.draft_revisions to authenticated;
 grant select, insert, update, delete on public.learning_items to authenticated;
+grant select, insert, update, delete on public.expression_attempts to authenticated;
 
 -- Anonymous public-beta funnel. The function returns counts only: no user ids,
 -- email addresses, essay text, or reports leave the database.

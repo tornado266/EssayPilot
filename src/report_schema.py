@@ -9,8 +9,8 @@ import hashlib
 from typing import Any
 
 
-SCHEMA_VERSION = "2.0"
-PROMPT_VERSION = "task2-structured-zh-2026-08-09"
+SCHEMA_VERSION = "2.1"
+PROMPT_VERSION = "task2-structured-zh-expression-v2-2026-08-09"
 SKILL_VERSION = "ielts-writing-phase2-v1"
 CRITERIA = (
     "Task Response",
@@ -50,6 +50,7 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
         "type": "object",
         "additionalProperties": False,
         "required": [
+            "essay_topic_category",
             "summary",
             "criteria",
             "priorities",
@@ -64,6 +65,14 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             "error_tags",
         ],
         "properties": {
+            "essay_topic_category": {
+                "type": "string",
+                "enum": [
+                    "education", "technology", "environment", "health",
+                    "society_family", "work_economy", "government_policy",
+                    "media_culture", "crime_law", "cities_transport"
+                ],
+            },
             "summary": {"type": "string"},
             "criteria": {
                 "type": "array",
@@ -117,16 +126,24 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             "band_75_rewrite": {"type": "string"},
             "useful_expressions": {
                 "type": "array",
-                "minItems": 3,
-                "maxItems": 10,
+                "minItems": 6,
+                "maxItems": 8,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["expression", "meaning", "example"],
+                    "required": ["expression", "meaning", "usage_note", "example", "function_category"],
                     "properties": {
                         "expression": {"type": "string"},
                         "meaning": {"type": "string"},
+                        "usage_note": {"type": "string"},
                         "example": {"type": "string"},
+                        "function_category": {
+                            "type": "string",
+                            "enum": [
+                                "core_collocation", "cause_effect", "contrast_concession",
+                                "example_argument", "solution", "evaluation_stance"
+                            ],
+                        },
                     },
                 },
             },
@@ -235,6 +252,14 @@ def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]
     """Validate key invariants and add program-owned score/version metadata."""
     if not isinstance(data, dict):
         raise ExaminerResultError("The examiner response is not a JSON object.")
+    if data.get("essay_topic_category") not in {
+        "education", "technology", "environment", "health", "society_family",
+        "work_economy", "government_policy", "media_culture", "crime_law", "cities_transport",
+    }:
+        raise ExaminerResultError("The essay topic category is missing or invalid.")
+    expressions = data.get("useful_expressions")
+    if not isinstance(expressions, list) or not 6 <= len(expressions) <= 8:
+        raise ExaminerResultError("The examiner must return 6-8 useful expressions.")
     criteria = data.get("criteria")
     if not isinstance(criteria, list):
         raise ExaminerResultError("The examiner response is missing criterion scores.")

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.expression_catalog import FUNCTION_LABELS
+
 CRITERION_DISPLAY_NAMES = {
     "Task Response": "任务回应（TR）",
     "Coherence and Cohesion": "连贯与衔接（CC）",
@@ -46,7 +48,9 @@ def examiner_result_to_markdown(data: dict[str, Any]) -> str:
         for item in data["paragraph_feedback"]
     )
     expressions = "\n".join(
-        f"| {item['expression'].replace('|', '/')} | {item['meaning'].replace('|', '/')} | {item['example'].replace('|', '/')} |"
+        f"| {item['expression'].replace('|', '/')} | {item['meaning'].replace('|', '/')} | "
+        f"{FUNCTION_LABELS.get(item.get('function_category', ''), '核心搭配')} | "
+        f"{str(item.get('usage_note', '')).replace('|', '/')} | {item['example'].replace('|', '/')} |"
         for item in data["useful_expressions"]
     )
     sentence_training = "\n".join(
@@ -100,8 +104,8 @@ def examiner_result_to_markdown(data: dict[str, Any]) -> str:
 
 ## 8. 表达积累
 
-| 英文表达 | 中文含义 | 英文例句 |
-|---|---|---|
+| 英文表达 | 中文含义 | 写作功能 | 使用提醒 | 英文例句 |
+|---|---|---|---|---|
 {expressions}
 
 ## 9. 下一次练习

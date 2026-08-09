@@ -39,7 +39,7 @@ class CloudStoreTests(unittest.TestCase):
 
     def test_schema_enables_rls_for_every_private_table(self):
         schema = (Path(__file__).parents[1] / "supabase" / "schema.sql").read_text(encoding="utf-8")
-        for table in ("essays", "grading_runs", "practice_attempts", "draft_revisions", "learning_items"):
+        for table in ("essays", "grading_runs", "practice_attempts", "draft_revisions", "learning_items", "expression_attempts"):
             self.assertIn(f"alter table public.{table} enable row level security", schema)
         self.assertIn('create policy "owners manage learning items"', schema)
         self.assertGreaterEqual(schema.count("auth.uid() = user_id"), 4)

@@ -420,6 +420,12 @@ Structured output rules:
 - Keep coaching concise, specific, and useful to a Chinese IELTS learner.
 - Put reusable error categories in error_tags, for example idea_development,
   mechanical_cohesion, repetition, collocation, article, agreement, or punctuation.
+- Classify the essay into exactly one essay_topic_category from the schema.
+- Return exactly 6-8 useful_expressions. Prefer transferable Band 6.5-7.5 chunks and
+  collocations that can be reused in similar Task 2 questions; do not pad the list with
+  rare words or expressions that only fit this one sentence.
+- For every useful expression, keep expression and example in English, write meaning and
+  usage_note in concise Chinese, and assign one function_category from the schema.
 - Use the deterministic text diagnostics below as an audit, not as a substitute for the
   official descriptors. For Lexical Resource, repeated unavoidable task terms are normal,
   but avoidable basic-word repetition across several paragraphs prevents Band 7 unless the

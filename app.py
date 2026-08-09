@@ -16,10 +16,12 @@ from dotenv import load_dotenv
 
 from src.ai_grader import (
     AIGraderError,
+    EXPRESSION_PRACTICE_PROMPT_VERSION,
     PRODUCTION_MODEL,
     compare_draft_progress,
     grade_essay_package,
     review_logic_rewrite,
+    review_expression_sentence,
     review_sentence_rewrite,
 )
 from src.admin_dashboard import is_admin_request, render_admin_dashboard
@@ -30,8 +32,10 @@ from src.error_book import append_error_book
 from src.learning_assets import (
     CATEGORY_LABELS,
     build_learning_items,
+    catalog_learning_item,
     criterion_for_problem,
 )
+from src.expression_catalog import FUNCTION_LABELS, TOPIC_LABELS, load_expression_catalog
 from src.share_card import build_result_card_svg
 from src.storage import markdown_to_pdf, save_markdown_record
 from src.report_schema import PROMPT_VERSION, score_snapshot, submission_hash
@@ -1835,8 +1839,28 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
     render_anchor("learning-dashboard")
     st.markdown('<div class="section-kicker">学习档案</div>', unsafe_allow_html=True)
     st.subheader("今天从最需要提高的地方继续")
+    try:
+        learning_items = store.list_learning_items(user)
+    except (CloudStoreError, AttributeError):
+        learning_items = []
+    expression_items = [item for item in learning_items if item.get("item_type") == "expression"]
+    mastered_expressions = [item for item in expression_items if item.get("status") == "mastered"]
+    topic_counts = Counter(str(item.get("topic_category") or "society_family") for item in expression_items)
+    focus_topic = TOPIC_LABELS.get(topic_counts.most_common(1)[0][0], "尚未形成") if topic_counts else "尚未形成"
+    expression_cards = st.columns(3)
+    expression_cards[0].metric("已积累表达", len(expression_items))
+    expression_cards[1].metric("已掌握表达", len(mastered_expressions))
+    expression_cards[2].metric("当前重点题材", focus_topic)
+    if expression_items and st.button("继续表达练习", use_container_width=True):
+        pending_expression = next(
+            (item for item in expression_items if item.get("status") != "mastered"), expression_items[0]
+        )
+        st.session_state.expression_practice_item = _normalise_expression(pending_expression)
+        st.session_state.expression_library_view = "表达练习"
+        navigate("growth")
+        st.rerun()
     if not runs:
-        st.info("完成第一篇 Task 2 批改后，这里会出现你的分数、薄弱项和待完成训练。")
+        st.info("你可以先浏览 150 条题材表达；完成第一篇 Task 2 批改后，这里还会出现分数、薄弱项和待完成训练。")
         return
 
     latest = runs[0]
@@ -2268,7 +2292,10 @@ def ensure_learning_assets(store: SupabaseStore, user: CloudUser | None) -> None
     run_id = str(st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
     if user is None or not run_id or not isinstance(structured, dict) or not structured:
         return
-    rows = build_learning_items(structured, user_id=user.id, grading_run_id=run_id)
+    rows = build_learning_items(
+        structured, user_id=user.id, grading_run_id=run_id,
+        question=str(st.session_state.get("topic_input") or ""),
+    )
     try:
         store.upsert_learning_items(user, rows)
         st.session_state.learning_assets_ready = True
@@ -2644,10 +2671,234 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
         st.caption("训练已保存；错题掌握状态将在数据库升级后自动联动。")
 
 
+def _expression_status_label(status: object) -> str:
+    return {"new": "待学习", "practicing": "练习中", "mastered": "已掌握"}.get(str(status), "待学习")
+
+
+def _normalise_expression(item: dict[str, object]) -> dict[str, object]:
+    """Give catalog and cloud expressions one display shape."""
+    if item.get("catalog_id"):
+        return dict(item)
+    run = item.get("grading_runs") if isinstance(item.get("grading_runs"), dict) else {}
+    essay = run.get("essays") if isinstance(run.get("essays"), dict) else {}
+    return {
+        "learning_item_id": item.get("id"),
+        "item_key": item.get("item_key"),
+        "origin": item.get("origin") or "report",
+        "topic_category": item.get("topic_category") or "society_family",
+        "function_category": item.get("function_category") or "core_collocation",
+        "expression": item.get("source_text") or "",
+        "meaning": item.get("explanation") or "",
+        "usage_note": item.get("usage_note") or "",
+        "example": item.get("target_text") or "",
+        "favorite": bool(item.get("favorite")),
+        "status": item.get("status") or "new",
+        "created_at": item.get("created_at") or "",
+        "source_question": essay.get("question") or "",
+    }
+
+
+def _persist_catalog_expression(
+    store: SupabaseStore, user: CloudUser, item: dict[str, object]
+) -> dict[str, object]:
+    row = catalog_learning_item(item, user_id=user.id)
+    saved = store.upsert_learning_item(user, row)
+    return _normalise_expression(saved or row)
+
+
+def _render_expression_card(
+    item: dict[str, object], *, store: SupabaseStore, user: CloudUser | None, key: str
+) -> None:
+    expression = _normalise_expression(item)
+    topic = TOPIC_LABELS.get(str(expression.get("topic_category")), "其他")
+    function = FUNCTION_LABELS.get(str(expression.get("function_category")), "核心搭配")
+    with st.container(border=True):
+        st.markdown(f"### {expression.get('expression', '')}")
+        st.caption(f"{topic} · {function} · {_expression_status_label(expression.get('status'))}")
+        st.write(str(expression.get("meaning") or ""))
+        if expression.get("usage_note"):
+            st.info(str(expression.get("usage_note")))
+        st.markdown(f"**例句：** {expression.get('example', '')}")
+        favorite_col, practice_col = st.columns(2)
+        with favorite_col:
+            favorite = bool(expression.get("favorite"))
+            if st.button("取消收藏" if favorite else "收藏", key=f"fav_{key}", use_container_width=True):
+                if user is None:
+                    st.warning("登录后即可收藏并跨设备同步。")
+                else:
+                    try:
+                        if not expression.get("learning_item_id"):
+                            expression = _persist_catalog_expression(store, user, expression)
+                        store.update_learning_item(
+                            user, str(expression.get("learning_item_id")), favorite=not favorite
+                        )
+                        st.rerun()
+                    except (CloudStoreError, AttributeError) as exc:
+                        st.warning(f"收藏暂时无法保存：{exc}")
+        with practice_col:
+            if st.button("开始造句", key=f"practice_{key}", type="primary", use_container_width=True):
+                if user is not None and not expression.get("learning_item_id"):
+                    try:
+                        expression = _persist_catalog_expression(store, user, expression)
+                    except (CloudStoreError, AttributeError) as exc:
+                        st.warning(f"练习条目暂时无法保存：{exc}")
+                        return
+                st.session_state.expression_practice_item = expression
+                st.session_state.expression_open_practice = True
+                st.session_state.pop("expression_practice_result", None)
+                st.session_state.pop("expression_student_sentence", None)
+                if user is not None and expression.get("learning_item_id"):
+                    try:
+                        store.update_learning_item(
+                            user, str(expression.get("learning_item_id")), status="practicing"
+                        )
+                    except (CloudStoreError, AttributeError):
+                        pass
+                st.rerun()
+
+
+def render_expression_library(
+    store: SupabaseStore, user: CloudUser | None, personal_items: list[dict[str, object]] | None = None
+) -> None:
+    """Render the static catalog, personal assets, and opt-in AI practice."""
+    catalog = load_expression_catalog()
+    personal_items = personal_items or []
+    personal = [_normalise_expression(item) for item in personal_items if item.get("item_type") == "expression"]
+    by_key = {str(item.get("item_key")): item for item in personal}
+    for item in catalog:
+        saved = by_key.get(f"catalog:{item['catalog_id']}")
+        if saved:
+            item.update({
+                "learning_item_id": saved.get("learning_item_id"), "favorite": saved.get("favorite"),
+                "status": saved.get("status"), "item_key": saved.get("item_key"),
+            })
+
+    if st.session_state.pop("expression_open_practice", False):
+        st.session_state.expression_library_view = "表达练习"
+    view = st.radio(
+        "表达库视图", ["题材表达库", "我的表达", "表达练习"], horizontal=True,
+        key="expression_library_view", label_visibility="collapsed",
+    )
+    if view == "题材表达库":
+        st.caption("10 个 Task 2 高频题材，共 150 条人工整理表达；浏览、搜索和查看例句均为 0 Token。")
+        mastered_topics = Counter(
+            str(item.get("topic_category")) for item in personal if item.get("status") == "mastered"
+        )
+        st.markdown(
+            '<div class="feature-strip">' + "".join(
+                f'<div class="feature-chip"><strong>{html.escape(label)}</strong>'
+                f'{mastered_topics.get(key, 0)}/15 已掌握</div>'
+                for key, label in TOPIC_LABELS.items()
+            ) + "</div>",
+            unsafe_allow_html=True,
+        )
+        query = st.text_input("搜索表达或中文释义", placeholder="例如：public transport / 公共交通")
+        filter_cols = st.columns(2)
+        topic_label = filter_cols[0].selectbox("题材", ["全部题材", *TOPIC_LABELS.values()])
+        function_label = filter_cols[1].selectbox("写作功能", ["全部功能", *FUNCTION_LABELS.values()])
+        topic_key = next((key for key, label in TOPIC_LABELS.items() if label == topic_label), "")
+        function_key = next((key for key, label in FUNCTION_LABELS.items() if label == function_label), "")
+        filtered = [item for item in catalog if not topic_key or item["topic_category"] == topic_key]
+        filtered = [item for item in filtered if not function_key or item["function_category"] == function_key]
+        if user is not None:
+            personal_filters = st.columns(2)
+            favorite_only = personal_filters[0].checkbox("只看收藏", key="catalog_favorite_only")
+            status_label = personal_filters[1].selectbox(
+                "掌握状态", ["全部状态", "待学习", "练习中", "已掌握"], key="catalog_status"
+            )
+            status_key = {"待学习": "new", "练习中": "practicing", "已掌握": "mastered"}.get(status_label, "")
+            filtered = [item for item in filtered if not favorite_only or item.get("favorite")]
+            filtered = [item for item in filtered if not status_key or item.get("status", "new") == status_key]
+        if query.strip():
+            needle = query.strip().casefold()
+            filtered = [
+                item for item in filtered
+                if needle in f"{item['expression']} {item['meaning']} {item['usage_note']} {item['example']}".casefold()
+            ]
+        st.write(f"共找到 {len(filtered)} 条")
+        for item in filtered[:45]:
+            _render_expression_card(item, store=store, user=user, key=str(item["catalog_id"]))
+        if len(filtered) > 45:
+            st.info("结果较多，请选择题材或继续搜索以缩小范围。")
+    elif view == "我的表达":
+        if user is None:
+            st.info("登录后，收藏的题材表达和每次批改沉淀的 6–8 条个人表达会显示在这里。")
+            return
+        if not personal:
+            st.info("收藏一条题材表达，或完成一次新版作文批改后，这里会形成你的个人表达库。")
+            return
+        filters = st.columns(3)
+        topic_label = filters[0].selectbox("题材筛选", ["全部题材", *TOPIC_LABELS.values()], key="mine_topic")
+        status_label = filters[1].selectbox("掌握状态", ["全部状态", "待学习", "练习中", "已掌握"])
+        favorite_only = filters[2].checkbox("只看收藏")
+        topic_key = next((key for key, label in TOPIC_LABELS.items() if label == topic_label), "")
+        status_key = {"待学习": "new", "练习中": "practicing", "已掌握": "mastered"}.get(status_label, "")
+        shown = [item for item in personal if not topic_key or item.get("topic_category") == topic_key]
+        shown = [item for item in shown if not status_key or item.get("status") == status_key]
+        shown = [item for item in shown if not favorite_only or item.get("favorite")]
+        for index, item in enumerate(shown):
+            if item.get("origin") == "report":
+                source = str(item.get("source_question") or "作文题目未记录")
+                st.caption(f"来自作文：{source[:100]} · {str(item.get('created_at') or '')[:10]}")
+            _render_expression_card(item, store=store, user=user, key=f"mine_{index}_{item.get('learning_item_id')}")
+    else:
+        item = st.session_state.get("expression_practice_item")
+        if not isinstance(item, dict) or not item:
+            st.info("请先在题材表达库或我的表达中选择“开始造句”。")
+            return
+        expression = _normalise_expression(item)
+        st.markdown(f"### 使用 `{expression.get('expression', '')}` 写一个英文句子")
+        st.write(str(expression.get("meaning") or ""))
+        st.caption(str(expression.get("usage_note") or ""))
+        sentence = st.text_area("你的英文句子", key="expression_student_sentence", height=130)
+        st.caption(f"只有点击下方按钮才会调用 {PRODUCTION_MODEL}；修改后可以再次提交。")
+        if st.button("获取 AI 点评", type="primary", use_container_width=True):
+            if not sentence.strip():
+                st.warning("请先写一个包含目标表达的英文句子。")
+            else:
+                with st.spinner("正在检查表达含义、搭配、语法和语境……"):
+                    try:
+                        result = review_expression_sentence(
+                            expression=str(expression.get("expression") or ""),
+                            meaning=str(expression.get("meaning") or ""),
+                            usage_note=str(expression.get("usage_note") or ""),
+                            student_sentence=sentence,
+                        )
+                        st.session_state.expression_practice_result = result
+                        if user is not None and expression.get("learning_item_id"):
+                            store.save_expression_attempt(
+                                user, learning_item_id=str(expression.get("learning_item_id")),
+                                submitted_sentence=sentence, result=result, model=PRODUCTION_MODEL,
+                                prompt_version=EXPRESSION_PRACTICE_PROMPT_VERSION,
+                            )
+                            store.update_learning_item(
+                                user, str(expression.get("learning_item_id")),
+                                status="mastered" if result.get("mastered") else "practicing",
+                                review_count=int(expression.get("review_count") or 0) + 1,
+                            )
+                    except AIGraderError as exc:
+                        st.error("AI 点评暂时不可用，你的句子已经保留，可以直接重试。")
+                        with st.expander("查看技术诊断"):
+                            st.code(str(exc), language="text")
+                    except (CloudStoreError, AttributeError) as exc:
+                        st.warning(f"点评已生成，但云端保存暂时失败：{exc}")
+        result = st.session_state.get("expression_practice_result")
+        if isinstance(result, dict):
+            if result.get("mastered"):
+                st.success("已掌握：表达使用准确、语法基本正确且语境自然。")
+            else:
+                st.warning("还未掌握：根据点评修改后再试一次。")
+            st.write(str(result.get("feedback_zh") or ""))
+            st.info(f"优化句：{result.get('improved_sentence_en', '')}")
+
+
 def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
     st.markdown('<div class="section-kicker">错题本与成长</div>', unsafe_allow_html=True)
     st.title("把零散反馈变成可复习资产")
     if user is None:
+        st.info("题材表达库可直接浏览；登录后可收藏、练习并跨设备同步进度。")
+        render_expression_library(store, None, [])
+        st.divider()
         render_history(st.session_state.user_id)
         return
     try:
@@ -2712,11 +2963,7 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
                     else:
                         st.rerun()
     with expression_tab:
-        for item in expressions:
-            with st.container(border=True):
-                st.markdown(f"### {item.get('source_text', '')}")
-                st.write(item.get("explanation", ""))
-                st.info(str(item.get("target_text") or ""))
+        render_expression_library(store, user, expressions)
     with draft_tab:
         if not revisions:
             st.info("完成第二稿训练后，这里会显示第一稿与第二稿的变化。")
@@ -2775,13 +3022,18 @@ if st.session_state.page_mode == "demo":
 
 cloud_store = SupabaseStore()
 cloud_user = session_cloud_user()
-if cloud_store.enabled and cloud_user is None:
+requested_page = str(st.query_params.get("page", "") or "")
+visitor_catalog = requested_page == "growth"
+if cloud_store.enabled and cloud_user is None and not visitor_catalog:
     render_login_page(cloud_store)
+    st.divider()
+    if st.button("无需登录，先浏览 150 条题材表达", use_container_width=True):
+        navigate("growth")
+        st.rerun()
     st.stop()
 if cloud_user is not None:
     user_id = cloud_user.id
 
-requested_page = str(st.query_params.get("page", "") or "")
 if requested_page in APP_ROUTES:
     st.session_state.page_mode = requested_page
 elif st.session_state.page_mode not in APP_ROUTES:

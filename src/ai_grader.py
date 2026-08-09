@@ -398,6 +398,67 @@ def grade_essay(
     return str(grade_essay_package(task_type=task_type, topic=topic, essay=essay)["report"])
 
 
+EXPRESSION_PRACTICE_PROMPT_VERSION = "expression-sentence-zh-v1-2026-08-09"
+EXPRESSION_PRACTICE_SCHEMA = {
+    "name": "essaypilot_expression_practice",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["appropriate", "feedback_zh", "improved_sentence_en", "mastered"],
+        "properties": {
+            "appropriate": {"type": "boolean"},
+            "feedback_zh": {"type": "string"},
+            "improved_sentence_en": {"type": "string"},
+            "mastered": {"type": "boolean"},
+        },
+    },
+}
+
+
+def review_expression_sentence(
+    *, expression: str, meaning: str, usage_note: str, student_sentence: str
+) -> dict[str, object]:
+    """Review one active-use sentence with the fixed production model."""
+    _, api_key, base_url = get_provider_config("OpenAI")
+    client = build_client("OpenAI")
+    prompt = f"""你是一名面向中国雅思考生的英文造句教练。
+
+目标表达：{expression}
+中文释义：{meaning}
+使用提醒：{usage_note}
+学生造句：{student_sentence}
+
+只返回符合 JSON schema 的结果。feedback_zh 用简短中文说明表达含义、搭配、语法和语境是否自然；
+improved_sentence_en 给出保留学生原意的自然英文优化句。只有表达含义使用准确、关键搭配正确、
+语法基本正确且语境自然时，appropriate 和 mastered 才都为 true。不要因为句子复杂或使用生僻词而判定掌握。"""
+    try:
+        response = client.chat.completions.create(
+            model=PRODUCTION_MODEL_SNAPSHOT,
+            messages=[
+                {"role": "system", "content": "You are EssayPilot's concise IELTS expression coach."},
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_schema", "json_schema": EXPRESSION_PRACTICE_SCHEMA},
+            max_completion_tokens=1200,
+            reasoning_effort="none",
+        )
+        result = json.loads(response.choices[0].message.content or "")
+        if not isinstance(result, dict):
+            raise ValueError("Expression review is not a JSON object.")
+        return result
+    except APIStatusError as exc:
+        raise AIGraderError(
+            provider="OpenAI", model=PRODUCTION_MODEL, base_url=base_url,
+            api_key_loaded=bool(api_key), original_error=exc, status_code=exc.status_code,
+        ) from exc
+    except (APIConnectionError, OpenAIError, json.JSONDecodeError, ValueError) as exc:
+        raise AIGraderError(
+            provider="OpenAI", model=PRODUCTION_MODEL, base_url=base_url,
+            api_key_loaded=bool(api_key), original_error=exc,
+        ) from exc
+
+
 def review_sentence_rewrite(
     provider: str,
     original_sentence: str,

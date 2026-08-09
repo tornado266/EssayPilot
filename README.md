@@ -184,6 +184,12 @@ For cloud profiles, create a Supabase project and run `supabase/schema.sql` once
 
 If the original schema was already installed, run only `supabase/migrations/20260809_learning_items.sql` to enable the cloud error book and reusable learning assets. New projects can run the complete `supabase/schema.sql` directly.
 
+For the topic-based expression library upgrade, existing projects must also run
+`supabase/migrations/20260809_expression_library.sql`. It makes catalog expressions
+optional personal assets, adds favorites and topic/function metadata, and creates the
+RLS-protected expression-attempt history. Static catalog browsing never writes rows or
+calls the model.
+
 ### 5. Run EssayPilot
 
 ```bash
