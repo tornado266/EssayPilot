@@ -10,7 +10,7 @@ from typing import Any
 
 
 SCHEMA_VERSION = "2.0"
-PROMPT_VERSION = "task2-structured-2026-08-09"
+PROMPT_VERSION = "task2-structured-zh-2026-08-09"
 SKILL_VERSION = "ielts-writing-phase2-v1"
 CRITERIA = (
     "Task Response",
@@ -18,6 +18,21 @@ CRITERIA = (
     "Lexical Resource",
     "Grammatical Range and Accuracy",
 )
+
+CRITERION_DISPLAY_NAMES = {
+    "Task Response": "任务回应（TR）",
+    "Coherence and Cohesion": "连贯与衔接（CC）",
+    "Lexical Resource": "词汇资源（LR）",
+    "Grammatical Range and Accuracy": "语法多样性与准确性（GRA）",
+}
+
+SCORE_DISPLAY_NAMES = {
+    "Overall Band": "总分",
+    "Task Response": "任务回应（TR）",
+    "Coherence & Cohesion": "连贯与衔接（CC）",
+    "Lexical Resource": "词汇资源（LR）",
+    "Grammar Range & Accuracy": "语法多样性与准确性（GRA）",
+}
 
 
 def submission_hash(question: str, essay: str) -> str:

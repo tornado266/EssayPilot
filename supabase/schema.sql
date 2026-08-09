@@ -108,16 +108,24 @@ declare
   v_run uuid;
 begin
   if v_user is null then raise exception 'Authentication required'; end if;
-  select e.id, g.id into v_essay, v_run
-  from essays e join grading_runs g on g.essay_id = e.id
+  select e.id into v_essay
+  from essays e
   where e.user_id = v_user and e.content_hash = p_content_hash
-  order by g.created_at desc limit 1;
+  limit 1;
+  if v_essay is not null then
+    select g.id into v_run
+    from grading_runs g
+    where g.essay_id = v_essay and g.prompt_version = p_prompt_version
+    order by g.created_at desc limit 1;
+  end if;
   if v_run is not null then
     return jsonb_build_object('essay_id', v_essay, 'grading_run_id', v_run, 'reused', true);
   end if;
-  insert into essays(user_id, task_type, question, content, content_hash, word_count)
-  values(v_user, 'Task 2', p_question, p_essay, p_content_hash, p_word_count)
-  returning id into v_essay;
+  if v_essay is null then
+    insert into essays(user_id, task_type, question, content, content_hash, word_count)
+    values(v_user, 'Task 2', p_question, p_essay, p_content_hash, p_word_count)
+    returning id into v_essay;
+  end if;
   insert into grading_runs(essay_id, user_id, overall_band, criteria, report_json, report_markdown, model, prompt_version, skill_version)
   values(v_essay, v_user, p_overall_band, p_criteria, p_report_json, p_report_markdown, p_model, p_prompt_version, p_skill_version)
   returning id into v_run;

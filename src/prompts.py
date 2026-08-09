@@ -405,6 +405,12 @@ def build_structured_grading_prompt(task_type: str, topic: str, essay: str) -> s
 
 Structured output rules:
 - Return data matching the supplied JSON schema. Do not return Markdown.
+- Use Chinese for every explanation or instruction: summary, criterion reason,
+  next_band_limit, coaching titles/why/action, correction problems, paragraph feedback,
+  training goals/tasks/requirements, expression meanings, and warnings.
+- Keep learning material in English: exact evidence/original text, improved sentences,
+  the Band 7.5 rewrite, expressions, examples, the next IELTS question, sentence patterns,
+  and sentence-training references. Do not translate the student's English.
 - Quote exact evidence from the submitted essay for every criterion.
 - Every sentence_corrections.original and sentence_training.original value must be an exact
   substring of the submitted essay, without ellipses or paraphrase.

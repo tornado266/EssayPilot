@@ -175,19 +175,63 @@ class SupabaseStore:
                 "p_skill_version": package["skill_version"],
             },
         )
+        if isinstance(result, dict) and result.get("reused") and result.get("grading_run_id"):
+            existing = self._request(
+                "GET",
+                "/rest/v1/grading_runs",
+                access_token=user.access_token,
+                params={
+                    "select": "prompt_version",
+                    "id": f"eq.{result['grading_run_id']}",
+                    "limit": "1",
+                },
+            )
+            existing_version = existing[0].get("prompt_version") if isinstance(existing, list) and existing else ""
+            if existing_version != package["prompt_version"]:
+                inserted = self._request(
+                    "POST",
+                    "/rest/v1/grading_runs",
+                    access_token=user.access_token,
+                    prefer="return=representation",
+                    payload={
+                        "essay_id": result["essay_id"],
+                        "user_id": user.id,
+                        "overall_band": structured["overall_band"],
+                        "criteria": structured["criteria"],
+                        "report_json": structured,
+                        "report_markdown": package["report"],
+                        "model": package["model"],
+                        "prompt_version": package["prompt_version"],
+                        "skill_version": package["skill_version"],
+                    },
+                )
+                if isinstance(inserted, list) and inserted:
+                    return {
+                        "essay_id": result["essay_id"],
+                        "grading_run_id": inserted[0].get("id"),
+                        "reused": False,
+                    }
         return result if isinstance(result, dict) else {}
 
-    def find_cached_grading(self, user: CloudUser, content_hash: str) -> dict[str, Any] | None:
+    def find_cached_grading(
+        self,
+        user: CloudUser,
+        content_hash: str,
+        prompt_version: str = "",
+    ) -> dict[str, Any] | None:
+        params = {
+            "select": "id,essay_id,overall_band,criteria,report_json,report_markdown,model,prompt_version,skill_version,created_at,essays!inner(content_hash,question,content,word_count)",
+            "essays.content_hash": f"eq.{content_hash}",
+            "order": "created_at.desc",
+            "limit": "1",
+        }
+        if prompt_version:
+            params["prompt_version"] = f"eq.{prompt_version}"
         result = self._request(
             "GET",
             "/rest/v1/grading_runs",
             access_token=user.access_token,
-            params={
-                "select": "id,essay_id,overall_band,criteria,report_json,report_markdown,model,prompt_version,skill_version,created_at,essays!inner(content_hash,question,content,word_count)",
-                "essays.content_hash": f"eq.{content_hash}",
-                "order": "created_at.desc",
-                "limit": "1",
-            },
+            params=params,
         )
         if isinstance(result, list) and result:
             return result[0]

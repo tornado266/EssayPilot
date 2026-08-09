@@ -1,199 +1,117 @@
-# IELTS Writing Examiner Report
+# 雅思写作批改报告
 
-## 1. Overall Band Score
+## 1. 总分
 
-**Estimated band range: 6.5-7.0**
-**Likely score: 7.0**
+**预估分数区间：6.5–7.0**
 
-This essay addresses both views and gives a clear opinion throughout, so Task Response is strong enough for Band 7. The ideas are organised logically with clear paragraphing, and the language is mostly accurate with only occasional awkward phrasing. However, the vocabulary is not especially flexible and the development is competent rather than outstanding, so this is solid Band 7 rather than Band 7.5.
+**最可能分数：7.0**
 
-## 2. Four Criteria Scores
+文章完整讨论了双方观点并保持立场一致，结构清楚，语法整体准确。当前主要限制是词汇重复和部分论证展开不足。
 
-| Criterion | Band Range | Likely Score | Why |
-|---|---:|---:|---|
-| Task Response / Task Achievement | 7 | 7 | The essay discusses both views and states a clear position: “I think there are more benefits if students focus mainly on their major.” Each side is supported with an explanation and an example, such as “a medical student needs to spend a lot of time reading books and doing practice” and “a business student can learn some computer skills.” What prevents a higher band is that the development is adequate but fairly general; the reasons are clear, but they are not explored in great depth. |
-| Coherence and Cohesion | 7 | 7 | The response has a clear introduction, two body paragraphs, and a conclusion, and each paragraph has a single central idea. Linking is generally natural, for example “On the one hand,” “On the other hand,” and “In my opinion.” What holds it back from a higher band is that the organisation is correct but somewhat standard and predictable, with limited internal progression beyond basic point-example-conclusion structure. |
-| Lexical Resource | 6 | 6 | Vocabulary is sufficient for the topic, with accurate phrases such as “main subjects,” “future job,” and “extra knowledge.” However, the language is fairly simple and repeated: “study” appears repeatedly, and phrases like “learn better skills” and “more knowledge” are generic rather than precise. The essay does not show enough flexibility with less common vocabulary to justify Band 7. |
-| Grammatical Range and Accuracy | 7 | 7 | The essay uses a mix of simple and complex structures accurately, such as “If they also study other subjects, they may feel too busy” and “Other subjects can be optional, but they should not take too much time.” Errors are minimal and do not affect clarity. What prevents a higher band is that the sentence structures are controlled but not especially varied or ambitious. |
+## 2. 四项评分
 
-## 3. Top 3 Score-Boosting Priorities
+| 评分项 | 分数 | 评分理由与依据 |
+|---|---:|---|
+| 任务回应（TR） | 7 | 双方观点均得到回应，立场明确。原文依据：“I think there are more benefits if students focus mainly on their major.” 部分理由仍只展开了一层。 |
+| 连贯与衔接（CC） | 7 | 四段结构和段落中心清楚，但 On the one hand / On the other hand 等衔接方式略显公式化。 |
+| 词汇资源（LR） | 6 | 意思表达准确，但 study、subjects、knowledge 重复较多，get more knowledge 等搭配不够自然。 |
+| 语法多样性与准确性（GRA） | 7 | 能稳定使用条件句和复合句，错误较少，但句型变化仍可增加。 |
 
-1. **Increase depth of explanation in each body paragraph**
-   - **Original sentence or phrase as evidence:** “If they also study other subjects, they may feel too busy and cannot understand their main subject well.”
-   - **Why it matters:** This is relevant, but it stops at a general statement. Band 7.5 needs more developed reasoning, not just a clear claim.
-   - **What to practise:** Add one more layer of explanation after each main point: claim → reason → consequence.
+## 3. 核心提分方向
 
-2. **Use more precise and less repetitive vocabulary**
-   - **Original sentence or phrase as evidence:** “study,” “subjects,” “knowledge,” “skills”
-   - **Why it matters:** The essay is clear, but the vocabulary stays basic and repeats the same core words too often.
-   - **What to practise:** Learn topic-specific alternatives such as “academic discipline,” “specialise in,” “broaden their knowledge,” and “practical competence.”
+1. **把理由再解释一层**
+   - **原文依据：** “If they also study other subjects, they may feel too busy and cannot understand their main subject well.”
+   - **为什么重要：** 观点正确，但因果链结束得太早。
+   - **具体行动：** 每个主体段至少写清“观点 → 原因 → 结果”。
 
-3. **Vary sentence openings and structures more deliberately**
-   - **Original sentence or phrase as evidence:** “On the one hand…”, “On the other hand…”, “In my opinion…”, “In conclusion…”
-   - **Why it matters:** The structure is clear, but it is very formulaic. A higher band needs more natural progression and less dependence on fixed templates.
-   - **What to practise:** Combine simple and complex clauses in different ways, especially with concessive clauses and cause-result structures.
+2. **减少基础词重复**
+   - **原文依据：** “study, subjects, knowledge, skills”
+   - **为什么重要：** 重复不影响理解，但会限制词汇灵活度。
+   - **具体行动：** 根据语境使用 specialise in、academic discipline、broaden their knowledge 等表达。
 
-## 4. Main Problems
+## 4. 主要问题
 
-1. **Ideas are relevant but not fully extended**
-   - **Original sentence or phrase:** “Therefore, focusing on one subject can help students prepare for their future job.”
-   - **Why it lowers the score:** This is a sensible point, but it is only briefly explained. Band 7.5 needs a fuller chain of reasoning.
-   - **How to improve:** Add a second sentence explaining how deeper subject knowledge leads to stronger performance in exams, internships, or employment.
+1. **论证深度不足**
+   - **原文依据：** “Therefore, focusing on one subject can help students prepare for their future job.”
+   - **为什么重要：** 结论合理，但没有说明专业学习如何具体帮助就业。
+   - **具体行动：** 补充它对考试、实习或职业能力的具体影响。
 
-2. **Vocabulary is accurate but too basic**
-   - **Original sentence or phrase:** “learn better skills,” “get more knowledge,” “study many subjects”
-   - **Why it lowers the score:** These phrases are understandable but generic. They do not show much lexical control or flexibility.
-   - **How to improve:** Replace common words with more precise academic expressions where appropriate.
+2. **部分搭配不够自然**
+   - **原文依据：** “doing practice” 和 “get more knowledge”
+   - **为什么重要：** 读者能理解，但不像自然英语。
+   - **具体行动：** 分别改为 practising 和 broaden their knowledge。
 
-3. **Repetition of key verbs and nouns**
-   - **Original sentence or phrase:** “study,” “subjects,” “learn”
-   - **Why it lowers the score:** Repetition is not a major problem, but it reduces lexical variety.
-   - **How to improve:** Use alternatives such as “focus on,” “take courses in,” “pursue,” “specialise in,” and “broaden.”
+## 5. 逐句批改
 
-4. **Structure is clear but conventional**
-   - **Original sentence or phrase:** “On the one hand… On the other hand… In my opinion… In conclusion…”
-   - **Why it lowers the score:** The essay is easy to follow, but the progression is predictable and somewhat mechanical.
-   - **How to improve:** Keep the structure, but make the internal logic of each paragraph more varied and less template-like.
-
-## 5. Sentence-level Corrections
-
-| Original | Problem | Improved version |
+| 原句 | 问题 | 英文改写 |
 |---|---|---|
-| “Both ideas have some advantages, but I think there are more benefits if students focus mainly on their major.” | Slightly awkward comparison phrase | Both views have advantages, but I believe students should mainly focus on their major. |
-| “University study is difficult and students already have a lot of work to do.” | A little repetitive and general | University study is demanding, and students already have a heavy workload. |
-| “For example, a medical student needs to spend a lot of time reading books and doing practice.” | “doing practice” is unnatural | For example, a medical student needs to spend a lot of time reading and practising. |
-| “If they also study other subjects, they may feel too busy and cannot understand their main subject well.” | Slightly awkward parallel structure | If they also study other subjects, they may become too busy and fail to understand their main subject well. |
-| “Students can get more knowledge and become more interested in different areas.” | “get more knowledge” is unnatural | Students can broaden their knowledge and develop an interest in different areas. |
-| “Other subjects can be optional, but they should not take too much time.” | Clear, but basic | Other subjects can be optional, but they should not take up too much time. |
-| “This way, students can still focus on their main goal while learning some extra knowledge.” | “extra knowledge” is vague | This way, students can stay focused on their main goal while gaining additional useful knowledge. |
+| University study is difficult and students already have a lot of work to do. | 用词较笼统。 | University study is demanding, and students already have a heavy workload. |
+| a medical student needs to spend a lot of time reading books and doing practice | doing practice 搭配不自然。 | a medical student needs to spend a great deal of time reading and practising |
+| Students can get more knowledge and become more interested in different areas. | get more knowledge 不自然。 | Students can broaden their knowledge and develop an interest in different fields. |
 
-## 6. Paragraph-level Feedback
+## 6. 段落反馈
 
-### Paragraph 1
-**What works:**
-It clearly introduces the topic and states a position: “I think there are more benefits if students focus mainly on their major.”
+### 第 1 段
+**做得好的地方：** 准确改写题目并给出清晰立场。
 
-**What weakens the band score:**
-The introduction is clear but very standard. It does not frame the issue in a more precise or interesting way.
+**限制分数的问题：** 开头较标准化，没有预告选择该立场的核心原因。
 
-**One concrete improvement:**
-Add a slightly sharper thesis that previews both sides and your reason for choosing one side.
+**一个具体改法：** 在立场句中加入“专业深度比知识广度更重要”的判断依据。
 
-### Paragraph 2
-**What works:**
-The paragraph stays on one clear idea: specialising helps students cope with workload and understand their main subject better. The example of a medical student is relevant.
+### 第 2 段
+**做得好的地方：** 医学生例子与“专注主修”直接相关。
 
-**What weakens the band score:**
-The explanation is a little brief. “They may feel too busy and cannot understand their main subject well” is correct, but it needs one more step of development.
+**限制分数的问题：** 例子之后很快结束，没有说明学习深度如何转化为成绩或职业能力。
 
-**One concrete improvement:**
-After the example, explain the effect on academic performance or future employability.
+**一个具体改法：** 在例子后补充一条清晰结果。
 
-### Paragraph 3
-**What works:**
-This paragraph gives the opposing view fairly and includes a relevant example: “a business student can learn some computer skills.”
+## 7. Band 7.5 英文示范改写
 
-**What weakens the band score:**
-The second sentence, “However, not all students have enough time or energy to study many subjects at the same time,” is valid but general, so the paragraph feels slightly underdeveloped.
+Nowadays, university students are often encouraged either to specialise in their major or to explore subjects beyond it. Although studying other disciplines can broaden students' perspectives, I believe their main priority should be developing expertise in their chosen field.
 
-**One concrete improvement:**
-Explain why extra subjects can still be valuable, then contrast that benefit with the time cost more specifically.
+Focusing on a major allows students to build the specialist knowledge required for future employment. Medical students, for example, must devote considerable time to reading, laboratory work and clinical practice. If too much of their timetable is taken up by unrelated courses, they may struggle to master the core knowledge on which their qualifications depend.
 
-### Paragraph 4
-**What works:**
-The writer restates the opinion clearly and keeps the conclusion consistent with the introduction.
+Studying other subjects can still be valuable because it exposes students to different ways of thinking. A business student who takes a psychology course may understand consumer behaviour more clearly. However, such courses should complement rather than replace the sustained study needed to become competent in the student's main discipline.
 
-**What weakens the band score:**
-It repeats earlier ideas without adding much new synthesis.
+In conclusion, broader learning has clear benefits, but university students should give priority to their major because depth of knowledge is more directly connected to academic achievement and career preparation.
 
-**One concrete improvement:**
-Summarise the balance more sharply by explaining why the major should remain the priority even if extra subjects have value.
+## 8. 表达积累
 
-## 7. Band 7.5 Rewrite
+| 英文表达 | 中文含义 | 英文例句 |
+|---|---|---|
+| specialise in | 专攻某一领域 | Many students choose to specialise in engineering. |
+| broaden their perspectives | 拓宽视野 | Optional courses can broaden their perspectives. |
+| complement rather than replace | 补充而不是替代 | Other subjects should complement rather than replace a student's major. |
 
-Nowadays, people have different opinions about whether university students should study only their main subject or also take other subjects. Both views have advantages, but I believe students should mainly focus on their major.
+## 9. 下一次练习
 
-On the one hand, studying only the main subject can help students develop stronger knowledge and practical skills in their chosen field. University study is demanding, and students already have a heavy workload. For example, a medical student needs to spend a lot of time reading and practising in order to understand the subject thoroughly. If they also take too many other courses, they may become overloaded and fail to concentrate properly on the subject that matters most. As a result, focusing on one discipline can help them prepare better for their future career.
+**英文练习题：** Some people think university students should study whatever they like. Others believe they should only study subjects useful for the future. Discuss both views and give your opinion.
 
-On the other hand, studying other subjects can also be beneficial. It allows students to broaden their knowledge and become more interested in different areas. For instance, a business student can learn basic computer skills, which may be useful in the workplace later on. In addition, extra subjects can help students think more widely and connect ideas from different fields. However, this only works well if the additional courses do not take up too much time or distract students from their main subject.
-
-In my opinion, university students should mainly study their major because it is the central part of their education. Other subjects can be taken as optional courses, but they should not reduce the time and effort needed for the main discipline. This balance allows students to stay focused on their long-term goals while still gaining useful extra knowledge.
-
-In conclusion, although both approaches have merits, I believe concentrating on the major is more important for university students.
-
-## 8. Useful Expressions
-
-| Expression | Meaning | When to use it | One short example sentence |
-|---|---|---|---|
-| focus on their major | pay most attention to the main subject | When giving your opinion about specialisation | Students should focus on their major first. |
-| develop stronger knowledge | build deeper understanding | When explaining benefits of concentration | This helps them develop stronger knowledge in one area. |
-| heavy workload | a large amount of work | When discussing study pressure | Most undergraduates already have a heavy workload. |
-| become overloaded | have too much to deal with | When describing stress or pressure | They may become overloaded if they take too many courses. |
-| prepare better for their future career | get ready for employment | When linking study to work | Specialising can prepare students better for their future career. |
-| broaden their knowledge | increase the range of what they know | When discussing extra subjects | Other courses can broaden their knowledge. |
-| useful in the workplace | helpful in a job setting | When showing practical value | Computer skills are useful in the workplace. |
-| think more widely | consider ideas from different areas | When discussing broader education | Studying different subjects can help students think more widely. |
-| take up too much time | use too much time | When warning about limits | Extra courses should not take up too much time. |
-| stay focused on long-term goals | remain directed toward future aims | When concluding balanced arguments | This helps students stay focused on long-term goals. |
-
-## 9. Next Practice Task
-
-**Task:**
-Some people think university students should spend most of their time on academic subjects, while others believe they should also learn practical life skills. Discuss both views and give your own opinion.
-
-- **Main skill to focus on:** Developing each main idea with one extra layer of explanation
-- **One sentence pattern to practise:**
-  *If..., they may..., because...*
-- **One warning about what to avoid next time:**
-  Avoid repeating the same basic words like “study,” “subjects,” and “learn” in every paragraph.
+- **建议练习的英文句型：** Although X can..., Y should remain the priority because...
+- **下次需要避免：** 不要只列出好处；每个观点后都要补足原因和结果。
 
 ## 11. 单句提分训练
 
-【练习任务】
-请改写下面这几句话，使其更符合雅思6.5-7分水平：
+请先独立改写，再查看英文参考并提交点评。
 
-1. "University study is difficult and students already have a lot of work to do."
-2. "For example, a medical student needs to spend a lot of time reading books and doing practice."
-3. "Students can get more knowledge and become more interested in different areas."
-4. "Other subjects can be optional, but they should not take too much time."
-5. "This way, students can still focus on their main goal while learning some extra knowledge."
+1. “Students can get more knowledge and become more interested in different areas.”
+   - 训练目标：使用更自然的动词搭配，并减少基础词重复。
+   - 英文参考：Students can broaden their knowledge and develop an interest in different fields.
+
+2. “Other subjects can be optional, but they should not take too much time.”
+   - 训练目标：把口语化表达改成更准确的学术表达。
+   - 英文参考：Other subjects can be optional, but they should not take up too much of a student's timetable.
 
 ## 12. 写作提升验证
 
-【提升练习】
-
 ### 任务 1
-问题：论点没有完全展开
+**问题：** 主体段中的因果链过短。
 
-任务：
-改写/重写下面内容，使其逻辑更清晰、更符合雅思6.5水平：
+**训练任务：** 重写“专注主修有利于就业”这一段，让观点、原因和结果完整连接。
 
-"University study is difficult and students already have a lot of work to do. For example, a medical student needs to spend a lot of time reading books and doing practice. If they also study other subjects, they may feel too busy and cannot understand their main subject well."
+**原文：** “Therefore, focusing on one subject can help students prepare for their future job.”
 
-要求：
-- 2-4句话
-- 要有清晰论点 + 解释 + 例子
-
-### 任务 2
-问题：例子有相关性，但解释不够深入
-
-任务：
-改写/重写下面内容，使其逻辑更清晰、更符合雅思6.5水平：
-
-"Students can get more knowledge and become more interested in different areas. For example, a business student can learn some computer skills, which may help them in the future."
-
-要求：
-- 2-4句话
-- 要有清晰论点 + 解释 + 例子
-
-### 任务 3
-问题：结论重复较多，缺少更清晰的总结
-
-任务：
-改写/重写下面内容，使其逻辑更清晰、更符合雅思6.5水平：
-
-"In conclusion, both views have some reasons, but I believe focusing on the major is more important for university students."
-
-要求：
-- 2-4句话
-- 要有清晰论点 + 简洁总结 + 适当收束
+**要求：**
+- 保留原立场，不增加无关观点。
+- 至少补充一层原因和一个具体结果。
+- 使用一处准确的因果衔接。

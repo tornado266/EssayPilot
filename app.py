@@ -27,7 +27,7 @@ from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
 from src.draft_training import list_draft_training_history, save_draft_training_record
 from src.error_book import append_error_book
 from src.storage import markdown_to_pdf, save_markdown_record
-from src.report_schema import score_snapshot, submission_hash
+from src.report_schema import CRITERION_DISPLAY_NAMES, PROMPT_VERSION, SCORE_DISPLAY_NAMES, score_snapshot, submission_hash
 from src.text_utils import count_words, word_count_warning
 
 
@@ -36,7 +36,7 @@ load_dotenv()
 BASE_DIR = Path(__file__).parent
 BACKGROUND_IMAGE = BASE_DIR / "assets" / "hawaii-background.png"
 DEMO_REPORT_PATH = BASE_DIR / "data" / "demo_report.md"
-SCORE_PATTERN = re.compile(r"(?:Likely Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
+SCORE_PATTERN = re.compile(r"(?:最可能分数|Likely Score|Overall Band Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
 SAMPLE_POPOVER_TITLE = "试用作文"
 SAMPLE_TOPIC = (
     "Some people believe university students should only study their main subjects, "
@@ -96,7 +96,7 @@ def render_login_page(store: SupabaseStore) -> None:
     st.markdown(
         """
         <section class="hero-shell">
-            <div class="eyebrow">ESSAYPILOT LEARNING PROFILE</div>
+            <div class="eyebrow">ESSAYPILOT 学习档案</div>
             <h1>让每一次修改，都留在你的成长档案里</h1>
             <p>使用邮箱验证码登录，跨设备保存作文、训练进度和第二稿对比。</p>
         </section>
@@ -115,7 +115,7 @@ def render_login_page(store: SupabaseStore) -> None:
                     st.session_state.login_code_sent = True
                     st.success("验证码已发送，请检查邮箱。")
                 except CloudStoreError as exc:
-                    st.error(str(exc))
+                    st.error(f"验证码发送失败：{exc}")
     with demo_col:
         st.button("先看零 Token 范文", on_click=show_demo, use_container_width=True)
     if st.session_state.get("login_code_sent"):
@@ -127,7 +127,7 @@ def render_login_page(store: SupabaseStore) -> None:
                 st.session_state.user_id = user.id
                 st.rerun()
             except CloudStoreError as exc:
-                st.error(str(exc))
+                st.error(f"登录失败：{exc}")
 
 
 def logout_cloud_user() -> None:
@@ -170,7 +170,7 @@ def render_bookmark_rail(items: list[tuple[str, str]]) -> None:
         for _, anchor in items
     )
     st.markdown(
-        f'<style>{active_rules}</style><nav class="bookmark-rail"><span>BOOKMARKS</span>{links}</nav>',
+        f'<style>{active_rules}</style><nav class="bookmark-rail"><span>快速索引</span>{links}</nav>',
         unsafe_allow_html=True,
     )
 
@@ -427,7 +427,7 @@ def inject_page_style() -> None:
 
         .bookmark-rail {{
             position: absolute;
-            right: -132px;
+            right: -80px;
             top: 120px;
             z-index: 999;
             display: flex;
@@ -597,7 +597,7 @@ def inject_page_style() -> None:
 
 
 st.set_page_config(
-    page_title="IELTS Writing Skill",
+    page_title="EssayPilot 雅思写作训练",
     page_icon=":memo:",
     layout="wide",
 )
@@ -623,7 +623,7 @@ def show_markdown_file(path: Path) -> None:
     markdown_column, pdf_column = st.columns(2)
     with markdown_column:
         st.download_button(
-            label="Download Markdown",
+            label="下载 Markdown 报告",
             data=markdown,
             file_name=path.name,
             mime="text/markdown",
@@ -631,7 +631,7 @@ def show_markdown_file(path: Path) -> None:
         )
     with pdf_column:
         st.download_button(
-            label="Download PDF",
+            label="下载 PDF 报告",
             data=pdf,
             file_name=f"{path.stem}.pdf",
             mime="application/pdf",
@@ -738,18 +738,18 @@ def extract_criteria_scores(markdown: str) -> dict[str, str]:
             continue
 
         criterion = cells[0].lower()
-        if criterion == "criterion":
+        if criterion in {"criterion", "评分项"}:
             continue
-        likely_score = cells[2] or cells[1] or "-"
+        likely_score = (cells[2] if len(cells) >= 4 else cells[1]) or "-"
         score_match = re.search(r"\d(?:\.\d)?", likely_score)
         likely_score = score_match.group(0) if score_match else likely_score
-        if "task" in criterion:
+        if "task" in criterion or "任务回应" in criterion:
             scores["Task Response"] = likely_score
-        elif "coherence" in criterion:
+        elif "coherence" in criterion or "连贯与衔接" in criterion:
             scores["Coherence"] = likely_score
-        elif "lexical" in criterion:
+        elif "lexical" in criterion or "词汇资源" in criterion:
             scores["Lexical Resource"] = likely_score
-        elif "grammar" in criterion or "grammatical" in criterion:
+        elif "grammar" in criterion or "grammatical" in criterion or "语法多样性" in criterion:
             scores["Grammar"] = likely_score
 
     return scores
@@ -814,7 +814,7 @@ def render_score_change(
         after = draft_2_scores.get(label)
         before_text = f"{before:.1f}" if before is not None else "-"
         after_text = f"{after:.1f}" if after is not None else "-"
-        st.write(f"**{label}:** {before_text} → {after_text}")
+        st.write(f"**{SCORE_DISPLAY_NAMES.get(label, label)}：** {before_text} → {after_text}")
 
 
 def render_draft_2_training(
@@ -838,7 +838,7 @@ def render_draft_2_training(
 
     st.markdown("#### 第一稿简要结果")
     score_columns = st.columns(5)
-    short_labels = ["Overall", "TR", "CC", "LR", "GRA"]
+    short_labels = ["总分", "TR", "CC", "LR", "GRA"]
     for column, short_label, score in zip(
         score_columns,
         short_labels,
@@ -1088,7 +1088,7 @@ def extract_paragraph_strengths(markdown: str) -> list[str]:
 def render_overall_band(score: float | None) -> None:
     """Render the hero-style overall IELTS band card."""
     color, background = get_band_color(score)
-    score_text = f"{score:.1f}" if score is not None else "Pending"
+    score_text = f"{score:.1f}" if score is not None else "等待评分"
     st.markdown(
         f"""
         <div style="
@@ -1101,13 +1101,13 @@ def render_overall_band(score: float | None) -> None:
             margin-bottom:1rem;
         ">
             <div style="font-size:0.95rem;font-weight:700;color:#31545c;">
-                Overall Band Score
+                雅思写作预估总分
             </div>
             <div style="font-size:4rem;line-height:1;font-weight:900;color:{color};">
                 {score_text}
             </div>
             <div style="font-size:0.9rem;color:#5f7378;margin-top:0.35rem;">
-                estimated IELTS writing performance
+                根据四项整数分由程序统一计算
             </div>
         </div>
         """,
@@ -1129,7 +1129,7 @@ def render_criteria_overview(markdown: str) -> None:
             start=row_start,
         ):
             with column:
-                render_score_card(label, detail.get("score", "-"), "tap to expand below")
+                render_score_card(label, detail.get("score", "-"), "点击下方查看详情")
                 with st.expander("查看详情", expanded=False):
                     good_text = detail.get("good") or (
                         strengths[index % len(strengths)] if strengths else ""
@@ -1146,12 +1146,28 @@ def render_criteria_overview(markdown: str) -> None:
                         st.error(f"主要问题：{problem_text}")
 
 
+def render_structured_criteria_overview(data: dict[str, object]) -> None:
+    """直接使用结构化评分结果展示四项评分，不解析报告标题。"""
+    criteria = [item for item in data.get("criteria", []) if isinstance(item, dict)]
+    for row_start in range(0, len(criteria), 2):
+        columns = st.columns(2)
+        for column, item in zip(columns, criteria[row_start : row_start + 2], strict=False):
+            label = CRITERION_DISPLAY_NAMES.get(str(item.get("criterion", "")), str(item.get("criterion", "")))
+            with column:
+                render_score_card(label, str(item.get("score", "-")), "点击下方查看评分依据")
+                with st.expander("查看详情", expanded=False):
+                    st.markdown(f"**评分说明：** {item.get('reason', '暂无说明。')}")
+                    for evidence in item.get("evidence", [])[:2]:
+                        st.info(f"原文依据：{evidence}")
+                    st.warning(f"下一档限制：{item.get('next_band_limit', '暂无说明。')}")
+
+
 def render_problem_cards(markdown: str) -> None:
     """Render main problems as warning cards."""
-    st.subheader("Main Problems")
+    st.subheader("主要问题")
     problems = extract_bullets(extract_report_section(markdown, 4), limit=5)
     if not problems:
-        st.info("No main problems were extracted from this report.")
+        st.info("这份报告暂未提取到主要问题。")
         return
 
     for problem in problems:
@@ -1160,12 +1176,12 @@ def render_problem_cards(markdown: str) -> None:
 
 def render_suggestion_cards(markdown: str) -> None:
     """Render improvement suggestions as success cards."""
-    st.subheader("Improvement Suggestions")
+    st.subheader("提分建议")
     suggestions = extract_bullets(extract_report_section(markdown, 3), limit=5)
     if not suggestions:
         suggestions = extract_bullets(extract_report_section(markdown, 10), limit=3)
     if not suggestions:
-        st.info("No improvement suggestions were extracted from this report.")
+        st.info("这份报告暂未提取到提分建议。")
         return
 
     for suggestion in suggestions:
@@ -1194,7 +1210,7 @@ def report_before_interactive_practice(markdown: str) -> str:
         count=1,
         flags=re.IGNORECASE,
     )
-    report = re.sub(r"^#\s*IELTS Writing Examiner Report\s*", "", report).strip()
+    report = re.sub(r"^#\s*(?:IELTS Writing Examiner Report|雅思写作批改报告)\s*", "", report).strip()
     return report
 
 
@@ -1567,8 +1583,8 @@ def list_correction_history(user_id: str) -> list[dict[str, object]]:
     history: list[dict[str, object]] = []
     for path in sorted(records_dir.glob("ielts_*.md")):
         markdown = path.read_text(encoding="utf-8")
-        created_match = re.search(r"- Created At:\s*(.+)", markdown)
-        task_match = re.search(r"- Task Type:\s*(.+)", markdown)
+        created_match = re.search(r"- (?:创建时间|Created At):\s*(.+)", markdown)
+        task_match = re.search(r"- (?:任务类型|Task Type):\s*(.+)", markdown)
         words_match = re.search(r"- Word Count:\s*(\d+)", markdown)
 
         history.append(
@@ -1576,7 +1592,7 @@ def list_correction_history(user_id: str) -> list[dict[str, object]]:
                 "file": path.name,
                 "path": path,
                 "created_at": created_match.group(1) if created_match else path.stem,
-                "task_type": task_match.group(1) if task_match else "Unknown",
+                "task_type": task_match.group(1) if task_match else "未知",
                 "word_count": int(words_match.group(1)) if words_match else None,
                 "score": calculate_overall_band(markdown),
             }
@@ -1591,14 +1607,14 @@ def render_history(user_id: str) -> None:
     scored_history = [item for item in history if item["score"] is not None]
     training_history = list_draft_training_history(user_id)
 
-    st.subheader("History Trend")
+    st.subheader("历史分数趋势")
     if not scored_history:
-        st.info("No scored history yet. Complete a correction to build your trend chart.")
+        st.info("还没有评分记录。完成一次批改后，这里会显示你的分数趋势。")
     else:
         chart_data = pd.DataFrame(
             {
-                "Practice": [item["created_at"] for item in scored_history[-10:]],
-                "Band Score": [item["score"] for item in scored_history[-10:]],
+                "练习日期": [item["created_at"] for item in scored_history[-10:]],
+                "雅思分数": [item["score"] for item in scored_history[-10:]],
             }
         )
         trend_chart = (
@@ -1606,20 +1622,20 @@ def render_history(user_id: str) -> None:
             .mark_line(point=alt.OverlayMarkDef(filled=True, size=85), strokeWidth=3)
             .encode(
                 x=alt.X(
-                    "Practice:N",
+                    "练习日期:N",
                     sort=None,
                     title=None,
                     axis=alt.Axis(labelAngle=-25, labelLimit=150),
                 ),
                 y=alt.Y(
-                    "Band Score:Q",
-                    title="Band Score",
+                    "雅思分数:Q",
+                    title="雅思分数",
                     scale=alt.Scale(domain=[3, 9], clamp=True),
                     axis=alt.Axis(values=[3, 4, 5, 6, 7, 8, 9]),
                 ),
                 tooltip=[
-                    alt.Tooltip("Practice:N", title="Practice"),
-                    alt.Tooltip("Band Score:Q", title="Band Score", format=".1f"),
+                    alt.Tooltip("练习日期:N", title="练习日期"),
+                    alt.Tooltip("雅思分数:Q", title="雅思分数", format=".1f"),
                 ],
             )
             .properties(height=300)
@@ -1629,17 +1645,17 @@ def render_history(user_id: str) -> None:
             .configure_point(color="#e87961")
         )
         st.altair_chart(trend_chart, width="stretch")
-        st.caption("Showing the latest 10 saved correction records with extractable scores.")
+        st.caption("显示最近 10 次可以读取分数的批改记录。")
 
     if training_history:
-        st.subheader("Draft 2 Training History")
+        st.subheader("第二稿训练历史")
         for record in reversed(training_history[-5:]):
             draft_1_score = record.get("draft_1_scores", {}).get("Overall Band")
             draft_2_score = record.get("draft_2_scores", {}).get("Overall Band")
             before = f"{draft_1_score:.1f}" if isinstance(draft_1_score, (int, float)) else "-"
             after = f"{draft_2_score:.1f}" if isinstance(draft_2_score, (int, float)) else "-"
             with st.expander(
-                f"Draft 1 → Draft 2 · Overall: {before} → {after}",
+                f"第一稿 → 第二稿 · 总分：{before} → {after}",
                 expanded=False,
             ):
                 st.caption(str(record.get("timestamp", "")))
@@ -1657,7 +1673,7 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
         return
 
     render_anchor("learning-dashboard")
-    st.markdown('<div class="section-kicker">YOUR LEARNING DASHBOARD</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-kicker">学习档案</div>', unsafe_allow_html=True)
     st.subheader("今天从最需要提高的地方继续")
     if not runs:
         st.info("完成第一篇 Task 2 批改后，这里会出现你的分数、薄弱项和待完成训练。")
@@ -1672,7 +1688,10 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
         [item for item in criteria if isinstance(item, dict) and isinstance(item.get("score"), (int, float))],
         key=lambda item: (float(item["score"]), str(item.get("criterion", ""))),
     )
-    weakest = ", ".join(str(item.get("criterion")) for item in ranked[:2]) or "等待评分"
+    weakest = "、".join(
+        CRITERION_DISPLAY_NAMES.get(str(item.get("criterion")), str(item.get("criterion")))
+        for item in ranked[:2]
+    ) or "等待评分"
     delta = latest_score - previous_score if previous_score is not None else None
     latest_revision_gain: float | None = None
     if revisions:
@@ -1691,9 +1710,13 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
     cards[4].metric("最近第二稿提升", f"{latest_revision_gain:+.1f}" if latest_revision_gain is not None else "尚未提交")
 
     essay_data = latest.get("essays") if isinstance(latest.get("essays"), dict) else {}
+    latest_is_legacy = str(latest.get("prompt_version") or "") != PROMPT_VERSION
+    if latest_is_legacy:
+        st.info("最近一份是旧版英文报告。它会继续保留，不会自动消耗 Token 重新生成。")
     if st.button("继续上一次训练", type="primary", use_container_width=True):
         st.session_state.latest_report = str(latest.get("report_markdown", ""))
         st.session_state.latest_structured = latest.get("report_json") or {}
+        st.session_state.latest_prompt_version = str(latest.get("prompt_version") or "")
         st.session_state.latest_cloud_ids = {
             "essay_id": str(latest.get("essay_id", "")),
             "grading_run_id": str(latest.get("id", "")),
@@ -1712,14 +1735,26 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
         st.session_state.scroll_target = "practice-task"
         st.rerun()
 
+    if latest_is_legacy and st.button("将旧作文载入输入区，准备生成中文报告", use_container_width=True):
+        st.session_state.topic_input = str(essay_data.get("question", ""))
+        st.session_state.essay_input = str(essay_data.get("content", ""))
+        st.session_state.latest_report = ""
+        st.session_state.latest_structured = {}
+        st.session_state.scroll_target = "writing-input"
+        st.rerun()
+
     chart_rows: list[dict[str, object]] = []
     tag_counts: Counter[str] = Counter()
     for run in reversed(runs):
         created = str(run.get("created_at", ""))[:10]
-        chart_rows.append({"Practice": created, "Criterion": "Overall", "Band": run.get("overall_band")})
+        chart_rows.append({"练习日期": created, "能力维度": "总分", "分数": run.get("overall_band")})
         for item in run.get("criteria") or []:
             if isinstance(item, dict):
-                chart_rows.append({"Practice": created, "Criterion": item.get("criterion"), "Band": item.get("score")})
+                chart_rows.append({
+                    "练习日期": created,
+                    "能力维度": CRITERION_DISPLAY_NAMES.get(str(item.get("criterion")), str(item.get("criterion"))),
+                    "分数": item.get("score"),
+                })
         report_json = run.get("report_json") or {}
         if isinstance(report_json, dict):
             tag_counts.update(str(tag) for tag in report_json.get("error_tags", []))
@@ -1728,10 +1763,10 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
             alt.Chart(pd.DataFrame(chart_rows))
             .mark_line(point=True)
             .encode(
-                x=alt.X("Practice:N", title="练习日期"),
-                y=alt.Y("Band:Q", scale=alt.Scale(domain=[3, 9]), title="Band"),
-                color=alt.Color("Criterion:N", title="能力维度"),
-                tooltip=["Practice", "Criterion", "Band"],
+                x=alt.X("练习日期:N", title="练习日期"),
+                y=alt.Y("分数:Q", scale=alt.Scale(domain=[3, 9]), title="分数"),
+                color=alt.Color("能力维度:N", title="能力维度"),
+                tooltip=["练习日期", "能力维度", "分数"],
             )
             .properties(height=280)
         )
@@ -1753,7 +1788,7 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
 
 def render_product_hero(is_demo: bool = False) -> None:
     """Render the shared editorial-style product hero."""
-    eyebrow = "ZERO-TOKEN WALKTHROUGH" if is_demo else "IELTS WRITING · FOCUSED PRACTICE"
+    eyebrow = "零 TOKEN 完整示范" if is_demo else "雅思写作 · 聚焦训练"
     title = "看懂一篇作文，如何一步步提分" if is_demo else "从一篇作文，到清楚的下一步"
     description = (
         "用一份已经生成的 gpt-5.4-mini 报告，完整展示输入、评分、诊断、改写、训练与第二稿。"
@@ -1813,43 +1848,43 @@ def render_demo_page() -> None:
         )
 
     render_anchor("demo-flow")
-    st.markdown('<div class="section-kicker">THE LEARNING JOURNEY</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-kicker">完整学习流程</div>', unsafe_allow_html=True)
     st.subheader("一眼看懂完整批改流程")
     st.markdown(
         """
         <div class="feature-strip">
-            <div class="feature-chip"><strong>01 · Diagnose</strong>先看分数与证据，不先堆修改建议</div>
-            <div class="feature-chip"><strong>02 · Compare</strong>用原句与改写对照，看见真实差距</div>
-            <div class="feature-chip"><strong>03 · Practise</strong>把问题变成下一次可以完成的练习</div>
+            <div class="feature-chip"><strong>01 · 诊断</strong>先看分数与证据，不先堆修改建议</div>
+            <div class="feature-chip"><strong>02 · 对照</strong>用原句与改写对照，看见真实差距</div>
+            <div class="feature-chip"><strong>03 · 练习</strong>把问题变成下一次可以完成的练习</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
     render_anchor("demo-input")
-    st.markdown('<div class="demo-step">STEP 1 · SAMPLE INPUT</div>', unsafe_allow_html=True)
+    st.markdown('<div class="demo-step">第 1 步 · 查看范文输入</div>', unsafe_allow_html=True)
     st.subheader("先看原始题目与学生作文")
     question_column, essay_column = st.columns([0.82, 1.38], gap="large")
     with question_column:
         with st.container(border=True):
-            st.markdown("**Essay question**")
+            st.markdown("**英文作文题目**")
             st.write(SAMPLE_TOPIC)
-            st.caption("Task 2 · Discussion + Opinion")
+            st.caption("Task 2 · 双边讨论并给出观点")
     with essay_column:
         with st.container(border=True):
-            st.markdown("**Student essay · 239 words**")
+            st.markdown("**学生原稿 · 239 词**")
             st.write(SAMPLE_ESSAY)
 
     render_anchor("demo-score")
     st.divider()
-    st.markdown('<div class="demo-step">STEP 2 · SCORE WITH EVIDENCE</div>', unsafe_allow_html=True)
+    st.markdown('<div class="demo-step">第 2 步 · 结合证据评分</div>', unsafe_allow_html=True)
     st.subheader("分数先给结论，再给可核对的依据")
     render_overall_band(calculate_overall_band(report))
     st.markdown(extract_report_section(report, 2))
 
     render_anchor("demo-diagnosis")
     st.divider()
-    st.markdown('<div class="demo-step">STEP 3 · PRIORITISED DIAGNOSIS</div>', unsafe_allow_html=True)
+    st.markdown('<div class="demo-step">第 3 步 · 找出优先问题</div>', unsafe_allow_html=True)
     st.subheader("只抓最影响提分的问题")
     priorities_column, problems_column = st.columns(2, gap="large")
     with priorities_column:
@@ -1857,14 +1892,14 @@ def render_demo_page() -> None:
     with problems_column:
         st.markdown(extract_report_section(report, 4))
 
-    st.markdown('<div class="demo-step">STEP 4 · LOCAL CORRECTION</div>', unsafe_allow_html=True)
+    st.markdown('<div class="demo-step">第 4 步 · 逐句与段落批改</div>', unsafe_allow_html=True)
     st.subheader("从句子到段落，逐层看哪里出了问题")
     st.markdown(extract_report_section(report, 5))
     st.markdown(extract_report_section(report, 6))
 
     render_anchor("demo-rewrite")
     st.divider()
-    st.markdown('<div class="demo-step">STEP 5 · MODEL THE DIFFERENCE</div>', unsafe_allow_html=True)
+    st.markdown('<div class="demo-step">第 5 步 · 对照英文示范</div>', unsafe_allow_html=True)
     st.subheader("Band 7.5 示范改写")
     st.caption("保留学生原始立场，只升级论证、搭配和句型控制。")
     with st.container(border=True):
@@ -1872,7 +1907,7 @@ def render_demo_page() -> None:
 
     render_anchor("demo-practice")
     st.divider()
-    st.markdown('<div class="demo-step">STEP 6 · TURN FEEDBACK INTO PRACTICE</div>', unsafe_allow_html=True)
+    st.markdown('<div class="demo-step">第 6 步 · 把反馈变成训练</div>', unsafe_allow_html=True)
     st.subheader("表达积累与下一次训练")
     st.markdown(extract_report_section(report, 8))
     st.markdown(extract_report_section(report, 9))
@@ -1886,7 +1921,7 @@ def render_demo_page() -> None:
 
     render_anchor("demo-draft2")
     st.divider()
-    st.markdown('<div class="demo-step">STEP 7 · SECOND-DRAFT LOOP</div>', unsafe_allow_html=True)
+    st.markdown('<div class="demo-step">第 7 步 · 完成第二稿闭环</div>', unsafe_allow_html=True)
     st.subheader("第二稿训练：把反馈真正写进自己的作文")
     st.caption("示范报告来自 gpt-5.4-mini；第二稿环节展示用户如何消化反馈，而不是让模型再代写一篇。")
     st.markdown(
@@ -2028,48 +2063,48 @@ with st.sidebar:
         st.button("退出登录", on_click=logout_cloud_user, use_container_width=True)
     else:
         st.caption("本地开发模式 · 记录只保存在本机")
-    with st.expander("Examiner report includes", expanded=False):
+    with st.expander("批改报告包含什么", expanded=False):
         st.markdown(
             """
-            1. Overall Band Score
-            2. Four Criteria Scores
-            3. Top 3 Score-Boosting Priorities
-            4. Main Problems
-            5. Sentence-level Corrections
-            6. Paragraph-level Feedback
-            7. Band 7.5 Rewrite
-            8. Useful Expressions
-            9. Next Practice Task
+            1. 雅思写作预估总分
+            2. 四项评分与原文依据
+            3. 核心提分方向
+            4. 主要问题
+            5. 逐句批改
+            6. 段落反馈
+            7. Band 7.5 英文示范改写
+            8. 英文表达积累
+            9. 下一次练习
             11. 单句提分训练
             12. 写作提升验证
             """
         )
 
 with st.container():
-    st.subheader("Writing Input")
+    st.subheader("提交作文")
     topic = st.text_area(
-        "Essay question",
+        "英文作文题目",
         height=120,
-        placeholder="Paste the IELTS Writing question here.",
+        placeholder="请粘贴 IELTS Writing Task 2 英文题目。",
         key="topic_input",
     )
 
     essay = st.text_area(
-        "Your essay",
+        "你的英文作文",
         height=360,
-        placeholder="Paste your full essay here.",
+        placeholder="请粘贴完整英文作文。",
         key="essay_input",
     )
 
     word_count = count_words(essay)
     minimum_words = 150 if task_type == "Task 1" else 250
-    count_label = f"Word count: {word_count} / {minimum_words}+"
+    count_label = f"词数：{word_count} / {minimum_words}+"
 
     metric_a, metric_b = st.columns(2)
     with metric_a:
-        render_score_card("Words", str(word_count), f"{task_type} target: {minimum_words}+")
+        render_score_card("词数", str(word_count), f"{task_type} 建议：{minimum_words} 词以上")
     with metric_b:
-        render_score_card("Provider", provider, model)
+        render_score_card("固定评分模型", model, "评分标准保持一致")
 
     if essay.strip():
         warning = word_count_warning(task_type, word_count)
@@ -2081,7 +2116,7 @@ with st.container():
         st.markdown(
             """
             <div class="workspace-note">
-                Paste a question and essay, then run the examiner report.
+                粘贴英文题目和作文后，即可生成完整批改报告。
             </div>
             """,
             unsafe_allow_html=True,
@@ -2092,14 +2127,14 @@ with st.container():
     grading_button_label = (
         f"使用 {PRODUCTION_MODEL} 重新评分"
         if st.session_state.grading_failed
-        else "Grade My Essay"
+        else "开始批改作文"
     )
     submitted = st.button(grading_button_label, type="primary", use_container_width=True)
 
 st.divider()
 
 with st.container():
-    st.subheader("Examiner Workspace")
+    st.subheader("批改与训练区")
     if "latest_report" not in st.session_state:
         st.session_state.latest_report = ""
         st.session_state.latest_saved_path = None
@@ -2107,9 +2142,9 @@ with st.container():
 
     if submitted:
         if not topic.strip() or not essay.strip():
-            st.error("Please enter both the essay question and your essay.")
+            st.error("请同时填写英文作文题目和作文正文。")
         else:
-            with st.spinner("The examiner is scoring, diagnosing, and rewriting..."):
+            with st.spinner("正在评分、诊断并生成针对性改写，请稍候……"):
                 try:
                     fingerprint = submission_hash(topic, essay)
                     grading_cache = st.session_state.setdefault("grading_cache", {})
@@ -2118,12 +2153,16 @@ with st.container():
                     cloud_ids: dict[str, str] = {}
                     reused_result = False
                     if isinstance(cached_entry, dict):
-                        package = dict(cached_entry.get("package") or {})
-                        cloud_ids = dict(cached_entry.get("cloud_ids") or {})
-                        reused_result = bool(package)
+                        candidate_package = dict(cached_entry.get("package") or {})
+                        if candidate_package.get("prompt_version") == PROMPT_VERSION:
+                            package = candidate_package
+                            cloud_ids = dict(cached_entry.get("cloud_ids") or {})
+                            reused_result = bool(package)
                     if package is None and cloud_user is not None:
                         try:
-                            cached_cloud = cloud_store.find_cached_grading(cloud_user, fingerprint)
+                            cached_cloud = cloud_store.find_cached_grading(
+                                cloud_user, fingerprint, PROMPT_VERSION
+                            )
                         except CloudStoreError as exc:
                             cached_cloud = None
                             st.warning(f"暂时无法检查云端历史，将继续完成本次评分：{exc}")
@@ -2212,11 +2251,12 @@ with st.container():
                         model_name=model,
                     )
                     if not analytics_saved:
-                        st.warning("The report was saved, but usage analytics could not be updated.")
+                        st.warning("报告已经保存，但本地匿名使用统计暂时无法更新。")
                     st.session_state.latest_report = report
                     st.session_state.latest_saved_path = saved_path
                     st.session_state.latest_error_book_path = error_book_path
                     st.session_state.latest_structured = structured
+                    st.session_state.latest_prompt_version = str(package["prompt_version"])
                     st.session_state.latest_cloud_ids = cloud_ids
                     st.session_state.draft_1_snapshot = {
                         "topic": topic,
@@ -2246,20 +2286,30 @@ with st.container():
 
     if st.session_state.latest_report:
         score = calculate_overall_band(st.session_state.latest_report)
+        if st.session_state.get("latest_prompt_version", PROMPT_VERSION) != PROMPT_VERSION:
+            st.info("当前显示的是旧版英文报告。旧记录不会自动重批；可在学习档案中主动载入作文生成中文版。")
 
-        tab_report, tab_files = st.tabs(["Report", "Saved Files"])
+        tab_report, tab_files = st.tabs(["批改报告", "下载文件"])
         with tab_report:
             render_overall_band(score)
-            render_criteria_overview(st.session_state.latest_report)
+            structured_result = st.session_state.get("latest_structured", {})
+            if isinstance(structured_result, dict) and structured_result.get("criteria"):
+                render_structured_criteria_overview(structured_result)
+            else:
+                render_criteria_overview(st.session_state.latest_report)
 
             st.divider()
             render_grouped_examiner_report(st.session_state.latest_report)
 
             st.divider()
             render_anchor("practice-task")
-            with st.expander("Practice Task", expanded=False):
-                practice_sentences = extract_practice_sentences(st.session_state.latest_report)
-                sentence_references = extract_sentence_references(st.session_state.latest_report)
+            with st.expander("单句提分训练", expanded=False):
+                sentence_data = structured_result.get("sentence_training", []) if isinstance(structured_result, dict) else []
+                practice_sentences = [str(item.get("original", "")) for item in sentence_data if isinstance(item, dict)]
+                sentence_references = [str(item.get("reference", "")) for item in sentence_data if isinstance(item, dict)]
+                if not practice_sentences:
+                    practice_sentences = extract_practice_sentences(st.session_state.latest_report)
+                    sentence_references = extract_sentence_references(st.session_state.latest_report)
                 render_sentence_practice(
                     practice_sentences,
                     provider,
@@ -2273,8 +2323,10 @@ with st.container():
 
             st.divider()
             render_anchor("logic-check")
-            with st.expander("Logic Check", expanded=False):
-                logic_tasks = extract_logic_practice_tasks(st.session_state.latest_report)
+            with st.expander("逻辑提升训练", expanded=False):
+                logic_tasks = structured_result.get("logic_training", []) if isinstance(structured_result, dict) else []
+                if not logic_tasks:
+                    logic_tasks = extract_logic_practice_tasks(st.session_state.latest_report)
                 render_logic_practice(
                     logic_tasks,
                     provider,
@@ -2312,7 +2364,7 @@ with st.container():
         st.markdown(
             """
             <div class="workspace-note">
-                Your score cards and examiner report will appear here after grading.
+                完成批改后，四项评分、问题诊断和训练任务会显示在这里。
             </div>
             """,
             unsafe_allow_html=True,

@@ -8,10 +8,10 @@ from typing import Any
 
 
 CRITERIA_LABELS = {
-    "task_response": "Task Response",
-    "coherence_and_cohesion": "Coherence and Cohesion",
-    "lexical_resource": "Lexical Resource",
-    "grammatical_range_and_accuracy": "Grammatical Range and Accuracy",
+    "task_response": "任务回应（TR）",
+    "coherence_and_cohesion": "连贯与衔接（CC）",
+    "lexical_resource": "词汇资源（LR）",
+    "grammatical_range_and_accuracy": "语法多样性与准确性（GRA）",
 }
 
 
@@ -96,46 +96,46 @@ def structured_report_to_markdown(parsed: dict[str, Any]) -> str:
         return str(parsed.get("raw", ""))
 
     data = parsed.get("data", {})
-    lines = ["# IELTS Writing Examiner Report", ""]
+    lines = ["# 雅思写作批改报告", ""]
     overall = data.get("overall_band")
-    lines.extend(["## Score Summary", "", f"Overall Band Score: {overall}", ""])
+    lines.extend(["## 分数概览", "", f"总分：{overall}", ""])
 
-    lines.extend(["## Criteria Breakdown", ""])
+    lines.extend(["## 四项评分", ""])
     criteria = data.get("criteria_scores", {})
     explanations = data.get("score_explanation", {})
     for key, label in CRITERIA_LABELS.items():
-        score = criteria.get(key, "N/A") if isinstance(criteria, dict) else "N/A"
+        score = criteria.get(key, "暂无") if isinstance(criteria, dict) else "暂无"
         reason = explanations.get(key, "") if isinstance(explanations, dict) else ""
         lines.append(f"- {label}: {score}. {reason}".strip())
     lines.append("")
 
-    lines.extend(["## Top Problems", ""])
+    lines.extend(["## 主要问题", ""])
     for item in data.get("top_3_problems", []) or []:
         if isinstance(item, dict):
-            lines.append(f"- Problem: {item.get('problem', '')}")
-            lines.append(f"  Original: {item.get('original_sentence', '')}")
-            lines.append(f"  Suggestion: {item.get('suggestion', '')}")
+            lines.append(f"- 问题：{item.get('problem', '')}")
+            lines.append(f"  原文：{item.get('original_sentence', '')}")
+            lines.append(f"  建议：{item.get('suggestion', '')}")
     lines.append("")
 
-    lines.extend(["## Sentence-level Corrections", ""])
+    lines.extend(["## 逐句批改", ""])
     for item in data.get("sentence_level_corrections", []) or []:
         if isinstance(item, dict):
-            lines.append(f"- Original: {item.get('original', '')}")
-            lines.append(f"  Corrected: {item.get('corrected', '')}")
-            lines.append(f"  Reason: {item.get('reason', '')}")
+            lines.append(f"- 原文：{item.get('original', '')}")
+            lines.append(f"  改写：{item.get('corrected', '')}")
+            lines.append(f"  说明：{item.get('reason', '')}")
     lines.append("")
 
-    lines.extend(["## Band 7.5 Rewrite", "", str(data.get("band_75_rewrite", "")), ""])
-    lines.extend(["## Useful Expressions", ""])
+    lines.extend(["## Band 7.5 示范改写", "", str(data.get("band_75_rewrite", "")), ""])
+    lines.extend(["## 表达积累", ""])
     for item in data.get("useful_expressions", []) or []:
         if isinstance(item, dict):
             lines.append(
                 f"- {item.get('expression', '')}: {item.get('meaning', '')} "
-                f"Example: {item.get('example', '')}"
+                f"例句：{item.get('example', '')}"
             )
     lines.append("")
 
-    lines.extend(["## Next Practice Plan", ""])
+    lines.extend(["## 下一步训练", ""])
     for item in data.get("next_practice_plan", []) or []:
         lines.append(f"- {item}")
 

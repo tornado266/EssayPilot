@@ -32,7 +32,7 @@ from src.result_parser import parse_band
 
 RECORDS_DIR = Path("records")
 PDF_FONT_PATH = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "NotoSansSC-Regular.ttf"
-SCORE_PATTERN = re.compile(r"(?:Likely Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
+SCORE_PATTERN = re.compile(r"(?:最可能分数|Likely Score|Overall Band Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
 
 INK = colors.HexColor("#173B45")
 TEAL = colors.HexColor("#287D86")
@@ -69,19 +69,19 @@ def build_markdown_record(
     created_at = created_at or datetime.now()
     return dedent(
         f"""
-        # IELTS Writing Examiner Record
+        # 雅思写作批改记录
 
-        - Task Type: {task_type}
-        - Word Count: {word_count}
-        - Created At: {created_at.strftime("%Y-%m-%d %H:%M:%S")}
-        - Overall Band: {overall_band if overall_band is not None else "N/A"}
-        - Anonymous User ID: {user_id if user_id is not None else "Legacy"}
+        - 任务类型: {task_type}
+        - 词数: {word_count}
+        - 创建时间: {created_at.strftime("%Y-%m-%d %H:%M:%S")}
+        - 总分: {overall_band if overall_band is not None else "暂无"}
+        - 匿名用户编号: {user_id if user_id is not None else "旧版记录"}
 
-        ## Essay Question
+        ## 英文作文题目
 
         {topic}
 
-        ## Student Essay
+        ## 学生原稿
 
         {essay}
 
@@ -112,8 +112,8 @@ def markdown_to_pdf(markdown: str) -> bytes:
         leftMargin=20 * mm,
         topMargin=22 * mm,
         bottomMargin=20 * mm,
-        title="IELTS Writing Examiner Report",
-        author="IELTS Writing Correction Skill",
+        title="雅思写作批改报告",
+        author="EssayPilot",
     )
 
     base = getSampleStyleSheet()
@@ -241,30 +241,30 @@ def markdown_to_pdf(markdown: str) -> bytes:
     record_header = record_parts[0]
     report = record_parts[1] if len(record_parts) > 1 else markdown
 
-    def field(pattern: str, source: str = record_header, default: str = "N/A") -> str:
+    def field(pattern: str, source: str = record_header, default: str = "暂无") -> str:
         match = re.search(pattern, source, flags=re.IGNORECASE | re.MULTILINE)
         return match.group(1).strip() if match else default
 
-    task_type = field(r"^- Task Type:\s*(.+)$")
-    word_count = field(r"^- Word Count:\s*(.+)$")
-    created_at = field(r"^- Created At:\s*(.+)$")
-    overall_band = field(r"^- Overall Band:\s*(.+)$")
-    if overall_band == "N/A":
+    task_type = field(r"^- (?:任务类型|Task Type):\s*(.+)$")
+    word_count = field(r"^- (?:词数|Word Count):\s*(.+)$")
+    created_at = field(r"^- (?:创建时间|Created At):\s*(.+)$")
+    overall_band = field(r"^- (?:总分|Overall Band):\s*(.+)$")
+    if overall_band in {"暂无", "N/A"}:
         score_match = SCORE_PATTERN.search(report)
-        overall_band = score_match.group(1) if score_match else "N/A"
+        overall_band = score_match.group(1) if score_match else "暂无"
 
     question_match = re.search(
-        r"## Essay Question\s*(.*?)\s*## Student Essay",
+        r"## (?:英文作文题目|Essay Question)\s*(.*?)\s*## (?:学生原稿|Student Essay)",
         record_header,
         flags=re.DOTALL | re.IGNORECASE,
     )
     essay_match = re.search(
-        r"## Student Essay\s*(.*)$",
+        r"## (?:学生原稿|Student Essay)\s*(.*)$",
         record_header,
         flags=re.DOTALL | re.IGNORECASE,
     )
-    question = question_match.group(1).strip() if question_match else "Question not recorded."
-    essay = essay_match.group(1).strip() if essay_match else "Essay not recorded."
+    question = question_match.group(1).strip() if question_match else "未记录作文题目。"
+    essay = essay_match.group(1).strip() if essay_match else "未记录学生原稿。"
 
     def inline_markup(text: str) -> str:
         marked = escape(text.strip())
@@ -274,13 +274,13 @@ def markdown_to_pdf(markdown: str) -> bytes:
 
     story = [
         Spacer(1, 16 * mm),
-        Paragraph("IELTS WRITING", cover_kicker),
-        Paragraph("Examiner Feedback Report", cover_title),
+        Paragraph("IELTS 写作", cover_kicker),
+        Paragraph("雅思写作批改报告", cover_title),
         Spacer(1, 5 * mm),
     ]
 
     score_card = Table(
-        [[Paragraph("OVERALL BAND", score_label), Paragraph(overall_band, score_style)]],
+        [[Paragraph("总分", score_label), Paragraph(overall_band, score_style)]],
         colWidths=[55 * mm, 40 * mm],
         rowHeights=[22 * mm],
         hAlign="CENTER",
@@ -300,9 +300,9 @@ def markdown_to_pdf(markdown: str) -> bytes:
 
     metadata = Table(
         [[
-            Paragraph(f"TASK<br/><b>{inline_markup(task_type)}</b>", meta),
-            Paragraph(f"WORDS<br/><b>{inline_markup(word_count)}</b>", meta),
-            Paragraph(f"CREATED<br/><b>{inline_markup(created_at)}</b>", meta),
+            Paragraph(f"任务<br/><b>{inline_markup(task_type)}</b>", meta),
+            Paragraph(f"词数<br/><b>{inline_markup(word_count)}</b>", meta),
+            Paragraph(f"创建时间<br/><b>{inline_markup(created_at)}</b>", meta),
         ]],
         colWidths=[50 * mm, 40 * mm, 60 * mm],
         hAlign="CENTER",
@@ -323,18 +323,18 @@ def markdown_to_pdf(markdown: str) -> bytes:
         [
             metadata,
             Spacer(1, 11 * mm),
-            Paragraph("ESSAY QUESTION", subheading),
+            Paragraph("英文作文题目", subheading),
             HRFlowable(width="100%", thickness=1.2, color=CORAL, spaceAfter=7),
             Paragraph(inline_markup(question), question_style),
             PageBreak(),
-            Paragraph("Original Essay", heading),
+            Paragraph("学生原稿", heading),
             HRFlowable(width="100%", thickness=1, color=RULE, spaceAfter=9),
         ]
     )
     for paragraph in re.split(r"\n\s*\n", essay):
         if paragraph.strip():
             story.append(Paragraph(inline_markup(paragraph), essay_style))
-    story.extend([PageBreak(), Paragraph("Examiner Feedback", heading)])
+    story.extend([PageBreak(), Paragraph("批改与训练报告", heading)])
 
     lines = report.splitlines()
     index = 0
@@ -393,7 +393,7 @@ def markdown_to_pdf(markdown: str) -> bytes:
                 HRFlowable(width="100%", thickness=1, color=CORAL, spaceAfter=7),
             ])
         elif line.startswith("# "):
-            if "IELTS Writing Examiner Report" not in line:
+            if not any(title in line for title in ("IELTS Writing Examiner Report", "雅思写作批改报告")):
                 story.append(Paragraph(inline_markup(line[2:]), heading))
         elif line.startswith(">"):
             story.append(Paragraph(inline_markup(line.lstrip("> ")), quote_style))
@@ -407,8 +407,8 @@ def markdown_to_pdf(markdown: str) -> bytes:
         canvas.saveState()
         canvas.setFont("NotoSansSC", 7.5)
         canvas.setFillColor(MUTED)
-        canvas.drawString(20 * mm, 11 * mm, "IELTS Writing Correction Skill")
-        canvas.drawRightString(A4[0] - 20 * mm, 11 * mm, f"Page {doc.page}")
+        canvas.drawString(20 * mm, 11 * mm, "EssayPilot 雅思写作学习报告")
+        canvas.drawRightString(A4[0] - 20 * mm, 11 * mm, f"第 {doc.page} 页")
         canvas.setStrokeColor(RULE)
         canvas.setLineWidth(0.5)
         canvas.line(20 * mm, 15 * mm, A4[0] - 20 * mm, 15 * mm)
@@ -526,9 +526,9 @@ def _read_markdown_record(path: Path) -> dict[str, object] | None:
     except OSError:
         return None
 
-    created_match = re.search(r"- Created At:\s*(.+)", markdown)
-    task_match = re.search(r"- Task Type:\s*(.+)", markdown)
-    words_match = re.search(r"- Word Count:\s*(\d+)", markdown)
+    created_match = re.search(r"- (?:创建时间|Created At):\s*(.+)", markdown)
+    task_match = re.search(r"- (?:任务类型|Task Type):\s*(.+)", markdown)
+    words_match = re.search(r"- (?:词数|Word Count):\s*(\d+)", markdown)
 
     try:
         word_count = int(words_match.group(1)) if words_match else None
@@ -539,7 +539,7 @@ def _read_markdown_record(path: Path) -> dict[str, object] | None:
         "file": path.name,
         "path": path,
         "created_at": created_match.group(1) if created_match else path.stem,
-        "task_type": task_match.group(1) if task_match else "Unknown",
+        "task_type": task_match.group(1) if task_match else "未知",
         "word_count": word_count,
         "score": extract_overall_score(markdown),
         "criteria_scores": {},

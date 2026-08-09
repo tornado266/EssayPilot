@@ -8,12 +8,12 @@ from openai import APIConnectionError, APIStatusError, OpenAI, OpenAIError
 import streamlit as st
 
 from src.prompts import build_grading_prompt, build_structured_grading_prompt, load_skill_scoring_rules
+from src.chinese_report import examiner_result_to_markdown
 from src.report_schema import (
     EXAMINER_JSON_SCHEMA,
     PROMPT_VERSION,
     SCHEMA_VERSION,
     SKILL_VERSION,
-    examiner_result_to_markdown,
     validate_examiner_result,
 )
 

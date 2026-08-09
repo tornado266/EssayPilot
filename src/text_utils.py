@@ -16,7 +16,4 @@ def word_count_warning(task_type: str, word_count: int) -> str:
         return ""
 
     missing = minimum - word_count
-    return (
-        f"{task_type} usually needs at least {minimum} words. "
-        f"This essay has {word_count} words, about {missing} words short."
-    )
+    return f"{task_type} 通常至少需要 {minimum} 词；当前为 {word_count} 词，还差约 {missing} 词。"

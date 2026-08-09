@@ -9,12 +9,15 @@ SECTION_NAMES = [
     "Main Problems",
     "Sentence-level Corrections",
     "Paragraph-level Feedback",
+    "主要问题",
+    "逐句与段落批改",
+    "段落反馈",
 ]
 CATEGORIES = {
-    "Grammar": ["grammar", "grammatical", "tense", "article", "sentence"],
-    "Vocabulary": ["lexical", "vocabulary", "word choice", "collocation"],
-    "Logic": ["logic", "argument", "idea", "example", "relevance"],
-    "Structure": ["coherence", "cohesion", "paragraph", "structure", "linking"],
+    "语法": ["grammar", "grammatical", "tense", "article", "sentence", "语法", "时态", "冠词", "句子"],
+    "词汇": ["lexical", "vocabulary", "word choice", "collocation", "词汇", "用词", "搭配"],
+    "逻辑": ["logic", "argument", "idea", "example", "relevance", "逻辑", "论证", "观点", "例子", "相关"],
+    "结构": ["coherence", "cohesion", "paragraph", "structure", "linking", "连贯", "衔接", "段落", "结构"],
 }
 
 
@@ -76,24 +79,24 @@ def append_error_book(
     parts = [
         f"\n\n## {created_at} - {task_type}",
         "",
-        f"**Topic:** {topic_preview}",
+        f"**作文题目：** {topic_preview}",
         "",
     ]
 
     if not extracted:
-        parts.append("_No error-focused sections were found in this report._")
+        parts.append("_这份报告中没有找到可加入错题本的问题。_")
     else:
         for category, items in categories.items():
             parts.append(f"### {category}")
             if items:
                 parts.extend(f"- {item}" for item in items[:8])
             else:
-                parts.append("- No clear item extracted from this report.")
+                parts.append("- 这份报告中暂未提取到明确问题。")
             parts.append("")
 
     with error_book_path.open("a", encoding="utf-8") as file:
         if error_book_path.stat().st_size == 0:
-            file.write("# IELTS Writing Error Book\n")
+            file.write("# 雅思写作错题本\n")
         file.write("\n".join(parts).strip() + "\n")
 
     return error_book_path

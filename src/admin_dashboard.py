@@ -57,16 +57,16 @@ def render_admin_dashboard() -> None:
     st.title("EssayPilot 公开内测看板")
     expected_password = _admin_password()
     if not expected_password:
-        st.error("ADMIN_PASSWORD is not configured in Streamlit Secrets.")
+        st.error("尚未在 Streamlit Secrets 中配置 ADMIN_PASSWORD。")
         return
 
     if not st.session_state.get("admin_authenticated"):
-        password = st.text_input("Admin password", type="password")
+        password = st.text_input("管理员密码", type="password")
         if not password:
-            st.info("Enter the developer password to view anonymous usage statistics.")
+            st.info("请输入管理员密码，查看匿名使用统计。")
             return
         if not hmac.compare_digest(password, expected_password):
-            st.error("Incorrect password.")
+            st.error("管理员密码不正确。")
             return
         st.session_state.admin_authenticated = True
 

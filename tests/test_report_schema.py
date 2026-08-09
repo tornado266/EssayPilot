@@ -4,10 +4,10 @@ from src.report_schema import (
     CRITERIA,
     ExaminerResultError,
     calculate_overall,
-    examiner_result_to_markdown,
     submission_hash,
     validate_examiner_result,
 )
+from src.chinese_report import examiner_result_to_markdown
 
 
 ESSAY = "Public transport reduces traffic. Governments should improve bus services."
@@ -15,20 +15,20 @@ ESSAY = "Public transport reduces traffic. Governments should improve bus servic
 
 def valid_result():
     return {
-        "summary": "The position is clear, but support is brief.",
+        "summary": "立场清楚，但论证仍然偏简略。",
         "criteria": [
-            {"criterion": label, "score": score, "reason": "Clear but limited.", "evidence": ["Public transport reduces traffic."], "next_band_limit": "Develop the idea."}
+            {"criterion": label, "score": score, "reason": "表达清楚，但展开有限。", "evidence": ["Public transport reduces traffic."], "next_band_limit": "进一步解释观点。"}
             for label, score in zip(CRITERIA, [7, 6, 6, 7], strict=True)
         ],
-        "priorities": [{"title": "Develop ideas", "evidence": "Public transport reduces traffic.", "why": "It is brief.", "action": "Add explanation."}] * 2,
-        "problems": [{"title": "Brief support", "evidence": "Public transport reduces traffic.", "why": "It stops early.", "action": "Add an example."}] * 2,
-        "sentence_corrections": [{"original": "Public transport reduces traffic.", "problem": "Brief", "improved": "Reliable public transport can reduce urban congestion."}] * 3,
-        "paragraph_feedback": [{"paragraph": 1, "strength": "Clear", "limitation": "Brief", "improvement": "Develop it"}],
+        "priorities": [{"title": "展开观点", "evidence": "Public transport reduces traffic.", "why": "论证太短。", "action": "补充因果解释。"}] * 2,
+        "problems": [{"title": "支撑不足", "evidence": "Public transport reduces traffic.", "why": "观点没有继续展开。", "action": "补充一个例子。"}] * 2,
+        "sentence_corrections": [{"original": "Public transport reduces traffic.", "problem": "论证简略", "improved": "Reliable public transport can reduce urban congestion."}] * 3,
+        "paragraph_feedback": [{"paragraph": 1, "strength": "观点清楚", "limitation": "展开不足", "improvement": "增加因果解释"}],
         "band_75_rewrite": "Reliable public transport can reduce urban congestion.",
-        "useful_expressions": [{"expression": "urban congestion", "meaning": "traffic", "example": "It reduces urban congestion."}] * 3,
-        "next_practice": {"task": "Write a paragraph", "sentence_pattern": "If..., then...", "warning": "Avoid unsupported claims."},
-        "sentence_training": [{"original": "Public transport reduces traffic.", "goal": "Develop the claim", "reference": "Reliable public transport can reduce congestion."}] * 2,
-        "logic_training": [{"problem": "Brief idea", "original": "Public transport reduces traffic.", "task": "Develop it", "requirements": ["Add an explanation"]}],
+        "useful_expressions": [{"expression": "urban congestion", "meaning": "城市拥堵", "example": "It reduces urban congestion."}] * 3,
+        "next_practice": {"task": "Write a paragraph about public transport.", "sentence_pattern": "If..., then...", "warning": "避免没有解释的断言。"},
+        "sentence_training": [{"original": "Public transport reduces traffic.", "goal": "展开这一观点", "reference": "Reliable public transport can reduce congestion."}] * 2,
+        "logic_training": [{"problem": "观点简略", "original": "Public transport reduces traffic.", "task": "补充因果链", "requirements": ["增加一层解释"]}],
         "error_tags": ["idea_development"],
     }
 
@@ -37,7 +37,12 @@ class ReportSchemaTests(unittest.TestCase):
     def test_program_calculates_half_band(self):
         result = validate_examiner_result(valid_result(), ESSAY)
         self.assertEqual(result["overall_band"], 6.5)
-        self.assertIn("**Likely score: 6.5**", examiner_result_to_markdown(result))
+        report = examiner_result_to_markdown(result)
+        self.assertIn("**最可能分数：6.5**", report)
+        self.assertIn("任务回应（TR）", report)
+        self.assertIn("Public transport reduces traffic.", report)
+        self.assertIn("Reliable public transport can reduce urban congestion.", report)
+        self.assertNotIn("Score Summary", report)
 
     def test_requires_exact_essay_evidence(self):
         data = valid_result()
