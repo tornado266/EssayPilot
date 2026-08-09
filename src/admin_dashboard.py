@@ -82,7 +82,7 @@ def render_admin_dashboard() -> None:
             "Time": event.get("timestamp", ""),
             "Band": event.get("overall_band"),
             "Words": event.get("essay_word_count"),
-            "User ID": event.get("user_id", ""),
+            "Model": event.get("model_name", ""),
         }
         for event in analytics["recent_activity"]
     ]

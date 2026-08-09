@@ -1,14 +1,26 @@
 """AI provider client and IELTS grading request."""
 
+import json
 import os
+from datetime import datetime, timezone
 
 from openai import APIConnectionError, APIStatusError, OpenAI, OpenAIError
 import streamlit as st
 
-from src.prompts import build_grading_prompt
+from src.prompts import build_grading_prompt, build_structured_grading_prompt, load_skill_scoring_rules
+from src.report_schema import (
+    EXAMINER_JSON_SCHEMA,
+    PROMPT_VERSION,
+    SCHEMA_VERSION,
+    SKILL_VERSION,
+    examiner_result_to_markdown,
+    validate_examiner_result,
+)
 
 
 DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
+PRODUCTION_MODEL = "gpt-5.4-mini"
+PRODUCTION_MODEL_SNAPSHOT = "gpt-5.4-mini-2026-03-17"
 
 
 def get_runtime_setting(name: str, default: str | None = None) -> str | None:
@@ -94,6 +106,8 @@ def build_client(provider: str) -> OpenAI:
         return OpenAI(
             api_key=api_key,
             base_url=base_url,
+            timeout=75.0,
+            max_retries=2,
         )
 
     if not api_key:
@@ -101,7 +115,7 @@ def build_client(provider: str) -> OpenAI:
             f"{key_name} is missing. Please set it before running the app."
         )
 
-    return OpenAI(api_key=api_key)
+    return OpenAI(api_key=api_key, timeout=75.0, max_retries=2)
 
 
 def completion_options(
@@ -118,7 +132,7 @@ def completion_options(
     return {"temperature": 0.0, "max_tokens": max_output_tokens}
 
 
-def grade_essay(provider: str, task_type: str, topic: str, essay: str, model: str) -> str:
+def _grade_essay_legacy(provider: str, task_type: str, topic: str, essay: str, model: str) -> str:
     """Send the IELTS essay to an AI provider and return a markdown correction report."""
     _, api_key, base_url = get_provider_config(provider)
     client = build_client(provider)
@@ -290,6 +304,98 @@ Student essay:
             )
 
     return report
+
+
+def grade_essay_package(
+    *,
+    task_type: str,
+    topic: str,
+    essay: str,
+) -> dict[str, object]:
+    """Return a validated, versioned Task 2 examiner package from the fixed model."""
+    if task_type != "Task 2":
+        raise ValueError("EssayPilot V2 currently supports IELTS Writing Task 2 only.")
+    if not load_skill_scoring_rules().strip():
+        raise RuntimeError(
+            "The installed IELTS scoring Skill could not be loaded. Grading was stopped."
+        )
+
+    _, api_key, base_url = get_provider_config("OpenAI")
+    client = build_client("OpenAI")
+    prompt = build_structured_grading_prompt(task_type, topic, essay)
+    try:
+        response = client.chat.completions.create(
+            model=PRODUCTION_MODEL_SNAPSHOT,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are EssayPilot's strict IELTS Writing Task 2 examiner. "
+                        "Follow the supplied scoring Skill and JSON schema exactly."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            response_format={"type": "json_schema", "json_schema": EXAMINER_JSON_SCHEMA},
+            max_completion_tokens=16000,
+            reasoning_effort="none",
+        )
+        raw = response.choices[0].message.content or ""
+        structured = validate_examiner_result(json.loads(raw), essay)
+    except APIStatusError as exc:
+        raise AIGraderError(
+            provider="OpenAI",
+            model=PRODUCTION_MODEL,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+            status_code=exc.status_code,
+        ) from exc
+    except (APIConnectionError, OpenAIError) as exc:
+        raise AIGraderError(
+            provider="OpenAI",
+            model=PRODUCTION_MODEL,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+        ) from exc
+    except (json.JSONDecodeError, ValueError, RuntimeError) as exc:
+        raise AIGraderError(
+            provider="OpenAI",
+            model=PRODUCTION_MODEL,
+            base_url=base_url,
+            api_key_loaded=bool(api_key),
+            original_error=exc,
+        ) from exc
+
+    usage = getattr(response, "usage", None)
+    return {
+        "model": PRODUCTION_MODEL_SNAPSHOT,
+        "model_family": PRODUCTION_MODEL,
+        "schema_version": SCHEMA_VERSION,
+        "prompt_version": PROMPT_VERSION,
+        "skill_version": SKILL_VERSION,
+        "graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "structured": structured,
+        "report": examiner_result_to_markdown(structured),
+        "usage": {
+            "input_tokens": getattr(usage, "prompt_tokens", None),
+            "output_tokens": getattr(usage, "completion_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None),
+        },
+    }
+
+
+def grade_essay(
+    provider: str = "OpenAI",
+    task_type: str = "Task 2",
+    topic: str = "",
+    essay: str = "",
+    model: str = PRODUCTION_MODEL,
+) -> str:
+    """Compatibility wrapper returning deterministic Markdown from structured data."""
+    del provider, model
+    return str(grade_essay_package(task_type=task_type, topic=topic, essay=essay)["report"])
 
 
 def review_sentence_rewrite(

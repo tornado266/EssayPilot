@@ -4,7 +4,7 @@
 
 [Open the live app](https://xbz4ydgw2t6cm2ytkh79vq.streamlit.app/) | [View the repository](https://github.com/tornado266/EssayPilot)
 
-EssayPilot is a Streamlit workspace for IELTS Writing Task 2 practice. It turns an essay into criterion-level band estimates, evidence-based feedback, guided rewriting tasks, and portable Markdown/PDF reports.
+EssayPilot is a Streamlit learning workspace for IELTS Writing Task 2. It uses a fixed `gpt-5.4-mini` examiner, deterministic band calculation, evidence-based feedback, guided rewriting, second-draft comparison, and an optional cloud learning profile.
 
 EssayPilot supports a private developer dashboard for tracking anonymous usage statistics. Access is protected by the `ADMIN_PASSWORD` Streamlit secret, and analytics records do not contain essay text.
 
@@ -83,7 +83,7 @@ Every completed correction can be exported as Markdown or as a styled, bilingual
 ```mermaid
 flowchart LR
     A[Essay question and response] --> B[IELTS examiner prompt]
-    B --> C[DeepSeek or OpenAI]
+    B --> C[Fixed gpt-5.4-mini examiner]
     C --> D[Band scores and evidence]
     D --> E[Sentence rewrite]
     D --> F[Logic rewrite]
@@ -94,13 +94,13 @@ flowchart LR
     D --> J[Progress history]
 ```
 
-The provider response is parsed defensively. When structured parsing is not possible, EssayPilot keeps the raw examiner report available instead of crashing the interface.
+The examiner must satisfy a strict JSON schema. EssayPilot verifies exact essay evidence, calculates the overall band from the four whole-band criteria, and saves a report only after validation succeeds.
 
 ## Feedback Workflow
 
 1. Paste the IELTS Writing Task 2 question.
 2. Paste the student's essay and review the word count.
-3. Select an AI provider and run the examiner.
+3. Run the fixed Task 2 examiner.
 4. Review the overall band and four criterion scores.
 5. Expand criterion details to compare strengths with the main score-limiting issue.
 6. Read the full report for evidence, corrections, and improvement priorities.
@@ -125,11 +125,11 @@ This keeps the examiner report useful without turning the product into a one-cli
 | Layer | Technology |
 | --- | --- |
 | UI | Streamlit |
-| AI providers | DeepSeek and optional OpenAI |
+| AI provider | OpenAI `gpt-5.4-mini` (fixed for scoring consistency) |
 | Provider client | OpenAI Python SDK with configurable base URL |
 | Charts | Altair and pandas |
 | Report export | ReportLab with an embedded Noto Sans SC font |
-| Persistence | Local Markdown and JSON records |
+| Persistence | Supabase Auth/Postgres, with local Markdown/JSON fallback |
 
 ## Quick Start
 
@@ -162,19 +162,20 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Configure a provider
+### 4. Configure scoring and optional cloud profiles
 
 Create a local `.env` file:
 
 ```dotenv
-DEEPSEEK_API_KEY=your_deepseek_api_key
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-
-# Optional
 OPENAI_API_KEY=your_openai_api_key
+
+# Optional: enables email-code login and cross-device records
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your_publishable_anon_key
 ```
 
 The app reads Streamlit Secrets first and falls back to environment variables for local development.
+For cloud profiles, create a Supabase project and run `supabase/schema.sql` once in its SQL editor. Row-level security restricts every essay, report, practice attempt, and draft revision to its owner.
 
 ### 5. Run EssayPilot
 
@@ -192,11 +193,9 @@ Then open `http://localhost:8501`.
 4. Add provider credentials under **App settings > Secrets**:
 
 ```toml
-DEEPSEEK_API_KEY = "your_deepseek_api_key"
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-
-# Optional
 OPENAI_API_KEY = "your_openai_api_key"
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_ANON_KEY = "your_publishable_anon_key"
 ```
 
 Never commit `.env` or `.streamlit/secrets.toml`.
@@ -210,6 +209,8 @@ EssayPilot/
 |-- assets/                   # Background and embedded PDF font
 |-- screenshots/              # README product screenshots
 |-- records/                  # Local correction history
+|-- supabase/schema.sql       # Cloud tables, transaction function, and RLS policies
+|-- tests/                    # Offline scoring-contract tests
 `-- src/
     |-- ai_grader.py          # Provider configuration and requests
     |-- prompts.py            # IELTS examiner and rewrite prompts
@@ -222,8 +223,23 @@ EssayPilot/
 ## Data and Deployment Notes
 
 - API keys are loaded from Streamlit Secrets or local environment variables and are never written into report files.
-- Records stored on Streamlit Community Cloud are ephemeral and may be cleared when the app restarts.
+- Local fallback records on Streamlit Community Cloud are ephemeral and may be cleared when the app restarts.
+- When Supabase is configured, authenticated learning records persist across restarts and devices. Existing local records are never uploaded automatically.
 - AI scoring is probabilistic. Use repeated practice and criterion trends rather than treating one result as an official score.
+
+## Scoring calibration
+
+Offline contract tests never call the API:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The repeatability runner uses paid API calls and checks every score's spread against the 0.5-band tolerance:
+
+```bash
+python -m scripts.run_calibration --repeats 3
+```
 
 ## License
 

@@ -426,6 +426,9 @@ def save_markdown_record(
     word_count: int,
     parsed_result: dict[str, Any] | None = None,
     user_id: str | None = None,
+    examiner_data: dict[str, Any] | None = None,
+    grading_metadata: dict[str, Any] | None = None,
+    content_hash: str = "",
 ) -> Path:
     """Save one correction record as Markdown plus structured JSON metadata."""
     records_dir = get_user_records_dir(user_id)
@@ -460,6 +463,9 @@ def save_markdown_record(
         "word_count": word_count,
         "markdown_file": file_path.name,
         "user_id": user_id,
+        "examiner_data": examiner_data or {},
+        "grading_metadata": grading_metadata or {},
+        "content_hash": content_hash,
     }
 
     content = build_markdown_record(

@@ -1,6 +1,8 @@
 """IELTS Writing examiner prompt templates."""
 
 import json
+import re
+from collections import Counter
 from pathlib import Path
 
 
@@ -357,6 +359,68 @@ Use exactly this format:
 要求：
 - 2-4句话
 - 要有清晰论点 + 解释 + 例子
+
+IELTS task type:
+{task_type}
+
+Essay question:
+{topic}
+
+Student essay:
+{essay}
+""".strip()
+
+
+def build_structured_grading_prompt(task_type: str, topic: str, essay: str) -> str:
+    """Build the Task 2 scoring prompt for strict JSON-schema output."""
+    if task_type != "Task 2":
+        raise ValueError("EssayPilot V2 currently supports IELTS Writing Task 2 only.")
+
+    base_prompt = build_grading_prompt(task_type=task_type, topic=topic, essay=essay)
+    scoring_policy = base_prompt.split("Fixed output structure:", 1)[0].rstrip()
+    words = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", essay.lower())
+    stopwords = {
+        "about", "after", "again", "also", "because", "before", "being", "both",
+        "could", "every", "first", "from", "have", "however", "into", "more",
+        "other", "should", "some", "their", "there", "these", "they", "this",
+        "those", "very", "which", "while", "with", "would",
+    }
+
+    def lexical_root(word: str) -> str:
+        if len(word) > 5 and word.endswith("ing"):
+            return word[:-3]
+        if len(word) > 4 and word.endswith("ies"):
+            return word[:-3] + "y"
+        if len(word) > 4 and word.endswith("s"):
+            return word[:-1]
+        return word
+
+    content_roots = [lexical_root(word) for word in words if len(word) >= 4 and word not in stopwords]
+    repeated = [(word, count) for word, count in Counter(content_roots).most_common(12) if count >= 3]
+    diagnostics = (
+        f"word_count={len(words)}; paragraphs={len([p for p in essay.splitlines() if p.strip()])}; "
+        f"repeated_content_roots={repeated or 'none'}"
+    )
+    return f"""{scoring_policy}
+
+Structured output rules:
+- Return data matching the supplied JSON schema. Do not return Markdown.
+- Quote exact evidence from the submitted essay for every criterion.
+- Every sentence_corrections.original and sentence_training.original value must be an exact
+  substring of the submitted essay, without ellipses or paraphrase.
+- Criterion scores must be four independent whole-band integers.
+- Do not provide an overall score. EssayPilot calculates it deterministically.
+- Select only the lowest one or two criteria when designing sentence and logic training.
+- Keep coaching concise, specific, and useful to a Chinese IELTS learner.
+- Put reusable error categories in error_tags, for example idea_development,
+  mechanical_cohesion, repetition, collocation, article, agreement, or punctuation.
+- Use the deterministic text diagnostics below as an audit, not as a substitute for the
+  official descriptors. For Lexical Resource, repeated unavoidable task terms are normal,
+  but avoidable basic-word repetition across several paragraphs prevents Band 7 unless the
+  essay also shows enough precise, flexible alternatives. Apply this boundary consistently.
+
+Deterministic text diagnostics:
+{diagnostics}
 
 IELTS task type:
 {task_type}

@@ -5,6 +5,7 @@ import hashlib
 import math
 import re
 import uuid
+from collections import Counter
 from pathlib import Path
 
 import altair as alt
@@ -14,16 +15,19 @@ from dotenv import load_dotenv
 
 from src.ai_grader import (
     AIGraderError,
+    PRODUCTION_MODEL,
     compare_draft_progress,
-    grade_essay,
+    grade_essay_package,
     review_logic_rewrite,
     review_sentence_rewrite,
 )
 from src.admin_dashboard import is_admin_request, render_admin_dashboard
 from src.analytics import record_grading_event
+from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
 from src.draft_training import list_draft_training_history, save_draft_training_record
 from src.error_book import append_error_book
 from src.storage import markdown_to_pdf, save_markdown_record
+from src.report_schema import score_snapshot, submission_hash
 from src.text_utils import count_words, word_count_warning
 
 
@@ -75,6 +79,63 @@ def load_sample_and_show_workspace() -> None:
     st.session_state.scroll_target = "writing-input"
 
 
+def session_cloud_user() -> CloudUser | None:
+    data = st.session_state.get("cloud_user")
+    if not isinstance(data, dict) or not data.get("access_token"):
+        return None
+    return CloudUser(
+        id=str(data.get("id", "")),
+        email=str(data.get("email", "")),
+        access_token=str(data.get("access_token", "")),
+        refresh_token=str(data.get("refresh_token", "")),
+    )
+
+
+def render_login_page(store: SupabaseStore) -> None:
+    """Render passwordless email-code authentication without exposing provider details."""
+    st.markdown(
+        """
+        <section class="hero-shell">
+            <div class="eyebrow">ESSAYPILOT LEARNING PROFILE</div>
+            <h1>让每一次修改，都留在你的成长档案里</h1>
+            <p>使用邮箱验证码登录，跨设备保存作文、训练进度和第二稿对比。</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    email = st.text_input("邮箱", key="login_email", placeholder="name@example.com")
+    send_col, demo_col = st.columns(2)
+    with send_col:
+        if st.button("发送验证码", type="primary", use_container_width=True):
+            if "@" not in email:
+                st.error("请输入有效邮箱地址。")
+            else:
+                try:
+                    store.send_email_code(email.strip())
+                    st.session_state.login_code_sent = True
+                    st.success("验证码已发送，请检查邮箱。")
+                except CloudStoreError as exc:
+                    st.error(str(exc))
+    with demo_col:
+        st.button("先看零 Token 范文", on_click=show_demo, use_container_width=True)
+    if st.session_state.get("login_code_sent"):
+        code = st.text_input("6 位验证码", key="login_code", max_chars=8)
+        if st.button("登录并进入学习档案", use_container_width=True):
+            try:
+                user = store.verify_email_code(email.strip(), code.strip())
+                st.session_state.cloud_user = user.__dict__
+                st.session_state.user_id = user.id
+                st.rerun()
+            except CloudStoreError as exc:
+                st.error(str(exc))
+
+
+def logout_cloud_user() -> None:
+    st.session_state.pop("cloud_user", None)
+    st.session_state.user_id = str(uuid.uuid4())
+    st.session_state.page_mode = "workspace"
+
+
 def apply_pending_scroll() -> None:
     """Move the parent page to the requested section after a Streamlit rerun."""
     target = st.session_state.pop("scroll_target", None)
@@ -103,8 +164,13 @@ def render_bookmark_rail(items: list[tuple[str, str]]) -> None:
     links = "".join(
         f'<a href="#{anchor}">{label}</a>' for label, anchor in items
     )
+    active_rules = "".join(
+        f'body:has(#{anchor}:target) .bookmark-rail a[href="#{anchor}"]'
+        "{background:rgba(255,255,255,.88);color:#0f6270;box-shadow:0 8px 18px rgba(8,51,68,.10);}"
+        for _, anchor in items
+    )
     st.markdown(
-        f'<nav class="bookmark-rail"><span>BOOKMARKS</span>{links}</nav>',
+        f'<style>{active_rules}</style><nav class="bookmark-rail"><span>BOOKMARKS</span>{links}</nav>',
         unsafe_allow_html=True,
     )
 
@@ -738,6 +804,8 @@ def render_draft_2_training(
     model: str,
     task_type: str,
     user_id: str,
+    cloud_store: SupabaseStore | None = None,
+    cloud_user: CloudUser | None = None,
 ) -> None:
     """Render and process the complete Draft 2 learning cycle."""
     draft_1 = st.session_state.get("draft_1_snapshot")
@@ -784,14 +852,14 @@ def render_draft_2_training(
         else:
             with st.spinner("正在评分第二稿并生成两稿对比报告..."):
                 try:
-                    draft_2_report = grade_essay(
-                        provider=provider,
+                    draft_2_package = grade_essay_package(
                         task_type=task_type,
                         topic=draft_1["topic"],
                         essay=draft_2_text,
-                        model=model,
                     )
-                    draft_2_scores = extract_score_snapshot(draft_2_report)
+                    draft_2_report = str(draft_2_package["report"])
+                    draft_2_structured = dict(draft_2_package["structured"])
+                    draft_2_scores = score_snapshot(draft_2_structured)
                     progress_report = compare_draft_progress(
                         provider=provider,
                         task_question=draft_1["topic"],
@@ -808,6 +876,14 @@ def render_draft_2_training(
                         report=draft_2_report,
                         word_count=count_words(draft_2_text),
                         user_id=user_id,
+                        examiner_data=draft_2_structured,
+                        grading_metadata={
+                            "model": draft_2_package["model"],
+                            "prompt_version": draft_2_package["prompt_version"],
+                            "skill_version": draft_2_package["skill_version"],
+                            "schema_version": draft_2_package["schema_version"],
+                            "graded_at": draft_2_package["graded_at"],
+                        },
                     )
                     training_path = save_draft_training_record(
                         user_id=user_id,
@@ -826,6 +902,20 @@ def render_draft_2_training(
                         essay_word_count=count_words(draft_2_text),
                         model_name=model,
                     )
+                    if cloud_store and cloud_user and draft_1.get("essay_id") and draft_1.get("grading_run_id"):
+                        try:
+                            cloud_store.save_draft_revision(
+                                cloud_user,
+                                essay_id=str(draft_1["essay_id"]),
+                                grading_run_id=str(draft_1["grading_run_id"]),
+                                content=draft_2_text,
+                                scores=draft_2_scores,
+                                report_json=draft_2_structured,
+                                report_markdown=draft_2_report,
+                                progress_report=progress_report,
+                            )
+                        except CloudStoreError as exc:
+                            st.warning(f"第二稿已保存在本机，但云端同步失败：{exc}")
                     st.session_state.draft_2_result = {
                         "scores": draft_2_scores,
                         "report": draft_2_report,
@@ -1193,6 +1283,10 @@ def render_sentence_practice(
     provider: str,
     model: str,
     references: dict[str, str] | None = None,
+    cloud_store: SupabaseStore | None = None,
+    cloud_user: CloudUser | None = None,
+    grading_run_id: str = "",
+    error_tags: list[str] | None = None,
 ) -> None:
     """Render the interactive sentence rewrite practice."""
     st.subheader("单句提分训练")
@@ -1210,6 +1304,9 @@ def render_sentence_practice(
         reference_key = f"sentence_reference_{sentence_id}"
         button_key = f"sentence_review_button_{sentence_id}"
         feedback_key = f"sentence_feedback_{sentence_id}"
+        revision_key = f"sentence_revision_{sentence_id}"
+        mastered_key = f"sentence_mastered_{sentence_id}"
+        saved_key = f"sentence_saved_{sentence_id}"
 
         with st.container(border=True):
             st.markdown(f"**原句 {index}:** {original_sentence}")
@@ -1239,6 +1336,18 @@ def render_sentence_practice(
                                 student_rewrite=rewrite,
                                 model=model,
                             )
+                            if cloud_store and cloud_user and grading_run_id:
+                                cloud_store.save_practice_attempt(
+                                    cloud_user,
+                                    grading_run_id=grading_run_id,
+                                    task_kind="sentence",
+                                    task_index=index,
+                                    original_text=original_sentence,
+                                    submitted_text=rewrite,
+                                    feedback=st.session_state[feedback_key],
+                                    error_tags=error_tags,
+                                )
+                                st.session_state[saved_key] = True
                         except AIGraderError as exc:
                             st.error("点评失败。完整诊断信息如下。")
                             st.code(str(exc), language="text")
@@ -1251,6 +1360,36 @@ def render_sentence_practice(
 
             if st.session_state.get(feedback_key):
                 st.markdown(st.session_state[feedback_key])
+                st.markdown("**再改一次：** 根据点评写出你的最终版本。")
+                revision = st.text_area(
+                    "第二次改写",
+                    key=revision_key,
+                    height=90,
+                    placeholder="吸收点评后再写一次，完成后标记掌握。",
+                )
+                if st.button("标记为已掌握", key=mastered_key, use_container_width=True):
+                    if not revision.strip():
+                        st.warning("请先完成第二次改写。")
+                    elif revision.strip() == rewrite.strip():
+                        st.warning("第二次改写需要体现你根据点评做出的调整。")
+                    else:
+                        if cloud_store and cloud_user and grading_run_id:
+                            try:
+                                cloud_store.save_practice_attempt(
+                                    cloud_user,
+                                    grading_run_id=grading_run_id,
+                                    task_kind="sentence",
+                                    task_index=index,
+                                    original_text=original_sentence,
+                                    submitted_text=rewrite,
+                                    feedback=st.session_state[feedback_key],
+                                    revision_text=revision,
+                                    mastered=True,
+                                    error_tags=error_tags,
+                                )
+                            except CloudStoreError as exc:
+                                st.warning(f"已完成练习，但云端同步失败：{exc}")
+                        st.success("已掌握。本次改写会计入你的学习档案。")
 
 
 def extract_logic_practice_tasks(markdown: str) -> list[dict[str, str]]:
@@ -1296,6 +1435,10 @@ def render_logic_practice(
     tasks: list[dict[str, str]],
     provider: str,
     model: str,
+    cloud_store: SupabaseStore | None = None,
+    cloud_user: CloudUser | None = None,
+    grading_run_id: str = "",
+    error_tags: list[str] | None = None,
 ) -> None:
     """Render interactive logic and structure rewrite practice."""
     st.subheader("写作提升验证")
@@ -1312,6 +1455,8 @@ def render_logic_practice(
         rewrite_key = f"logic_rewrite_{logic_id}"
         button_key = f"logic_review_button_{logic_id}"
         feedback_key = f"logic_feedback_{logic_id}"
+        revision_key = f"logic_revision_{logic_id}"
+        mastered_key = f"logic_mastered_{logic_id}"
 
         with st.container(border=True):
             st.markdown(f"**任务 {index}:** {task['problem']}")
@@ -1339,6 +1484,17 @@ def render_logic_practice(
                                 student_rewrite=rewrite,
                                 model=model,
                             )
+                            if cloud_store and cloud_user and grading_run_id:
+                                cloud_store.save_practice_attempt(
+                                    cloud_user,
+                                    grading_run_id=grading_run_id,
+                                    task_kind="logic",
+                                    task_index=index,
+                                    original_text=task["original"],
+                                    submitted_text=rewrite,
+                                    feedback=st.session_state[feedback_key],
+                                    error_tags=error_tags,
+                                )
                         except AIGraderError as exc:
                             st.error("点评失败。完整诊断信息如下。")
                             st.code(str(exc), language="text")
@@ -1351,6 +1507,36 @@ def render_logic_practice(
 
             if st.session_state.get(feedback_key):
                 st.markdown(st.session_state[feedback_key])
+                st.markdown("**再写一次：** 把点评落实到完整的论点—解释—例子链条。")
+                revision = st.text_area(
+                    "第二次重写",
+                    key=revision_key,
+                    height=130,
+                    placeholder="根据点评重写最终版本。",
+                )
+                if st.button("标记逻辑训练为已掌握", key=mastered_key, use_container_width=True):
+                    if not revision.strip():
+                        st.warning("请先完成第二次重写。")
+                    elif revision.strip() == rewrite.strip():
+                        st.warning("第二次重写需要体现点评后的调整。")
+                    else:
+                        if cloud_store and cloud_user and grading_run_id:
+                            try:
+                                cloud_store.save_practice_attempt(
+                                    cloud_user,
+                                    grading_run_id=grading_run_id,
+                                    task_kind="logic",
+                                    task_index=index,
+                                    original_text=task["original"],
+                                    submitted_text=rewrite,
+                                    feedback=st.session_state[feedback_key],
+                                    revision_text=revision,
+                                    mastered=True,
+                                    error_tags=error_tags,
+                                )
+                            except CloudStoreError as exc:
+                                st.warning(f"已完成练习，但云端同步失败：{exc}")
+                        st.success("已掌握。这次逻辑重写已加入学习档案。")
 
 
 def list_correction_history(user_id: str) -> list[dict[str, object]]:
@@ -1439,6 +1625,111 @@ def render_history(user_id: str) -> None:
             ):
                 st.caption(str(record.get("timestamp", "")))
                 st.markdown(str(record.get("progress_report", "")))
+
+
+def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
+    """Render cloud-backed continuity, priorities, and multidimensional progress."""
+    try:
+        runs = store.list_grading_runs(user)
+        pending = store.list_pending_practice(user)
+        revisions = store.list_draft_revisions(user)
+    except CloudStoreError as exc:
+        st.warning(f"云端学习档案暂时不可用：{exc}")
+        return
+
+    render_anchor("learning-dashboard")
+    st.markdown('<div class="section-kicker">YOUR LEARNING DASHBOARD</div>', unsafe_allow_html=True)
+    st.subheader("今天从最需要提高的地方继续")
+    if not runs:
+        st.info("完成第一篇 Task 2 批改后，这里会出现你的分数、薄弱项和待完成训练。")
+        return
+
+    latest = runs[0]
+    previous = runs[1] if len(runs) > 1 else None
+    latest_score = float(latest.get("overall_band") or 0)
+    previous_score = float(previous.get("overall_band") or 0) if previous else None
+    criteria = latest.get("criteria") if isinstance(latest.get("criteria"), list) else []
+    ranked = sorted(
+        [item for item in criteria if isinstance(item, dict) and isinstance(item.get("score"), (int, float))],
+        key=lambda item: (float(item["score"]), str(item.get("criterion", ""))),
+    )
+    weakest = ", ".join(str(item.get("criterion")) for item in ranked[:2]) or "等待评分"
+    delta = latest_score - previous_score if previous_score is not None else None
+    latest_revision_gain: float | None = None
+    if revisions:
+        revision_scores = revisions[0].get("score_snapshot") or {}
+        first_run = revisions[0].get("grading_runs") or {}
+        if isinstance(revision_scores, dict) and isinstance(first_run, dict):
+            revised = revision_scores.get("Overall Band")
+            original = first_run.get("overall_band")
+            if isinstance(revised, (int, float)) and isinstance(original, (int, float)):
+                latest_revision_gain = float(revised) - float(original)
+    cards = st.columns(5)
+    cards[0].metric("最新总分", f"{latest_score:.1f}")
+    cards[1].metric("当前薄弱项", weakest)
+    cards[2].metric("较上一次", f"{delta:+.1f}" if delta is not None else "首篇记录")
+    cards[3].metric("待完成训练", len(pending))
+    cards[4].metric("最近第二稿提升", f"{latest_revision_gain:+.1f}" if latest_revision_gain is not None else "尚未提交")
+
+    essay_data = latest.get("essays") if isinstance(latest.get("essays"), dict) else {}
+    if st.button("继续上一次训练", type="primary", use_container_width=True):
+        st.session_state.latest_report = str(latest.get("report_markdown", ""))
+        st.session_state.latest_structured = latest.get("report_json") or {}
+        st.session_state.latest_cloud_ids = {
+            "essay_id": str(latest.get("essay_id", "")),
+            "grading_run_id": str(latest.get("id", "")),
+        }
+        st.session_state.topic_input = str(essay_data.get("question", ""))
+        st.session_state.essay_input = str(essay_data.get("content", ""))
+        st.session_state.draft_1_snapshot = {
+            "topic": st.session_state.topic_input,
+            "text": st.session_state.essay_input,
+            "feedback": st.session_state.latest_report,
+            "scores": score_snapshot(st.session_state.latest_structured),
+            "structured": st.session_state.latest_structured,
+            "essay_id": str(latest.get("essay_id", "")),
+            "grading_run_id": str(latest.get("id", "")),
+        }
+        st.session_state.scroll_target = "practice-task"
+        st.rerun()
+
+    chart_rows: list[dict[str, object]] = []
+    tag_counts: Counter[str] = Counter()
+    for run in reversed(runs):
+        created = str(run.get("created_at", ""))[:10]
+        chart_rows.append({"Practice": created, "Criterion": "Overall", "Band": run.get("overall_band")})
+        for item in run.get("criteria") or []:
+            if isinstance(item, dict):
+                chart_rows.append({"Practice": created, "Criterion": item.get("criterion"), "Band": item.get("score")})
+        report_json = run.get("report_json") or {}
+        if isinstance(report_json, dict):
+            tag_counts.update(str(tag) for tag in report_json.get("error_tags", []))
+    if chart_rows:
+        chart = (
+            alt.Chart(pd.DataFrame(chart_rows))
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("Practice:N", title="练习日期"),
+                y=alt.Y("Band:Q", scale=alt.Scale(domain=[3, 9]), title="Band"),
+                color=alt.Color("Criterion:N", title="能力维度"),
+                tooltip=["Practice", "Criterion", "Band"],
+            )
+            .properties(height=280)
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+    structured = latest.get("report_json") if isinstance(latest.get("report_json"), dict) else {}
+    sentence_tasks = structured.get("sentence_training", []) if isinstance(structured, dict) else []
+    logic_tasks = structured.get("logic_training", []) if isinstance(structured, dict) else []
+    with st.expander("今日训练", expanded=True):
+        for item in sentence_tasks[:2]:
+            st.markdown(f"- **单句：** {item.get('goal', '改写薄弱句子')} — “{item.get('original', '')}”")
+        for item in logic_tasks[:1]:
+            st.markdown(f"- **逻辑：** {item.get('task', '完成段落重写')}")
+    if tag_counts:
+        common = " · ".join(f"{tag} × {count}" for tag, count in tag_counts.most_common(5))
+        st.caption(f"近期常见问题：{common}")
+    st.divider()
 
 
 def render_product_hero(is_demo: bool = False) -> None:
@@ -1601,6 +1892,21 @@ def render_demo_page() -> None:
             5. 系统给出“已经改善 / 仍需修改 / 下一轮优先级”的进步报告，并保存训练记录。
             """
         )
+    compare_draft_1, compare_draft_2, compare_result = st.tabs(
+        ["第一稿", "第二稿示范", "两稿变化"]
+    )
+    with compare_draft_1:
+        st.markdown(SAMPLE_ESSAY)
+    with compare_draft_2:
+        st.markdown(extract_report_section(report, 7))
+    with compare_result:
+        st.markdown(
+            """
+            - **保留：** 原来的立场和四段核心结构，不替学生更换观点。
+            - **重点变化：** 补足解释链，减少 `study / subjects / learn` 重复，并让反方段落结尾回到中心论点。
+            - **训练目标：** 学生先独立完成第二稿，再把示范稿当作核对材料；系统比较的是两次真实写作表现。
+            """
+        )
     st.info("正式使用时，需要先完成第一稿批改，再点击“开始第二稿训练”。示范页只展示流程，因此仍然是 0 Token。")
 
     st.success("这就是一次完整批改会经历的全部步骤。查看本页不会调用任何模型。")
@@ -1625,19 +1931,33 @@ if st.session_state.page_mode == "demo":
     render_demo_page()
     st.stop()
 
+cloud_store = SupabaseStore()
+cloud_user = session_cloud_user()
+if cloud_store.enabled and cloud_user is None:
+    render_login_page(cloud_store)
+    st.stop()
+if cloud_user is not None:
+    user_id = cloud_user.id
 
-render_bookmark_rail(
-    [
-        ("评分依据", "report-basis"),
-        ("提分方向", "report-priorities"),
-        ("逐句批改", "report-corrections"),
-        ("示范改写", "report-rewrite"),
-        ("表达积累", "report-next"),
-        ("单句训练", "practice-task"),
-        ("逻辑训练", "logic-check"),
-        ("第二稿", "draft-2-training"),
-    ]
-)
+
+workspace_bookmarks = []
+if cloud_user is not None:
+    workspace_bookmarks.append(("学习档案", "learning-dashboard"))
+workspace_bookmarks.append(("提交作文", "writing-input"))
+if st.session_state.get("latest_report"):
+    workspace_bookmarks.extend(
+        [
+            ("评分依据", "report-basis"),
+            ("提分方向", "report-priorities"),
+            ("逐句批改", "report-corrections"),
+            ("示范改写", "report-rewrite"),
+            ("表达积累", "report-next"),
+            ("单句训练", "practice-task"),
+            ("逻辑训练", "logic-check"),
+            ("第二稿", "draft-2-training"),
+        ]
+    )
+render_bookmark_rail(workspace_bookmarks)
 render_anchor("workspace-top")
 apply_pending_scroll()
 render_product_hero()
@@ -1671,19 +1991,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+if cloud_user is not None:
+    render_learning_dashboard(cloud_store, cloud_user)
+
+render_anchor("writing-input")
+
 with st.sidebar:
-    st.header("Settings")
-    task_type = st.radio("IELTS task type", ["Task 2", "Task 1"], horizontal=True)
-    provider = st.selectbox("AI provider", ["DeepSeek", "OpenAI"])
-    default_model = "deepseek-v4-flash" if provider == "DeepSeek" else "gpt-5.4-mini"
-    model = st.text_input(
-        "Model",
-        value=default_model,
-        key=f"model_{provider.lower()}",
-    )
-    st.info(
-        "Add API keys in Streamlit Secrets for deployment, or use a local .env file."
-    )
+    st.header("学习设置")
+    task_type = "Task 2"
+    provider = "OpenAI"
+    model = PRODUCTION_MODEL
+    st.markdown("**IELTS Writing Task 2**")
+    st.caption(f"固定评分模型 · {model}")
+    st.info("Task 1 将在 Task 2 评分与训练闭环稳定后开放。")
+    if cloud_user is not None:
+        st.caption(f"已登录：{cloud_user.email}")
+        st.button("退出登录", on_click=logout_cloud_user, use_container_width=True)
+    else:
+        st.caption("本地开发模式 · 记录只保存在本机")
     with st.expander("Examiner report includes", expanded=False):
         st.markdown(
             """
@@ -1760,13 +2085,51 @@ with st.container():
         else:
             with st.spinner("The examiner is scoring, diagnosing, and rewriting..."):
                 try:
-                    report = grade_essay(
-                        provider=provider,
-                        task_type=task_type,
-                        topic=topic,
-                        essay=essay,
-                        model=model,
-                    )
+                    fingerprint = submission_hash(topic, essay)
+                    grading_cache = st.session_state.setdefault("grading_cache", {})
+                    cached_entry = grading_cache.get(fingerprint)
+                    package: dict[str, object] | None = None
+                    cloud_ids: dict[str, str] = {}
+                    reused_result = False
+                    if isinstance(cached_entry, dict):
+                        package = dict(cached_entry.get("package") or {})
+                        cloud_ids = dict(cached_entry.get("cloud_ids") or {})
+                        reused_result = bool(package)
+                    if package is None and cloud_user is not None:
+                        try:
+                            cached_cloud = cloud_store.find_cached_grading(cloud_user, fingerprint)
+                        except CloudStoreError as exc:
+                            cached_cloud = None
+                            st.warning(f"暂时无法检查云端历史，将继续完成本次评分：{exc}")
+                        if cached_cloud:
+                            structured_cloud = dict(cached_cloud.get("report_json") or {})
+                            package = {
+                                "model": str(cached_cloud.get("model") or PRODUCTION_MODEL),
+                                "schema_version": str(structured_cloud.get("schema_version") or "2.0"),
+                                "prompt_version": str(cached_cloud.get("prompt_version") or ""),
+                                "skill_version": str(cached_cloud.get("skill_version") or ""),
+                                "graded_at": str(cached_cloud.get("created_at") or ""),
+                                "structured": structured_cloud,
+                                "report": str(cached_cloud.get("report_markdown") or ""),
+                                "usage": {},
+                            }
+                            cloud_ids = {
+                                "essay_id": str(cached_cloud.get("essay_id") or ""),
+                                "grading_run_id": str(cached_cloud.get("id") or ""),
+                            }
+                            reused_result = True
+                    if package is None:
+                        package = grade_essay_package(
+                            task_type=task_type,
+                            topic=topic,
+                            essay=essay,
+                        )
+                    report = str(package["report"])
+                    structured = dict(package["structured"])
+                    scores = score_snapshot(structured)
+                    criteria_scores = {
+                        key: value for key, value in scores.items() if key != "Overall Band"
+                    }
                     saved_path = save_markdown_record(
                         task_type=task_type,
                         topic=topic,
@@ -1774,6 +2137,25 @@ with st.container():
                         report=report,
                         word_count=word_count,
                         user_id=user_id,
+                        parsed_result={
+                            "ok": True,
+                            "data": {
+                                "overall_band": structured["overall_band"],
+                                "criteria_scores": criteria_scores,
+                            },
+                            "raw": report,
+                            "error": "",
+                        },
+                        examiner_data=structured,
+                        grading_metadata={
+                            "model": package["model"],
+                            "prompt_version": package["prompt_version"],
+                            "skill_version": package["skill_version"],
+                            "schema_version": package["schema_version"],
+                            "graded_at": package["graded_at"],
+                            "usage": package["usage"],
+                        },
+                        content_hash=fingerprint,
                     )
                     error_book_path = append_error_book(
                         task_type=task_type,
@@ -1782,6 +2164,21 @@ with st.container():
                         user_id=user_id,
                     )
                     overall_band = calculate_overall_band(report)
+                    if cloud_user is not None and not cloud_ids:
+                        try:
+                            cloud_ids = cloud_store.save_grading_cycle(
+                                cloud_user,
+                                question=topic,
+                                essay=essay,
+                                word_count=word_count,
+                                package=package,
+                                content_hash=fingerprint,
+                            )
+                        except CloudStoreError as exc:
+                            st.warning(f"评分已完成并保存在本机，但云端同步失败：{exc}")
+                    grading_cache[fingerprint] = {"package": package, "cloud_ids": cloud_ids}
+                    if reused_result:
+                        st.info("检测到相同题目和作文，已复用固定评分结果，本次未消耗 Token。")
                     analytics_saved = record_grading_event(
                         user_id=user_id,
                         overall_band=overall_band,
@@ -1793,25 +2190,28 @@ with st.container():
                     st.session_state.latest_report = report
                     st.session_state.latest_saved_path = saved_path
                     st.session_state.latest_error_book_path = error_book_path
+                    st.session_state.latest_structured = structured
+                    st.session_state.latest_cloud_ids = cloud_ids
                     st.session_state.draft_1_snapshot = {
                         "topic": topic,
                         "text": essay,
                         "feedback": report,
-                        "scores": extract_score_snapshot(report),
+                        "scores": scores,
+                        "structured": structured,
+                        "essay_id": cloud_ids.get("essay_id", ""),
+                        "grading_run_id": cloud_ids.get("grading_run_id", ""),
                     }
                     st.session_state.draft_2_active = False
                     st.session_state.draft_2_result = None
                     st.session_state.draft_2_text = ""
                 except AIGraderError as exc:
-                    st.error("The AI request failed. Full diagnostic details are below.")
-                    st.code(str(exc), language="text")
+                    st.error("评分服务暂时不可用。你的题目和作文已经保留，可以稍后直接重试。")
+                    with st.expander("查看技术诊断", expanded=False):
+                        st.code(str(exc), language="text")
                 except Exception as exc:
-                    st.error("Unexpected app error. Full diagnostic details are below.")
-                    st.code(
-                        f"Exception Type: {type(exc).__name__}\n\n"
-                        f"{type(exc).__name__}:\n{exc}",
-                        language="text",
-                    )
+                    st.error("评分没有完成，当前作文未被清空或写入半份记录。请稍后重试。")
+                    with st.expander("查看技术诊断", expanded=False):
+                        st.code(f"{type(exc).__name__}: {exc}", language="text")
 
     if st.session_state.latest_report:
         score = calculate_overall_band(st.session_state.latest_report)
@@ -1834,13 +2234,25 @@ with st.container():
                     provider,
                     model,
                     references=sentence_references,
+                    cloud_store=cloud_store if cloud_user is not None else None,
+                    cloud_user=cloud_user,
+                    grading_run_id=str(st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", "")),
+                    error_tags=list(st.session_state.get("latest_structured", {}).get("error_tags", [])),
                 )
 
             st.divider()
             render_anchor("logic-check")
             with st.expander("Logic Check", expanded=False):
                 logic_tasks = extract_logic_practice_tasks(st.session_state.latest_report)
-                render_logic_practice(logic_tasks, provider, model)
+                render_logic_practice(
+                    logic_tasks,
+                    provider,
+                    model,
+                    cloud_store=cloud_store if cloud_user is not None else None,
+                    cloud_user=cloud_user,
+                    grading_run_id=str(st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", "")),
+                    error_tags=list(st.session_state.get("latest_structured", {}).get("error_tags", [])),
+                )
 
             st.divider()
             render_anchor("draft-2-training")
@@ -1856,6 +2268,8 @@ with st.container():
                     model=model,
                     task_type=task_type,
                     user_id=user_id,
+                    cloud_store=cloud_store if cloud_user is not None else None,
+                    cloud_user=cloud_user,
                 )
         with tab_files:
             if st.session_state.latest_saved_path:
@@ -1874,4 +2288,5 @@ with st.container():
         )
 
 st.divider()
-render_history(user_id)
+if cloud_user is None:
+    render_history(user_id)

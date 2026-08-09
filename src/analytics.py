@@ -3,6 +3,7 @@
 import json
 import os
 import threading
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -40,7 +41,7 @@ def record_grading_event(
 ) -> bool:
     """Append one successful grading event without storing essay content."""
     event = {
-        "user_id": user_id,
+        "anonymous_user": hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:16],
         "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
         "overall_band": overall_band,
         "essay_word_count": essay_word_count,
@@ -84,7 +85,13 @@ def load_analytics(path: Path = ANALYTICS_PATH) -> dict[str, Any]:
     ]
 
     return {
-        "total_users": len({event.get("user_id") for event in events if event.get("user_id")}),
+        "total_users": len(
+            {
+                event.get("anonymous_user") or event.get("user_id")
+                for event in events
+                if event.get("anonymous_user") or event.get("user_id")
+            }
+        ),
         "total_essays": len(events),
         "essays_today": sum(
             1 for event in events if str(event.get("timestamp", ""))[:10] == today
