@@ -510,6 +510,12 @@ def inject_page_style() -> None:
             box-shadow: 0 16px 30px rgba(8, 51, 68, 0.08);
         }}
 
+        [data-testid="stMarkdownContainer"]:has(table) {{
+            max-width: 100%;
+            overflow-x: auto;
+            overscroll-behavior-inline: contain;
+        }}
+
         [data-testid="stAlert"] {{
             border-radius: 16px;
         }}
@@ -536,6 +542,9 @@ def inject_page_style() -> None:
                 flex-direction: row;
                 justify-content: flex-start;
                 overflow-x: auto;
+                max-width: 100%;
+                overscroll-behavior-inline: contain;
+                scrollbar-width: thin;
                 border-radius: 14px;
                 z-index: 999;
             }}
@@ -563,6 +572,16 @@ def inject_page_style() -> None:
             .hero-shell {{
                 padding: 1.4rem;
                 border-radius: 20px;
+            }}
+
+            [data-testid="stMarkdownContainer"] table {{
+                min-width: 680px;
+            }}
+
+            [data-testid="stTextArea"] textarea,
+            [data-testid="stTextInput"] input,
+            [data-testid="stButton"] button {{
+                max-width: 100%;
             }}
         }}
 
@@ -2068,7 +2087,14 @@ with st.container():
             unsafe_allow_html=True,
         )
 
-    submitted = st.button("Grade My Essay", type="primary", use_container_width=True)
+    if "grading_failed" not in st.session_state:
+        st.session_state.grading_failed = False
+    grading_button_label = (
+        f"使用 {PRODUCTION_MODEL} 重新评分"
+        if st.session_state.grading_failed
+        else "Grade My Essay"
+    )
+    submitted = st.button(grading_button_label, type="primary", use_container_width=True)
 
 st.divider()
 
@@ -2204,12 +2230,17 @@ with st.container():
                     st.session_state.draft_2_active = False
                     st.session_state.draft_2_result = None
                     st.session_state.draft_2_text = ""
+                    st.session_state.grading_failed = False
                 except AIGraderError as exc:
+                    st.session_state.grading_failed = True
                     st.error("评分服务暂时不可用。你的题目和作文已经保留，可以稍后直接重试。")
+                    st.caption(f"重试仍将使用固定模型 {PRODUCTION_MODEL}，不会切换评分标准。")
                     with st.expander("查看技术诊断", expanded=False):
                         st.code(str(exc), language="text")
                 except Exception as exc:
+                    st.session_state.grading_failed = True
                     st.error("评分没有完成，当前作文未被清空或写入半份记录。请稍后重试。")
+                    st.caption(f"重试仍将使用固定模型 {PRODUCTION_MODEL}，不会切换评分标准。")
                     with st.expander("查看技术诊断", expanded=False):
                         st.code(f"{type(exc).__name__}: {exc}", language="text")
 

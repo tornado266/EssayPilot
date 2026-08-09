@@ -127,3 +127,94 @@ $$;
 
 grant execute on function public.save_grading_cycle(text,text,integer,text,numeric,jsonb,jsonb,text,text,text,text) to authenticated;
 grant select, insert, update, delete on public.essays, public.grading_runs, public.practice_attempts, public.draft_revisions to authenticated;
+
+-- Anonymous public-beta funnel. The function returns counts only: no user ids,
+-- email addresses, essay text, or reports leave the database.
+create or replace function public.get_beta_funnel(p_since timestamptz)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  with first_runs as (
+    select distinct on (g.user_id)
+      g.user_id,
+      g.id as grading_run_id,
+      g.created_at as first_grading_at
+    from public.grading_runs g
+    where p_since is not null and g.created_at >= p_since
+    order by g.user_id, g.created_at, g.id
+  ),
+  per_user as (
+    select
+      f.user_id,
+      f.first_grading_at,
+      (
+        select min(p.updated_at)
+        from public.practice_attempts p
+        where p.user_id = f.user_id
+          and p.grading_run_id = f.grading_run_id
+          and p.task_kind = 'sentence'
+          and p.status = 'mastered'
+      ) as sentence_mastered_at,
+      (
+        select min(p.updated_at)
+        from public.practice_attempts p
+        where p.user_id = f.user_id
+          and p.grading_run_id = f.grading_run_id
+          and p.task_kind = 'logic'
+          and p.status = 'mastered'
+      ) as logic_mastered_at,
+      (
+        select min(d.created_at)
+        from public.draft_revisions d
+        where d.user_id = f.user_id
+          and d.grading_run_id = f.grading_run_id
+          and d.draft_number >= 2
+      ) as second_draft_at
+    from first_runs f
+  ),
+  daily_events as (
+    select user_id, first_grading_at as occurred_at, 'first_grading'::text as stage from per_user
+    union all
+    select user_id, sentence_mastered_at, 'sentence_mastered' from per_user where sentence_mastered_at is not null
+    union all
+    select user_id, logic_mastered_at, 'logic_mastered' from per_user where logic_mastered_at is not null
+    union all
+    select user_id, greatest(sentence_mastered_at, logic_mastered_at), 'both_mastered'
+    from per_user where sentence_mastered_at is not null and logic_mastered_at is not null
+    union all
+    select user_id, second_draft_at, 'second_draft' from per_user where second_draft_at is not null
+  ),
+  daily as (
+    select
+      occurred_at::date as day,
+      count(distinct user_id) filter (where stage = 'first_grading') as first_grading_users,
+      count(distinct user_id) filter (where stage = 'sentence_mastered') as sentence_mastered_users,
+      count(distinct user_id) filter (where stage = 'logic_mastered') as logic_mastered_users,
+      count(distinct user_id) filter (where stage = 'both_mastered') as both_mastered_users,
+      count(distinct user_id) filter (where stage = 'second_draft') as second_draft_users
+    from daily_events
+    group by occurred_at::date
+  )
+  select jsonb_build_object(
+    'since', p_since,
+    'generated_at', now(),
+    'first_grading_users', count(*),
+    'sentence_mastered_users', count(*) filter (where sentence_mastered_at is not null),
+    'logic_mastered_users', count(*) filter (where logic_mastered_at is not null),
+    'both_mastered_users', count(*) filter (
+      where sentence_mastered_at is not null and logic_mastered_at is not null
+    ),
+    'second_draft_users', count(*) filter (where second_draft_at is not null),
+    'daily', coalesce(
+      (select jsonb_agg(to_jsonb(daily) order by day) from daily),
+      '[]'::jsonb
+    )
+  )
+  from per_user;
+$$;
+
+revoke all on function public.get_beta_funnel(timestamptz) from public, anon, authenticated;
+grant execute on function public.get_beta_funnel(timestamptz) to service_role;

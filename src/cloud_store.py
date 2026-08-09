@@ -34,15 +34,28 @@ class SupabaseStore:
     def __init__(self) -> None:
         self.url = _setting("SUPABASE_URL").rstrip("/")
         self.anon_key = _setting("SUPABASE_ANON_KEY")
+        self.service_role_key = _setting("SUPABASE_SERVICE_ROLE_KEY")
+        self.beta_start_at = _setting("BETA_START_AT")
 
     @property
     def enabled(self) -> bool:
         return bool(self.url and self.anon_key)
 
-    def _headers(self, access_token: str = "", *, prefer: str = "") -> dict[str, str]:
+    @property
+    def funnel_enabled(self) -> bool:
+        return bool(self.enabled and self.service_role_key and self.beta_start_at)
+
+    def _headers(
+        self,
+        access_token: str = "",
+        *,
+        prefer: str = "",
+        api_key: str = "",
+    ) -> dict[str, str]:
+        request_key = api_key or self.anon_key
         headers = {
-            "apikey": self.anon_key,
-            "Authorization": f"Bearer {access_token or self.anon_key}",
+            "apikey": request_key,
+            "Authorization": f"Bearer {access_token or request_key}",
             "Content-Type": "application/json",
         }
         if prefer:
@@ -58,6 +71,7 @@ class SupabaseStore:
         payload: dict[str, Any] | list[dict[str, Any]] | None = None,
         params: dict[str, str] | None = None,
         prefer: str = "",
+        api_key: str = "",
     ) -> Any:
         if not self.enabled:
             raise CloudStoreError("Supabase is not configured.")
@@ -65,7 +79,7 @@ class SupabaseStore:
             response = requests.request(
                 method,
                 f"{self.url}{path}",
-                headers=self._headers(access_token, prefer=prefer),
+                headers=self._headers(access_token, prefer=prefer, api_key=api_key),
                 json=payload,
                 params=params,
                 timeout=20,
@@ -84,6 +98,21 @@ class SupabaseStore:
             return response.json()
         except ValueError:
             return response.text
+
+    def get_beta_funnel(self) -> dict[str, Any]:
+        """Return anonymous aggregate counts using a server-only credential."""
+        if not self.funnel_enabled:
+            raise CloudStoreError(
+                "Public-beta analytics require SUPABASE_SERVICE_ROLE_KEY and BETA_START_AT."
+            )
+        result = self._request(
+            "POST",
+            "/rest/v1/rpc/get_beta_funnel",
+            access_token=self.service_role_key,
+            api_key=self.service_role_key,
+            payload={"p_since": self.beta_start_at},
+        )
+        return result if isinstance(result, dict) else {}
 
     def send_email_code(self, email: str) -> None:
         self._request("POST", "/auth/v1/otp", payload={"email": email, "create_user": True})

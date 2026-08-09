@@ -6,7 +6,7 @@
 
 EssayPilot is a Streamlit learning workspace for IELTS Writing Task 2. It uses a fixed `gpt-5.4-mini` examiner, deterministic band calculation, evidence-based feedback, guided rewriting, second-draft comparison, and an optional cloud learning profile.
 
-EssayPilot supports a private developer dashboard for tracking anonymous usage statistics. Access is protected by the `ADMIN_PASSWORD` Streamlit secret, and analytics records do not contain essay text.
+EssayPilot supports a private developer dashboard for the public-beta learning funnel. Access is protected by `ADMIN_PASSWORD`; its service-role query returns anonymous counts only and never returns email addresses, essay text, or reports.
 
 > EssayPilot is a practice tool, not an official IELTS score report.
 
@@ -172,6 +172,11 @@ OPENAI_API_KEY=your_openai_api_key
 # Optional: enables email-code login and cross-device records
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your_publishable_anon_key
+
+# Optional: enables the private aggregate beta dashboard
+SUPABASE_SERVICE_ROLE_KEY=your_private_service_role_key
+BETA_START_AT=2026-08-09T17:00:00+08:00
+ADMIN_PASSWORD=choose_a_private_dashboard_password
 ```
 
 The app reads Streamlit Secrets first and falls back to environment variables for local development.
@@ -196,9 +201,12 @@ Then open `http://localhost:8501`.
 OPENAI_API_KEY = "your_openai_api_key"
 SUPABASE_URL = "https://your-project.supabase.co"
 SUPABASE_ANON_KEY = "your_publishable_anon_key"
+SUPABASE_SERVICE_ROLE_KEY = "your_private_service_role_key"
+BETA_START_AT = "2026-08-09T17:00:00+08:00"
+ADMIN_PASSWORD = "choose_a_private_dashboard_password"
 ```
 
-Never commit `.env` or `.streamlit/secrets.toml`.
+Never commit `.env` or `.streamlit/secrets.toml`. `SUPABASE_SERVICE_ROLE_KEY` must stay server-side. The dashboard is available at `?admin=1` and remains disabled if either its private key or beta start time is missing; normal grading is unaffected.
 
 ## Project Structure
 

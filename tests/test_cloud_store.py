@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from src.cloud_store import CloudUser, SupabaseStore
+from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
 
 
 class CloudStoreTests(unittest.TestCase):
@@ -10,6 +10,8 @@ class CloudStoreTests(unittest.TestCase):
         self.store = SupabaseStore()
         self.store.url = "https://example.supabase.co"
         self.store.anon_key = "public-anon-key"
+        self.store.service_role_key = ""
+        self.store.beta_start_at = ""
 
     @patch("src.cloud_store.requests.request")
     def test_user_token_is_used_for_row_level_security(self, request):
@@ -33,6 +35,40 @@ class CloudStoreTests(unittest.TestCase):
         self.assertIn("function public.save_grading_cycle", schema)
         self.assertIn("insert into essays", schema)
         self.assertIn("insert into grading_runs", schema)
+
+    @patch("src.cloud_store.requests.request")
+    def test_beta_funnel_uses_server_only_service_role(self, request):
+        response = Mock(status_code=200, content=b'{}')
+        response.json.return_value = {}
+        request.return_value = response
+        self.store.service_role_key = "private-service-role-key"
+        self.store.beta_start_at = "2026-08-09T12:00:00+08:00"
+
+        self.store.get_beta_funnel()
+
+        headers = request.call_args.kwargs["headers"]
+        payload = request.call_args.kwargs["json"]
+        self.assertEqual(headers["Authorization"], "Bearer private-service-role-key")
+        self.assertEqual(headers["apikey"], "private-service-role-key")
+        self.assertEqual(payload["p_since"], self.store.beta_start_at)
+
+    def test_beta_funnel_is_disabled_without_private_configuration(self):
+        with self.assertRaises(CloudStoreError):
+            self.store.get_beta_funnel()
+
+    def test_beta_funnel_rpc_is_aggregate_only_and_service_role_restricted(self):
+        schema = (Path(__file__).parents[1] / "supabase" / "schema.sql").read_text(encoding="utf-8")
+        self.assertIn("function public.get_beta_funnel", schema)
+        self.assertIn("select distinct on (g.user_id)", schema)
+        self.assertIn("p.status = 'mastered'", schema)
+        self.assertIn(
+            "revoke all on function public.get_beta_funnel(timestamptz) from public, anon, authenticated",
+            schema,
+        )
+        self.assertIn(
+            "grant execute on function public.get_beta_funnel(timestamptz) to service_role",
+            schema,
+        )
 
 
 if __name__ == "__main__":
