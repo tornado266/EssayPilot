@@ -175,7 +175,7 @@ def sync_learning_item_status(
             source_text=source_text,
             mastered=mastered,
         )
-    except CloudStoreError:
+    except (CloudStoreError, AttributeError):
         st.session_state.learning_assets_sync_error = True
 
 
@@ -2272,7 +2272,7 @@ def ensure_learning_assets(store: SupabaseStore, user: CloudUser | None) -> None
     try:
         store.upsert_learning_items(user, rows)
         st.session_state.learning_assets_ready = True
-    except CloudStoreError:
+    except (CloudStoreError, AttributeError):
         st.session_state.learning_assets_ready = False
 
 
@@ -2520,7 +2520,7 @@ def queue_correction_for_training(
                 if item.get("source_text") == correction.get("original"):
                     store.update_learning_item(user, str(item.get("id")), status="practicing")
                     break
-        except CloudStoreError:
+        except (CloudStoreError, AttributeError):
             pass
     navigate("training", str(st.session_state.get("active_run_id", "")))
 
@@ -2653,17 +2653,21 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
     try:
         runs = store.list_grading_runs(user)
         revisions = store.list_draft_revisions(user)
-        items = store.list_learning_items(user)
     except CloudStoreError as exc:
-        st.warning(f"学习资产暂时不可用。请先执行最新版 schema.sql：{exc}")
-        runs, revisions, items = [], [], []
+        st.warning(f"历史与成长记录暂时无法读取：{exc}")
+        runs, revisions = [], []
+    try:
+        items = store.list_learning_items(user)
+    except (CloudStoreError, AttributeError):
+        st.warning("学习资产模块正在升级，历史和成长趋势仍可正常查看。请稍后刷新页面。")
+        items = []
     if runs and not items:
         latest = runs[0]
         hydrate_grading_run(latest)
         ensure_learning_assets(store, user)
         try:
             items = store.list_learning_items(user)
-        except CloudStoreError:
+        except (CloudStoreError, AttributeError):
             items = []
     mastered = [item for item in items if item.get("status") == "mastered"]
     errors = [item for item in items if item.get("item_type") == "error"]
@@ -2701,8 +2705,12 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
                 st.write(str(item.get("explanation") or ""))
                 st.success(str(item.get("target_text") or ""))
                 if item.get("status") != "mastered" and st.button("标记为已掌握", key=f"master_asset_{item.get('id')}"):
-                    store.update_learning_item(user, str(item.get("id")), status="mastered", review_count=int(item.get("review_count") or 0) + 1)
-                    st.rerun()
+                    try:
+                        store.update_learning_item(user, str(item.get("id")), status="mastered", review_count=int(item.get("review_count") or 0) + 1)
+                    except (CloudStoreError, AttributeError):
+                        st.warning("云端学习资产仍在升级，请稍后重试。")
+                    else:
+                        st.rerun()
     with expression_tab:
         for item in expressions:
             with st.container(border=True):
