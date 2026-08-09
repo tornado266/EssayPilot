@@ -54,6 +54,12 @@ CRITERION_DISPLAY_NAMES = {
     "Lexical Resource": "词汇资源（LR）",
     "Grammatical Range and Accuracy": "语法多样性与准确性（GRA）",
 }
+CRITERION_COMPACT_NAMES = {
+    "Task Response": "TR 任务回应",
+    "Coherence and Cohesion": "CC 连贯衔接",
+    "Lexical Resource": "LR 词汇资源",
+    "Grammatical Range and Accuracy": "GRA 语法准确性",
+}
 SCORE_DISPLAY_NAMES = {
     "Overall Band": "总分",
     "Task Response": "任务回应（TR）",
@@ -381,6 +387,47 @@ def inject_page_style() -> None:
             font-weight: 800;
         }}
 
+        .dashboard-stat-grid {{
+            display: grid;
+            grid-template-columns: repeat(var(--stat-columns, 3), minmax(0, 1fr));
+            gap: 0.8rem;
+            margin: 0.55rem 0 1rem;
+        }}
+
+        .dashboard-stat-card {{
+            min-width: 0;
+            padding: 1rem 1.05rem;
+            border: 1px solid rgba(31, 111, 120, 0.15);
+            border-radius: 18px;
+            background: linear-gradient(145deg, rgba(255, 255, 255, 0.93), rgba(235, 249, 250, 0.8));
+            box-shadow: 0 14px 32px rgba(8, 51, 68, 0.075);
+        }}
+
+        .dashboard-stat-label {{
+            color: #5f7378;
+            font-size: 0.82rem;
+            font-weight: 680;
+            line-height: 1.35;
+        }}
+
+        .dashboard-stat-value {{
+            margin-top: 0.28rem;
+            color: #16323a;
+            font-size: clamp(1.2rem, 2.1vw, 1.75rem);
+            font-weight: 820;
+            line-height: 1.22;
+            overflow-wrap: anywhere;
+        }}
+
+        .dashboard-stat-note {{
+            min-height: 1.2em;
+            margin-top: 0.32rem;
+            color: #71878d;
+            font-size: 0.74rem;
+            line-height: 1.4;
+            overflow-wrap: anywhere;
+        }}
+
         .workspace-note {{
             padding: 1.15rem 1.25rem;
             border: 1px solid rgba(31, 111, 120, 0.14);
@@ -620,6 +667,14 @@ def inject_page_style() -> None:
         }}
 
         @media (max-width: 980px) {{
+            .dashboard-stat-grid {{
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }}
+
+            .dashboard-stat-card:last-child:nth-child(odd) {{
+                grid-column: 1 / -1;
+            }}
+
             [data-testid="stElementContainer"]:has(.bookmark-rail) {{
                 position: sticky !important;
                 top: 0.5rem;
@@ -685,6 +740,15 @@ def inject_page_style() -> None:
         }}
 
         @media (max-width: 640px) {{
+            .dashboard-stat-card {{
+                padding: 0.85rem 0.9rem;
+                border-radius: 15px;
+            }}
+
+            .dashboard-stat-value {{
+                font-size: 1.16rem;
+            }}
+
             .block-container {{
                 border-radius: 0;
             }}
@@ -785,6 +849,25 @@ def render_score_card(label: str, value: str, note: str = "") -> None:
             <div class="score-label">{note}</div>
         </div>
         """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_dashboard_stats(items: list[tuple[str, object, str]], columns: int) -> None:
+    """Render compact dashboard statistics that reflow cleanly on narrow screens."""
+    cards = []
+    for label, value, note in items:
+        cards.append(
+            '<div class="dashboard-stat-card">'
+            f'<div class="dashboard-stat-label">{html.escape(str(label))}</div>'
+            f'<div class="dashboard-stat-value">{html.escape(str(value))}</div>'
+            f'<div class="dashboard-stat-note">{html.escape(str(note))}</div>'
+            "</div>"
+        )
+    st.markdown(
+        f'<div class="dashboard-stat-grid" style="--stat-columns: {max(1, columns)}">'
+        + "".join(cards)
+        + "</div>",
         unsafe_allow_html=True,
     )
 
@@ -1847,10 +1930,14 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
     mastered_expressions = [item for item in expression_items if item.get("status") == "mastered"]
     topic_counts = Counter(str(item.get("topic_category") or "society_family") for item in expression_items)
     focus_topic = TOPIC_LABELS.get(topic_counts.most_common(1)[0][0], "尚未形成") if topic_counts else "尚未形成"
-    expression_cards = st.columns(3)
-    expression_cards[0].metric("已积累表达", len(expression_items))
-    expression_cards[1].metric("已掌握表达", len(mastered_expressions))
-    expression_cards[2].metric("当前重点题材", focus_topic)
+    render_dashboard_stats(
+        [
+            ("已积累表达", len(expression_items), "来自批改与收藏"),
+            ("已掌握表达", len(mastered_expressions), "已通过表达练习"),
+            ("当前重点题材", focus_topic, "继续巩固高频表达"),
+        ],
+        columns=3,
+    )
     if expression_items and st.button("继续表达练习", use_container_width=True):
         pending_expression = next(
             (item for item in expression_items if item.get("status") != "mastered"), expression_items[0]
@@ -1872,10 +1959,16 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
         [item for item in criteria if isinstance(item, dict) and isinstance(item.get("score"), (int, float))],
         key=lambda item: (float(item["score"]), str(item.get("criterion", ""))),
     )
-    weakest = "、".join(
-        CRITERION_DISPLAY_NAMES.get(str(item.get("criterion")), str(item.get("criterion")))
-        for item in ranked[:2]
-    ) or "等待评分"
+    weakest = (
+        CRITERION_COMPACT_NAMES.get(str(ranked[0].get("criterion")), str(ranked[0].get("criterion")))
+        if ranked
+        else "等待评分"
+    )
+    next_weakest = (
+        CRITERION_COMPACT_NAMES.get(str(ranked[1].get("criterion")), str(ranked[1].get("criterion")))
+        if len(ranked) > 1
+        else ""
+    )
     delta = latest_score - previous_score if previous_score is not None else None
     latest_revision_gain: float | None = None
     if revisions:
@@ -1886,12 +1979,20 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
             original = first_run.get("overall_band")
             if isinstance(revised, (int, float)) and isinstance(original, (int, float)):
                 latest_revision_gain = float(revised) - float(original)
-    cards = st.columns(5)
-    cards[0].metric("最新总分", f"{latest_score:.1f}")
-    cards[1].metric("当前薄弱项", weakest)
-    cards[2].metric("较上一次", f"{delta:+.1f}" if delta is not None else "首篇记录")
-    cards[3].metric("待完成训练", len(pending))
-    cards[4].metric("最近第二稿提升", f"{latest_revision_gain:+.1f}" if latest_revision_gain is not None else "尚未提交")
+    render_dashboard_stats(
+        [
+            ("最新总分", f"{latest_score:.1f}", "IELTS Task 2"),
+            ("当前薄弱项", weakest, f"下一优先：{next_weakest}" if next_weakest else "根据最新批改"),
+            ("较上一次", f"{delta:+.1f}" if delta is not None else "暂无对比", "这是首篇记录" if delta is None else "总分变化"),
+            ("待完成训练", len(pending), "单句与逻辑任务"),
+            (
+                "最近第二稿提升",
+                f"{latest_revision_gain:+.1f}" if latest_revision_gain is not None else "暂无",
+                "提交第二稿后显示" if latest_revision_gain is None else "与第一稿对比",
+            ),
+        ],
+        columns=5,
+    )
 
     essay_data = latest.get("essays") if isinstance(latest.get("essays"), dict) else {}
     latest_is_legacy = str(latest.get("prompt_version") or "") != PROMPT_VERSION
