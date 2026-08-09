@@ -119,7 +119,7 @@ def render_login_page(store: SupabaseStore) -> None:
     with demo_col:
         st.button("先看零 Token 范文", on_click=show_demo, use_container_width=True)
     if st.session_state.get("login_code_sent"):
-        code = st.text_input("6 位验证码", key="login_code", max_chars=8)
+        code = st.text_input("请输入邮箱验证码", key="login_code")
         if st.button("登录并进入学习档案", use_container_width=True):
             try:
                 user = store.verify_email_code(email.strip(), code.strip())
