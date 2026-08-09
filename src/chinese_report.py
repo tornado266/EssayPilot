@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.report_schema import CRITERION_DISPLAY_NAMES
+CRITERION_DISPLAY_NAMES = {
+    "Task Response": "任务回应（TR）",
+    "Coherence and Cohesion": "连贯与衔接（CC）",
+    "Lexical Resource": "词汇资源（LR）",
+    "Grammatical Range and Accuracy": "语法多样性与准确性（GRA）",
+}
 
 
 def examiner_result_to_markdown(data: dict[str, Any]) -> str:

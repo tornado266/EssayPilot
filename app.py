@@ -27,7 +27,7 @@ from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
 from src.draft_training import list_draft_training_history, save_draft_training_record
 from src.error_book import append_error_book
 from src.storage import markdown_to_pdf, save_markdown_record
-from src.report_schema import CRITERION_DISPLAY_NAMES, PROMPT_VERSION, SCORE_DISPLAY_NAMES, score_snapshot, submission_hash
+from src.report_schema import PROMPT_VERSION, score_snapshot, submission_hash
 from src.text_utils import count_words, word_count_warning
 
 
@@ -37,6 +37,19 @@ BASE_DIR = Path(__file__).parent
 BACKGROUND_IMAGE = BASE_DIR / "assets" / "hawaii-background.png"
 DEMO_REPORT_PATH = BASE_DIR / "data" / "demo_report.md"
 SCORE_PATTERN = re.compile(r"(?:最可能分数|Likely Score|Overall Band Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
+CRITERION_DISPLAY_NAMES = {
+    "Task Response": "任务回应（TR）",
+    "Coherence and Cohesion": "连贯与衔接（CC）",
+    "Lexical Resource": "词汇资源（LR）",
+    "Grammatical Range and Accuracy": "语法多样性与准确性（GRA）",
+}
+SCORE_DISPLAY_NAMES = {
+    "Overall Band": "总分",
+    "Task Response": "任务回应（TR）",
+    "Coherence & Cohesion": "连贯与衔接（CC）",
+    "Lexical Resource": "词汇资源（LR）",
+    "Grammar Range & Accuracy": "语法多样性与准确性（GRA）",
+}
 SAMPLE_POPOVER_TITLE = "试用作文"
 SAMPLE_TOPIC = (
     "Some people believe university students should only study their main subjects, "
