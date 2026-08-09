@@ -180,7 +180,9 @@ ADMIN_PASSWORD=choose_a_private_dashboard_password
 ```
 
 The app reads Streamlit Secrets first and falls back to environment variables for local development.
-For cloud profiles, create a Supabase project and run `supabase/schema.sql` once in its SQL editor. Row-level security restricts every essay, report, practice attempt, and draft revision to its owner.
+For cloud profiles, create a Supabase project and run `supabase/schema.sql` once in its SQL editor. Row-level security restricts every essay, report, practice attempt, draft revision, and learning item to its owner.
+
+If the original schema was already installed, run only `supabase/migrations/20260809_learning_items.sql` to enable the cloud error book and reusable learning assets. New projects can run the complete `supabase/schema.sql` directly.
 
 ### 5. Run EssayPilot
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -249,6 +250,95 @@ class SupabaseStore:
             },
         )
         return result if isinstance(result, list) else []
+
+    def get_grading_run(self, user: CloudUser, grading_run_id: str) -> dict[str, Any] | None:
+        """Load one owner-scoped grading run for a direct report link."""
+        result = self._request(
+            "GET",
+            "/rest/v1/grading_runs",
+            access_token=user.access_token,
+            params={
+                "select": "id,essay_id,overall_band,criteria,report_json,report_markdown,model,prompt_version,skill_version,created_at,essays(question,content,word_count)",
+                "id": f"eq.{grading_run_id}",
+                "limit": "1",
+            },
+        )
+        return result[0] if isinstance(result, list) and result else None
+
+    def upsert_learning_items(self, user: CloudUser, rows: list[dict[str, Any]]) -> None:
+        """Persist derived learning assets without creating duplicates."""
+        if not rows:
+            return
+        self._request(
+            "POST",
+            "/rest/v1/learning_items",
+            access_token=user.access_token,
+            params={"on_conflict": "user_id,item_key"},
+            prefer="resolution=ignore-duplicates,return=minimal",
+            payload=rows,
+        )
+
+    def list_learning_items(self, user: CloudUser, limit: int = 200) -> list[dict[str, Any]]:
+        result = self._request(
+            "GET",
+            "/rest/v1/learning_items",
+            access_token=user.access_token,
+            params={
+                "select": "id,grading_run_id,item_key,item_type,category,source_text,target_text,explanation,status,review_count,last_reviewed_at,created_at,updated_at",
+                "order": "updated_at.desc",
+                "limit": str(limit),
+            },
+        )
+        return result if isinstance(result, list) else []
+
+    def update_learning_item(
+        self,
+        user: CloudUser,
+        item_id: str,
+        *,
+        status: str,
+        review_count: int | None = None,
+    ) -> None:
+        payload: dict[str, Any] = {"status": status}
+        if review_count is not None:
+            payload["review_count"] = review_count
+            payload["last_reviewed_at"] = datetime.now(timezone.utc).isoformat()
+        self._request(
+            "PATCH",
+            "/rest/v1/learning_items",
+            access_token=user.access_token,
+            params={"id": f"eq.{item_id}"},
+            prefer="return=minimal",
+            payload=payload,
+        )
+
+    def update_learning_item_for_practice(
+        self,
+        user: CloudUser,
+        *,
+        grading_run_id: str,
+        source_text: str,
+        mastered: bool,
+    ) -> None:
+        """Synchronize a practice result with matching reusable error assets."""
+        matches = self._request(
+            "GET",
+            "/rest/v1/learning_items",
+            access_token=user.access_token,
+            params={
+                "select": "id,review_count",
+                "grading_run_id": f"eq.{grading_run_id}",
+                "source_text": f"eq.{source_text}",
+                "limit": "10",
+            },
+        )
+        for item in matches if isinstance(matches, list) else []:
+            self.update_learning_item(
+                user,
+                str(item.get("id", "")),
+                status="mastered" if mastered else "practicing",
+                review_count=int(item.get("review_count") or 0) + 1,
+            )
 
     def save_practice_attempt(
         self,
