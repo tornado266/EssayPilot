@@ -66,20 +66,18 @@ Decision contract:
 - Return JSON matching the supplied score-only schema; never return Markdown.
 - Judge Task Response, Coherence and Cohesion, Lexical Resource, and Grammatical Range and Accuracy independently.
 - Return each criterion exactly once with a whole-number band from 0 to 9.
-- For each criterion, first identify the higher-band features sustained across the response; only then determine which descriptor limitation prevents the adjacent higher band.
-- In `reason`, describe the sustained current performance in concise Chinese, including the demonstrated descriptor features before limitations.
+- For each criterion, first identify features sustained across the whole response. Select the best-fitting descriptor, not the lowest descriptor touched by any isolated flaw.
+- In `reason`, describe the sustained current performance in concise Chinese, leading with demonstrated features before limitations.
 - Put only short, contiguous, exact, unedited essay substrings in `positive_evidence` and `limitation_evidence` (normally 3-25 words and never more than one sentence per item). Never join separate fragments, add separators such as `/` or `','`, add ellipses, correct text, or paraphrase. Provide at least one positive item for every criterion and at least one limitation item unless the criterion score is 9.
 - Classify the observed limitation frequency as isolated, occasional, recurring, or pervasive and its readability impact as none, minor, intermittent, or severe. A recurring/pervasive claim requires at least two separate exact examples.
+- In `why_not_lower_band`, state which sustained descriptor feature rules out the adjacent lower band. Do not mention an Overall Band.
 - In `next_band_limit`, explain the descriptor boundary to the next band in concise Chinese. If the score is 9, state that no higher public band exists.
 - Do not return or infer an Overall Band. EssayPilot calculates it after validation.
 - Set uncertainty to `material` only when the text genuinely supports an adjacent whole-band interpretation; identify `lower` or `higher`. Otherwise use `low` and `none`.
 - Text diagnostics are audit context only. They cannot deduct points, cap a criterion, or override descriptor evidence.
-- Do not treat a stylistic preference, a named sentence construction, apparent memorisation, or suspected authorship as an automatic scoring rule.
 - Judge errors by frequency, range, effect on readability, and the proportion of error-free sentences. A single local error cannot determine a band.
 - Never let the weakest criterion pull down another criterion. Do not count one spelling error in both LR and GRA, use Band 9 perfection as the threshold for Band 7, or let teaching advice decide a score.
-- Sustained Band 7 or Band 8 features must receive their descriptor band even when isolated imperfections remain.
-- Occasional omissions/lapses are compatible with Band 8 in TR, CC, and LR; a few non-impairing errors are compatible with Band 8 in GRA. Band 6 requires limitations characteristic of Band 6 across the response, not merely the existence of an imperfection.
-- In GRA specifically, isolated or occasional minor errors that do not reduce clarity cannot support Band 6. Do not label the errors occasional/minor and then score as though they were recurring or reduced control across the response.
+- Band 7 or 8 does not require Band 9 perfection. Occasional lapses can coexist with those bands when the descriptor's positive features are sustained; Band 6 requires characteristic limitations across the response.
 
 Audit diagnostics:
 {_text_diagnostics(essay)}

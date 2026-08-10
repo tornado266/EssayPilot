@@ -3,6 +3,7 @@
 import json
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -27,6 +28,25 @@ from src.report_schema import (
 DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com"
 PRODUCTION_MODEL = "gpt-5.4-mini"
 PRODUCTION_MODEL_SNAPSHOT = "gpt-5.4-mini-2026-03-17"
+PRODUCTION_SCORING_PROVIDER = "OpenAI"
+PRODUCTION_SCORING_MODEL = PRODUCTION_MODEL_SNAPSHOT
+PRODUCTION_TEACHING_PROVIDER = "OpenAI"
+PRODUCTION_TEACHING_MODEL = PRODUCTION_MODEL_SNAPSHOT
+
+
+@dataclass(frozen=True)
+class GradingModelConfig:
+    """One explicit, auditable model role in the grading pipeline."""
+
+    provider: str
+    model: str
+    reasoning_effort: str = "none"
+
+    def __post_init__(self) -> None:
+        if self.provider not in {"OpenAI", "DeepSeek"}:
+            raise ValueError("provider must be 'OpenAI' or 'DeepSeek'.")
+        if self.reasoning_effort not in {"none", "low"}:
+            raise ValueError("reasoning_effort must be 'none' or 'low'.")
 
 
 def get_runtime_setting(name: str, default: str | None = None) -> str | None:
@@ -138,6 +158,206 @@ def completion_options(
     return {"temperature": 0.0, "max_tokens": max_output_tokens}
 
 
+def _response_usage(response: Any) -> dict[str, int | None]:
+    usage = getattr(response, "usage", None)
+    return {
+        "input_tokens": getattr(usage, "prompt_tokens", None),
+        "output_tokens": getattr(usage, "completion_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+
+
+def _sum_usage(events: list[dict[str, Any]]) -> dict[str, int | None]:
+    result: dict[str, int | None] = {}
+    for name in ("input_tokens", "output_tokens", "total_tokens"):
+        values = [(event.get("usage") or {}).get(name) for event in events]
+        result[name] = (
+            sum(int(value) for value in values if value is not None)
+            if any(value is not None for value in values)
+            else None
+        )
+    return result
+
+
+def _provider_request(
+    *,
+    config: GradingModelConfig,
+    messages: list[dict[str, str]],
+    response_schema: dict[str, Any],
+    max_completion_tokens: int,
+) -> dict[str, Any]:
+    if config.provider == "OpenAI":
+        return {
+            "model": config.model,
+            "messages": messages,
+            "response_format": {"type": "json_schema", "json_schema": response_schema},
+            "max_completion_tokens": max_completion_tokens,
+            "reasoning_effort": config.reasoning_effort,
+        }
+
+    deepseek_messages = list(messages)
+    schema_instruction = (
+        "Return one valid json object only. Follow this exact JSON shape; do not add "
+        "keys or Markdown:\n" + json.dumps(response_schema["schema"], ensure_ascii=False)
+    )
+    deepseek_messages[-1] = {
+        "role": deepseek_messages[-1]["role"],
+        "content": deepseek_messages[-1]["content"] + "\n\n" + schema_instruction,
+    }
+    request: dict[str, Any] = {
+        "model": config.model,
+        "messages": deepseek_messages,
+        "response_format": {"type": "json_object"},
+        "max_tokens": max_completion_tokens,
+    }
+    if config.reasoning_effort == "none":
+        request["extra_body"] = {"thinking": {"type": "disabled"}}
+    else:
+        request["reasoning_effort"] = "low"
+    return request
+
+
+def _validated_completion(
+    *,
+    client: OpenAI,
+    config: GradingModelConfig,
+    stage: str,
+    messages: list[dict[str, str]],
+    response_schema: dict[str, Any],
+    max_completion_tokens: int,
+    validator: Callable[[dict[str, Any], int], dict[str, Any]],
+    audit_hook: Callable[[dict[str, Any]], None] | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Return one validated decision; a semantic repair is the only retry."""
+    events: list[dict[str, Any]] = []
+    attempt_messages = list(messages)
+    last_error: Exception | None = None
+    for attempt in (1, 2):
+        request = _provider_request(
+            config=config,
+            messages=attempt_messages,
+            response_schema=response_schema,
+            max_completion_tokens=max_completion_tokens,
+        )
+        started = time.perf_counter()
+        response = client.chat.completions.create(**request)
+        raw = response.choices[0].message.content or ""
+        event = {
+            "stage": stage,
+            "attempt": attempt,
+            "provider": config.provider,
+            "model": config.model,
+            "response_model": getattr(response, "model", None),
+            "system_fingerprint": getattr(response, "system_fingerprint", None),
+            "reasoning_effort": config.reasoning_effort,
+            "messages": request["messages"],
+            "raw_response": raw,
+            "latency_seconds": round(time.perf_counter() - started, 3),
+            "usage": _response_usage(response),
+        }
+        events.append(event)
+        try:
+            result = validator(json.loads(raw), attempt)
+        except (json.JSONDecodeError, ValueError, RuntimeError) as exc:
+            last_error = exc
+            event["validation_error"] = f"{type(exc).__name__}: {exc}"
+            if audit_hook is not None:
+                audit_hook(event)
+            if attempt == 2:
+                raise
+            attempt_messages = [
+                *messages,
+                {"role": "assistant", "content": raw or "{}"},
+                {
+                    "role": "user",
+                    "content": (
+                        "Repair the previous JSON response. Preserve any valid decisions, "
+                        "but correct every validation failure listed below. Never reuse a "
+                        "quotation explicitly identified as invalid; copy replacement text "
+                        "directly from one contiguous span of the submitted essay. "
+                        f"Validation failures: {type(exc).__name__}: {exc}. Return JSON only."
+                    ),
+                },
+            ]
+            continue
+        if audit_hook is not None:
+            audit_hook(event)
+        return result, events
+    raise RuntimeError("Structured response validation failed.") from last_error
+
+
+def _grader_error(config: GradingModelConfig, exc: Exception) -> AIGraderError:
+    _, api_key, base_url = get_provider_config(config.provider)
+    return AIGraderError(
+        provider=config.provider,
+        model=config.model,
+        base_url=base_url,
+        api_key_loaded=bool(api_key),
+        original_error=exc,
+        status_code=exc.status_code if isinstance(exc, APIStatusError) else None,
+    )
+
+
+def grade_scoring_decision(
+    *,
+    task_type: str,
+    topic: str,
+    essay: str,
+    audit_hook: Callable[[dict[str, Any]], None] | None = None,
+    provider: str = PRODUCTION_SCORING_PROVIDER,
+    model: str = PRODUCTION_SCORING_MODEL,
+    reasoning_effort: str = "none",
+) -> dict[str, object]:
+    """Run only the blind score-locking stage for calibration or production."""
+    if task_type != "Task 2":
+        raise ValueError("EssayPilot V2 currently supports IELTS Writing Task 2 only.")
+    if not load_skill_scoring_rules().strip():
+        raise RuntimeError(
+            "The installed IELTS scoring Skill could not be loaded. Grading was stopped."
+        )
+    config = GradingModelConfig(provider, model, reasoning_effort)
+    client = build_client(config.provider)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are EssayPilot's IELTS Writing Task 2 scoring component. "
+                "Use only the supplied descriptor material and essay evidence."
+            ),
+        },
+        {"role": "user", "content": build_scoring_prompt(task_type, topic, essay)},
+    ]
+    try:
+        scoring, events = _validated_completion(
+            client=client,
+            config=config,
+            stage="scoring",
+            messages=messages,
+            response_schema=SCORING_DECISION_JSON_SCHEMA,
+            max_completion_tokens=5000,
+            validator=lambda payload, _attempt: validate_scoring_decision(payload, essay),
+            audit_hook=audit_hook,
+        )
+    except (APIConnectionError, APIStatusError, OpenAIError, json.JSONDecodeError, ValueError, RuntimeError) as exc:
+        raise _grader_error(config, exc) from exc
+
+    last_event = events[-1]
+    return {
+        "provider": config.provider,
+        "model": config.model,
+        "response_model": last_event.get("response_model"),
+        "system_fingerprint": last_event.get("system_fingerprint"),
+        "reasoning_effort": config.reasoning_effort,
+        "schema_version": SCHEMA_VERSION,
+        "prompt_version": PROMPT_VERSION,
+        "skill_version": SKILL_VERSION,
+        "graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "structured": scoring,
+        "scoring": scoring,
+        "usage": _sum_usage(events),
+    }
+
+
 def grade_essay_package(
     *,
     task_type: str,
@@ -145,162 +365,83 @@ def grade_essay_package(
     essay: str,
     audit_hook: Callable[[dict[str, Any]], None] | None = None,
     reasoning_effort: str = "none",
+    scoring_provider: str = PRODUCTION_SCORING_PROVIDER,
+    scoring_model: str = PRODUCTION_SCORING_MODEL,
 ) -> dict[str, object]:
-    """Return a validated, versioned Task 2 examiner package from the fixed model."""
-    if task_type != "Task 2":
-        raise ValueError("EssayPilot V2 currently supports IELTS Writing Task 2 only.")
-    if reasoning_effort not in {"none", "low"}:
-        raise ValueError("reasoning_effort must be 'none' or 'low'.")
-    if not load_skill_scoring_rules().strip():
-        raise RuntimeError(
-            "The installed IELTS scoring Skill could not be loaded. Grading was stopped."
-        )
+    """Return the locked score plus teaching feedback without score mutation."""
+    scoring_package = grade_scoring_decision(
+        task_type=task_type,
+        topic=topic,
+        essay=essay,
+        audit_hook=audit_hook,
+        provider=scoring_provider,
+        model=scoring_model,
+        reasoning_effort=reasoning_effort,
+    )
+    scoring = dict(scoring_package["scoring"])
+    teaching_config = GradingModelConfig(
+        PRODUCTION_TEACHING_PROVIDER, PRODUCTION_TEACHING_MODEL, "none"
+    )
+    teaching_client = build_client(teaching_config.provider)
+    teaching_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are EssayPilot's IELTS writing coach. The supplied scoring "
+                "decision is validated and locked. Generate teaching material only."
+            ),
+        },
+        {
+            "role": "user",
+            "content": build_teaching_prompt(task_type, topic, essay, scoring),
+        },
+    ]
+    sanitized_teaching_fields: list[str] = []
 
-    _, api_key, base_url = get_provider_config("OpenAI")
-    client = build_client("OpenAI")
-    scoring_prompt = build_scoring_prompt(task_type, topic, essay)
-    observed_responses: list[Any] = []
-
-    def response_usage(response: Any) -> dict[str, int | None]:
-        usage = getattr(response, "usage", None)
-        return {
-            "input_tokens": getattr(usage, "prompt_tokens", None),
-            "output_tokens": getattr(usage, "completion_tokens", None),
-            "total_tokens": getattr(usage, "total_tokens", None),
-        }
-
-    def validated_completion(
-        *,
-        stage: str,
-        messages: list[dict[str, str]],
-        response_schema: dict[str, Any],
-        max_completion_tokens: int,
-        validator: Callable[[dict[str, Any], int], dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Make one model decision, retrying once only for invalid structured output."""
-        last_error: Exception | None = None
-        for attempt in (1, 2):
-            started = time.perf_counter()
-            response = client.chat.completions.create(
-                model=PRODUCTION_MODEL_SNAPSHOT,
-                messages=messages,
-                response_format={"type": "json_schema", "json_schema": response_schema},
-                max_completion_tokens=max_completion_tokens,
-                reasoning_effort=reasoning_effort,
-            )
-            observed_responses.append(response)
-            raw = response.choices[0].message.content or ""
-            event = {
-                "stage": stage,
-                "attempt": attempt,
-                "model": PRODUCTION_MODEL_SNAPSHOT,
-                "reasoning_effort": reasoning_effort,
-                "messages": messages,
-                "raw_response": raw,
-                "latency_seconds": round(time.perf_counter() - started, 3),
-                "usage": response_usage(response),
-            }
-            try:
-                result = validator(json.loads(raw), attempt)
-            except (json.JSONDecodeError, ValueError, RuntimeError) as exc:
-                last_error = exc
-                event["validation_error"] = f"{type(exc).__name__}: {exc}"
-                if audit_hook is not None:
-                    audit_hook(event)
-                if attempt == 2:
-                    raise
-                continue
-            if audit_hook is not None:
-                audit_hook(event)
-            return result
-        raise RuntimeError("Structured response validation failed.") from last_error
+    def validate_teaching(teaching: dict[str, Any], attempt: int) -> dict[str, Any]:
+        if "criteria" in teaching or "overall_band" in teaching:
+            raise ValueError("The teaching stage attempted to modify locked scores.")
+        if attempt == 2:
+            teaching, removed = drop_unverified_optional_teaching_items(teaching, essay)
+            sanitized_teaching_fields.extend(removed)
+        merged = dict(teaching)
+        merged["criteria"] = scoring["criteria"]
+        return validate_examiner_result(merged, essay)
 
     try:
-        scoring_messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are EssayPilot's IELTS Writing Task 2 scoring component. "
-                    "Use only the supplied official-descriptor reference and return "
-                    "four independent, evidence-based criterion decisions."
-                ),
-            },
-            {"role": "user", "content": scoring_prompt},
-        ]
-        scoring = validated_completion(
-            stage="scoring",
-            messages=scoring_messages,
-            response_schema=SCORING_DECISION_JSON_SCHEMA,
-            max_completion_tokens=5000,
-            validator=lambda payload, _attempt: validate_scoring_decision(payload, essay),
-        )
-
-        teaching_prompt = build_teaching_prompt(task_type, topic, essay, scoring)
-        teaching_messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are EssayPilot's IELTS writing coach. The supplied scoring "
-                    "decision is validated and locked. Generate teaching material only."
-                ),
-            },
-            {"role": "user", "content": teaching_prompt},
-        ]
-
-        sanitized_teaching_fields: list[str] = []
-
-        def validate_teaching(teaching: dict[str, Any], attempt: int) -> dict[str, Any]:
-            if "criteria" in teaching or "overall_band" in teaching:
-                raise ValueError("The teaching stage attempted to modify locked scores.")
-            if attempt == 2:
-                teaching, removed = drop_unverified_optional_teaching_items(teaching, essay)
-                sanitized_teaching_fields.extend(removed)
-            merged = dict(teaching)
-            merged["criteria"] = scoring["criteria"]
-            return validate_examiner_result(merged, essay)
-
-        structured = validated_completion(
+        structured, teaching_events = _validated_completion(
+            client=teaching_client,
+            config=teaching_config,
             stage="teaching",
             messages=teaching_messages,
             response_schema=TEACHING_FEEDBACK_JSON_SCHEMA,
             max_completion_tokens=14000,
             validator=validate_teaching,
+            audit_hook=audit_hook,
         )
-    except APIStatusError as exc:
-        raise AIGraderError(
-            provider="OpenAI",
-            model=PRODUCTION_MODEL,
-            base_url=base_url,
-            api_key_loaded=bool(api_key),
-            original_error=exc,
-            status_code=exc.status_code,
-        ) from exc
-    except (APIConnectionError, OpenAIError) as exc:
-        raise AIGraderError(
-            provider="OpenAI",
-            model=PRODUCTION_MODEL,
-            base_url=base_url,
-            api_key_loaded=bool(api_key),
-            original_error=exc,
-        ) from exc
-    except (json.JSONDecodeError, ValueError, RuntimeError) as exc:
-        raise AIGraderError(
-            provider="OpenAI",
-            model=PRODUCTION_MODEL,
-            base_url=base_url,
-            api_key_loaded=bool(api_key),
-            original_error=exc,
-        ) from exc
+    except (APIConnectionError, APIStatusError, OpenAIError, json.JSONDecodeError, ValueError, RuntimeError) as exc:
+        raise _grader_error(teaching_config, exc) from exc
 
-    def combined_usage(name: str) -> int | None:
-        values = [getattr(getattr(response, "usage", None), name, None) for response in observed_responses]
-        return sum(int(value) for value in values if value is not None) if any(value is not None for value in values) else None
-
+    scoring_usage = dict(scoring_package.get("usage") or {})
+    teaching_usage = _sum_usage(teaching_events)
+    usage = {
+        name: (
+            (scoring_usage.get(name) or 0) + (teaching_usage.get(name) or 0)
+            if scoring_usage.get(name) is not None or teaching_usage.get(name) is not None
+            else None
+        )
+        for name in ("input_tokens", "output_tokens", "total_tokens")
+    }
     band_range = estimated_band_range(scoring)
     return {
-        "model": PRODUCTION_MODEL_SNAPSHOT,
+        "provider": scoring_package["provider"],
+        "model": scoring_package["model"],
+        "response_model": scoring_package.get("response_model"),
+        "system_fingerprint": scoring_package.get("system_fingerprint"),
         "model_family": PRODUCTION_MODEL,
         "reasoning_effort": reasoning_effort,
+        "teaching_provider": teaching_config.provider,
+        "teaching_model": teaching_config.model,
         "sanitized_teaching_fields": sorted(set(sanitized_teaching_fields)),
         "schema_version": SCHEMA_VERSION,
         "prompt_version": PROMPT_VERSION,
@@ -310,11 +451,8 @@ def grade_essay_package(
         "scoring": scoring,
         "estimated_band_range": list(band_range),
         "report": examiner_result_to_markdown(structured, estimated_range=band_range),
-        "usage": {
-            "input_tokens": combined_usage("prompt_tokens"),
-            "output_tokens": combined_usage("completion_tokens"),
-            "total_tokens": combined_usage("total_tokens"),
-        },
+        "usage": usage,
+        "stage_usage": {"scoring": scoring_usage, "teaching": teaching_usage},
     }
 
 

@@ -10,9 +10,9 @@ from copy import deepcopy
 from typing import Any
 
 
-SCHEMA_VERSION = "2.2"
-PROMPT_VERSION = "task2-two-stage-zh-official-descriptors-v4-2026-08-10"
-SKILL_VERSION = "ielts-writing-task2-official-v3"
+SCHEMA_VERSION = "2.3"
+PROMPT_VERSION = "task2-two-stage-zh-official-descriptors-v9-2026-08-10"
+SKILL_VERSION = "ielts-writing-task2-official-v4"
 CRITERIA = (
     "Task Response",
     "Coherence and Cohesion",
@@ -226,7 +226,8 @@ SCORING_DECISION_JSON_SCHEMA: dict[str, Any] = {
                     "required": [
                         "criterion", "score", "reason", "positive_evidence",
                         "limitation_evidence", "limitation_frequency",
-                        "readability_impact", "next_band_limit",
+                        "readability_impact", "why_not_lower_band",
+                        "next_band_limit",
                     ],
                     "properties": {
                         "criterion": {"type": "string", "enum": list(CRITERIA)},
@@ -248,6 +249,7 @@ SCORING_DECISION_JSON_SCHEMA: dict[str, Any] = {
                             "type": "string",
                             "enum": ["none", "minor", "intermittent", "severe"],
                         },
+                        "why_not_lower_band": {"type": "string"},
                         "next_band_limit": {"type": "string"},
                     },
                 },
@@ -294,43 +296,28 @@ def calculate_overall(criteria: list[dict[str, Any]]) -> float:
     return math.floor(average * 2 + 0.5) / 2
 
 
-def _quote_is_present(quote: str, essay: str) -> bool:
-    def normalize(value: str) -> str:
-        value = unicodedata.normalize("NFKC", value).casefold()
-        value = value.replace("’", "'").replace("‘", "'")
-        return " ".join(value.strip().strip('“”\"').split())
+def _normalize_evidence_text(value: str) -> str:
+    """Normalize typography and whitespace without reordering or dropping words."""
+    translation = str.maketrans(
+        {
+            "’": "'", "‘": "'", "“": '"', "”": '"',
+            "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-",
+        }
+    )
+    normalized = unicodedata.normalize("NFKC", value).translate(translation).casefold()
+    return " ".join(normalized.strip().strip('“”\"\'').split())
 
-    clean_quote = normalize(quote)
-    clean_essay = normalize(essay)
-    if len(clean_quote) >= 3 and clean_quote in clean_essay:
-        return True
-    fragments = [normalize(part) for part in re.split(r"\.{3,}|…+", quote)]
-    if any(len(fragment.split()) >= 4 and fragment in clean_essay for fragment in fragments):
-        return True
-    quoted_terms = [normalize(part) for part in re.findall(r'["“]([^"”]+)["”]', quote)]
-    if any(len(term) >= 3 and term in clean_essay for term in quoted_terms):
-        return True
-    list_terms = [normalize(part).strip(" .:()[]") for part in re.split(r"[,;/]", clean_quote)]
-    if any(
-        1 <= len(term.split()) <= 6
-        and len(term) >= 4
-        and re.search(rf"(?<!\w){re.escape(term)}(?!\w)", clean_essay)
-        for term in list_terms
-    ):
-        return True
-    words = clean_quote.split()
-    return any(" ".join(words[index : index + 6]) in clean_essay for index in range(max(0, len(words) - 5)))
+
+def _quote_is_present(quote: str, essay: str) -> bool:
+    """Require every teaching quotation to be one contiguous submitted substring."""
+    clean_quote = _normalize_evidence_text(quote)
+    return len(clean_quote) >= 3 and clean_quote in _normalize_evidence_text(essay)
 
 
 def _exact_quote_is_present(quote: str, essay: str) -> bool:
     """Require the complete normalized quotation, not merely one matching fragment."""
-    def normalize(value: str) -> str:
-        value = unicodedata.normalize("NFKC", value).casefold()
-        value = value.replace("’", "'").replace("‘", "'")
-        return " ".join(value.strip().strip('“”\"').split())
-
-    clean_quote = normalize(quote)
-    return len(clean_quote) >= 3 and clean_quote in normalize(essay)
+    clean_quote = _normalize_evidence_text(quote)
+    return len(clean_quote) >= 3 and clean_quote in _normalize_evidence_text(essay)
 
 
 def validate_scoring_decision(data: dict[str, Any], essay: str) -> dict[str, Any]:
@@ -346,6 +333,8 @@ def validate_scoring_decision(data: dict[str, Any], essay: str) -> dict[str, Any
     if sorted(labels) != sorted(CRITERIA):
         raise ExaminerResultError("The examiner must return each IELTS criterion exactly once.")
     external_criteria: list[dict[str, Any]] = []
+    invalid_evidence_items: list[tuple[str, str, str]] = []
+    decision_errors: list[str] = []
     for item in criteria:
         score = item.get("score")
         if not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 9:
@@ -363,7 +352,7 @@ def validate_scoring_decision(data: dict[str, Any], essay: str) -> dict[str, Any
         if impact not in {"none", "minor", "intermittent", "severe"}:
             raise ExaminerResultError(f"{item['criterion']} has an invalid readability impact.")
         if frequency in {"recurring", "pervasive"} and len(limitations) < 2:
-            raise ExaminerResultError(
+            decision_errors.append(
                 f"{item['criterion']} claims recurring limitations without multiple exact examples."
             )
         if (
@@ -372,13 +361,30 @@ def validate_scoring_decision(data: dict[str, Any], essay: str) -> dict[str, Any
             and frequency in {"isolated", "occasional"}
             and impact in {"none", "minor"}
         ):
-            raise ExaminerResultError(
+            decision_errors.append(
                 "A GRA score of 6 or below is inconsistent with only isolated/occasional "
                 "minor limitations; reconsider the descriptor boundary without auto-adjusting."
             )
         evidence = [*positive, *limitations]
-        if not all(_exact_quote_is_present(str(quote), essay) for quote in evidence):
-            raise ExaminerResultError(f"Every {item['criterion']} evidence item must be present in the essay.")
+        invalid_evidence = [
+            (field, str(quote))
+            for field, values in (
+                ("positive_evidence", positive),
+                ("limitation_evidence", limitations),
+            )
+            for quote in values
+            if not _exact_quote_is_present(str(quote), essay)
+        ]
+        if invalid_evidence:
+            invalid_evidence_items.extend(
+                (str(item["criterion"]), field, quote)
+                for field, quote in invalid_evidence
+            )
+        if not str(item.get("why_not_lower_band", "")).strip():
+            raise ExaminerResultError(
+                f"{item['criterion']} does not explain why the demonstrated performance "
+                "exceeds the adjacent lower band."
+            )
         if not str(item.get("reason", "")).strip() or not str(item.get("next_band_limit", "")).strip():
             raise ExaminerResultError(f"{item['criterion']} lacks a complete descriptor explanation.")
         combined_evidence = list(dict.fromkeys(str(quote) for quote in evidence))
@@ -391,6 +397,18 @@ def validate_scoring_decision(data: dict[str, Any], essay: str) -> dict[str, Any
                 "next_band_limit": item["next_band_limit"],
             }
         )
+    if invalid_evidence_items:
+        details = "; ".join(
+            f"{criterion}.{field}={quote!r}"
+            for criterion, field, quote in invalid_evidence_items
+        )
+        decision_errors.append(
+            "Every evidence item must be present in the essay. Replace all invalid exact "
+            "quotes by copying separate contiguous substrings verbatim from the submitted "
+            f"essay: {details}"
+        )
+    if decision_errors:
+        raise ExaminerResultError(" | ".join(decision_errors))
     uncertainty = data.get("uncertainty")
     if not isinstance(uncertainty, dict):
         raise ExaminerResultError("The scoring response is missing uncertainty metadata.")

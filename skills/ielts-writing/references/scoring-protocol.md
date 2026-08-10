@@ -12,7 +12,7 @@ For each criterion separately:
 2. Identify the higher-band features sustained across the response before cataloguing limitations.
 3. Identify the best-fitting current band from the performance demonstrated throughout the response.
 4. Test the adjacent lower and higher bands rather than starting from an Overall impression.
-5. Record current performance, separate exact positive and limitation evidence, and why the next band is not yet fully demonstrated.
+5. Record current performance, separate exact positive and limitation evidence, why the adjacent lower band is ruled out, and why the next band is not yet fully demonstrated.
 6. Return one whole-number criterion band from 0 to 9.
 
 Weakness in one criterion must not cap another. Do not choose an Overall level first, force criteria into a narrow vector, or lower a score merely because evidence is mixed. Mixed evidence is resolved by the descriptor that best represents the sustained performance and limitations.
