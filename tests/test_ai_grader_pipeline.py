@@ -4,7 +4,12 @@ from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from src.ai_grader import AIGraderError, build_client, grade_essay_package
+from src.ai_grader import (
+    AIGraderError,
+    build_client,
+    grade_essay_package,
+    grade_scoring_decision,
+)
 from src.report_schema import SCORING_DECISION_JSON_SCHEMA, TEACHING_FEEDBACK_JSON_SCHEMA
 from test_report_schema import ESSAY, valid_result
 
@@ -20,6 +25,8 @@ class FakeCompletions:
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=payload))],
             usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+            model="response-model",
+            system_fingerprint="fp-test",
         )
 
 
@@ -44,6 +51,7 @@ class TwoStageGraderTests(unittest.TestCase):
                     "limitation_evidence": ["Governments should improve bus services."],
                     "limitation_frequency": "occasional",
                     "readability_impact": "minor",
+                    "why_not_lower_band": "Sustained control exceeds the lower descriptor.",
                     "next_band_limit": item["next_band_limit"],
                 }
             )
@@ -136,8 +144,47 @@ class TwoStageGraderTests(unittest.TestCase):
 
         self.assertEqual([event["attempt"] for event in events], [1, 2, 1])
         self.assertIn("validation_error", events[0])
+        self.assertIn("invented quote", completions.calls[1]["messages"][-2]["content"])
+        self.assertIn("must be present", completions.calls[1]["messages"][-1]["content"])
         self.assertEqual({call["model"] for call in completions.calls}, {"gpt-5.4-mini-2026-03-17"})
         self.assertEqual(package["usage"]["total_tokens"], 90)
+
+    def test_score_only_entrypoint_does_not_generate_teaching(self):
+        completions = FakeCompletions([json.dumps(self.scoring_payload())])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        with (
+            patch("src.ai_grader.build_client", return_value=client),
+            patch("src.ai_grader.get_provider_config", return_value=("OPENAI_API_KEY", "key", "https://api.openai.com/v1")),
+        ):
+            package = grade_scoring_decision(
+                task_type="Task 2", topic="Question", essay=ESSAY
+            )
+
+        self.assertEqual(len(completions.calls), 1)
+        self.assertEqual(package["structured"]["overall_band"], 6.5)
+        self.assertNotIn("report", package)
+
+    def test_deepseek_uses_json_object_and_disables_thinking(self):
+        completions = FakeCompletions([json.dumps(self.scoring_payload())])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        with (
+            patch("src.ai_grader.build_client", return_value=client),
+            patch("src.ai_grader.get_provider_config", return_value=("DEEPSEEK_API_KEY", "key", "https://api.deepseek.com")),
+        ):
+            package = grade_scoring_decision(
+                task_type="Task 2",
+                topic="Question",
+                essay=ESSAY,
+                provider="DeepSeek",
+                model="deepseek-v4-flash",
+            )
+
+        call = completions.calls[0]
+        self.assertEqual(call["response_format"], {"type": "json_object"})
+        self.assertEqual(call["extra_body"], {"thinking": {"type": "disabled"}})
+        self.assertIn("exact JSON shape", call["messages"][-1]["content"])
+        self.assertNotIn("json_schema", str(call["response_format"]))
+        self.assertEqual(package["provider"], "DeepSeek")
 
     def test_second_teaching_attempt_drops_only_unsupported_optional_items(self):
         teaching = self.teaching_payload()

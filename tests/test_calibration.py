@@ -4,6 +4,8 @@ from scripts.run_calibration import (
     BlindModelInput,
     CalibrationCase,
     EvaluationLabel,
+    acceptance_status,
+    apply_split_manifest,
     gold_metrics,
     normalize_cases,
     repeatability_metrics,
@@ -63,6 +65,64 @@ class CalibrationTests(unittest.TestCase):
         cases = normalize_cases(payload)
         validate_dataset(cases, "gold")
         self.assertEqual(cases[0].evaluation.expected_overall, 7.5)
+
+    def test_private_manifest_separates_holdout_and_interval_label(self):
+        payload = {
+            "source_type": "official_internal",
+            "cases": [
+                {
+                    "model_input": {"task_prompt": "Question", "candidate_response": "Essay"},
+                    "evaluation": {
+                        "case_id": "case-1",
+                        "expected_overall": 8.5,
+                        "source_heading": "Official source",
+                    },
+                }
+            ],
+        }
+        cases = apply_split_manifest(
+            normalize_cases(payload),
+            {"sensitivity": ["case-1"], "label_ranges": {"case-1": [8.0, 8.5]}},
+        )
+        self.assertEqual(cases[0].split, "sensitivity")
+        self.assertEqual(cases[0].evaluation.expected_overall_range, (8.0, 8.5))
+
+    def test_interval_label_has_zero_error_inside_range(self):
+        summary = summarize_gold([
+            {
+                "case_id": "case-1",
+                "expected_overall": 8.5,
+                "expected_overall_range": [8.0, 8.5],
+                "runs": [{
+                    "status": "ok",
+                    "snapshot": {
+                        "Overall Band": 8.0,
+                        "Task Response": 8.0,
+                        "Coherence & Cohesion": 8.0,
+                        "Lexical Resource": 8.0,
+                        "Grammar Range & Accuracy": 8.0,
+                    },
+                }],
+            }
+        ])
+        self.assertEqual(summary["cases"][0]["absolute_error"], 0.0)
+
+    def test_development_acceptance_requires_registered_case_count(self):
+        cases = [
+            {
+                "case_id": f"case-{index}",
+                "expected_overall": 7.0,
+                "mean_scores": {"Overall Band": 7.0},
+                "absolute_error": 0.0,
+                "max_spread": {"Overall Band": 0.5},
+            }
+            for index in range(7)
+        ]
+        status = acceptance_status(
+            {"cases": cases, "overall": {"mae": 0.0, "max_absolute_error": 0.0}},
+            "development",
+        )
+        self.assertTrue(status["passed"])
 
     def test_labels_never_cross_the_grader_boundary(self):
         received = []

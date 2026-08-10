@@ -82,6 +82,18 @@ class ReportSchemaTests(unittest.TestCase):
         data["criteria"][2]["evidence"] = ["transport", "traffic", "services"]
         self.assertEqual(validate_examiner_result(data, ESSAY)["overall_band"], 6.5)
 
+    def test_exact_evidence_normalizes_smart_typography_and_newlines(self):
+        essay = ESSAY + "\r\n\r\nDon’t use long‑term shortcuts."
+        data = valid_result()
+        data["criteria"][0]["evidence"] = ["Don't use long-term shortcuts."]
+        self.assertEqual(validate_examiner_result(data, essay)["overall_band"], 6.5)
+
+    def test_teaching_evidence_cannot_join_distant_fragments(self):
+        data = valid_result()
+        data["priorities"][0]["evidence"] = "Public transport / traffic"
+        with self.assertRaises(ExaminerResultError):
+            validate_examiner_result(data, ESSAY)
+
     def test_requires_four_scores(self):
         with self.assertRaises(ExaminerResultError):
             calculate_overall(valid_result()["criteria"][:3])
@@ -116,6 +128,7 @@ class ReportSchemaTests(unittest.TestCase):
                     "limitation_evidence": ["Governments should improve bus services."],
                     "limitation_frequency": "occasional",
                     "readability_impact": "minor",
+                    "why_not_lower_band": "Sustained control exceeds the lower band.",
                     "next_band_limit": "下一档差距",
                 }
                 for label, score in zip(CRITERIA, [4, 8, 8, 7], strict=True)
@@ -138,6 +151,7 @@ class ReportSchemaTests(unittest.TestCase):
                     "limitation_evidence": ["Governments should improve bus services."],
                     "limitation_frequency": "occasional",
                     "readability_impact": "minor",
+                    "why_not_lower_band": "Sustained control exceeds the lower band.",
                     "next_band_limit": item["next_band_limit"],
                 }
                 for item in valid_result()["criteria"]
@@ -158,6 +172,7 @@ class ReportSchemaTests(unittest.TestCase):
                     "limitation_evidence": ["Governments should improve bus services."],
                     "limitation_frequency": "recurring",
                     "readability_impact": "minor",
+                    "why_not_lower_band": "Sustained control exceeds the lower band.",
                     "next_band_limit": "下一档差距",
                 }
                 for label in CRITERIA
@@ -179,6 +194,7 @@ class ReportSchemaTests(unittest.TestCase):
                     "limitation_evidence": ["Governments should improve bus services."],
                     "limitation_frequency": "occasional",
                     "readability_impact": "minor",
+                    "why_not_lower_band": "Sustained control exceeds the lower band.",
                     "next_band_limit": "下一档差距",
                 }
             )

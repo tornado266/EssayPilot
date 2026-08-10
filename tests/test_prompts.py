@@ -49,6 +49,7 @@ class PromptTests(unittest.TestCase):
         self.assertIn("independently", prompt)
         self.assertIn("positive_evidence", prompt)
         self.assertIn("limitation_evidence", prompt)
+        self.assertIn("why_not_lower_band", prompt)
         self.assertIn("A single local error cannot determine a band", prompt)
         self.assertIn("Do not return or infer an Overall Band", prompt)
         self.assertNotIn("provisional overall", prompt.casefold())

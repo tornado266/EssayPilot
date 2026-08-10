@@ -12,7 +12,7 @@ from src.report_schema import (
 
 class ScoringArchitectureTests(unittest.TestCase):
     def test_external_schema_stays_compatible_with_integer_criteria(self):
-        self.assertEqual(SCHEMA_VERSION, "2.2")
+        self.assertEqual(SCHEMA_VERSION, "2.3")
         criterion_schema = EXAMINER_JSON_SCHEMA["schema"]["properties"]["criteria"]["items"]
         self.assertEqual(criterion_schema["properties"]["score"]["type"], "integer")
         self.assertIn("criteria", EXAMINER_JSON_SCHEMA["schema"]["required"])
@@ -26,6 +26,7 @@ class ScoringArchitectureTests(unittest.TestCase):
         self.assertIn("positive_evidence", internal["properties"])
         self.assertIn("limitation_evidence", internal["properties"])
         self.assertIn("limitation_frequency", internal["properties"])
+        self.assertIn("why_not_lower_band", internal["properties"])
         self.assertEqual(
             internal["properties"]["positive_evidence"]["items"]["maxLength"], 240
         )
