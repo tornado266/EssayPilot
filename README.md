@@ -168,6 +168,8 @@ Create a local `.env` file:
 
 ```dotenv
 OPENAI_API_KEY=your_openai_api_key
+# Optional: required only for private DeepSeek V4 calibration runs
+DEEPSEEK_API_KEY=your_deepseek_api_key
 
 # Optional: enables email-code login and cross-device records
 SUPABASE_URL=https://your-project.supabase.co
@@ -207,6 +209,8 @@ Then open `http://localhost:8501`.
 
 ```toml
 OPENAI_API_KEY = "your_openai_api_key"
+# Optional: required only if DeepSeek becomes the validated scoring provider
+DEEPSEEK_API_KEY = "your_deepseek_api_key"
 SUPABASE_URL = "https://your-project.supabase.co"
 SUPABASE_ANON_KEY = "your_publishable_anon_key"
 SUPABASE_SERVICE_ROLE_KEY = "your_private_service_role_key"
@@ -251,10 +255,10 @@ Offline contract tests never call the API:
 python -m unittest discover -s tests -v
 ```
 
-The repeatability runner uses paid API calls and checks every score's spread against the 0.5-band tolerance:
+The repeatability runner uses paid API calls. Candidate screening is score-only by default, so it does not pay for or wait for teaching feedback:
 
 ```bash
-python -m scripts.run_calibration --repeats 3
+python -m scripts.run_calibration --repeats 3 --provider OpenAI --model gpt-5.4-mini-2026-03-17
 ```
 
 Private official transcripts and run artifacts must stay under
@@ -263,15 +267,19 @@ structured internal transcript before making any paid calls:
 
 ```bash
 python scripts/import_calibration_docx.py --docx PATH_TO_PRIVATE_TRANSCRIPT.docx --out .private/calibration/official_task2.json
-python scripts/run_calibration.py --dataset .private/calibration/official_task2.json --mode gold --repeats 3 --label baseline --dry-run
+python scripts/run_calibration.py --dataset .private/calibration/official_task2-expanded.json --split-manifest .private/calibration/splits.json --subset development --mode gold --repeats 3 --label mini-development --provider OpenAI --model gpt-5.4-mini-2026-03-17 --dry-run
 ```
 
 After configuring `OPENAI_API_KEY`, remove `--dry-run`. Gold runs default to
 three repeats with `reasoning_effort=none`; use `--reasoning-effort low` only
 for a complete preregistered comparison, never to cherry-pick one response.
 Each paid run writes a private JSON audit record, per-call CSV, per-case CSV,
-and Markdown summary. Invalid JSON, schema, or evidence is retried once with
-the same model; individual failures are recorded without aborting the batch.
+and Markdown summary. Use `--full-package` only for the final winning model's
+production smoke test. DeepSeek V4 candidates use `--provider DeepSeek` with
+`deepseek-v4-flash` or `deepseek-v4-pro` and require a local
+`DEEPSEEK_API_KEY`. Invalid JSON, schema, empty content, or evidence is retried
+once with the same model, the invalid response, and the precise validation
+error; individual failures are recorded without aborting the batch.
 The
 grader receives only the task prompt and candidate response; official bands,
 case identifiers, source metadata, and examiner comments remain in the eval
@@ -287,6 +295,13 @@ The comparison checks the accuracy and spread acceptance targets plus the
 reasoning-adoption gate. Run artifacts include model snapshot, reasoning,
 prompt/skill/schema versions, production file hashes, stage latency, Token
 usage, and cost under the supplied runtime price configuration.
+
+After development and holdout runs exist, choose only among models that pass
+both quality gates and do not worsen the low-band segment:
+
+```bash
+python scripts/select_scoring_model.py --baseline-development PATH_TO_BASELINE_RUN_JSON --candidate mini=PATH_TO_MINI_DEV,PATH_TO_MINI_HOLDOUT --candidate flash=PATH_TO_FLASH_DEV,PATH_TO_FLASH_HOLDOUT --output .private/calibration/model-selection.json
+```
 
 ## License
 
