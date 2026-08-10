@@ -99,6 +99,45 @@ class CalibrationTests(unittest.TestCase):
         summary = summarize_gold(results)
         self.assertEqual(summary["cases"][0]["absolute_error"], 0.5)
 
+    def test_failed_run_is_recorded_without_aborting_remaining_runs(self):
+        calls = 0
+
+        def grader(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                kwargs["audit_hook"]({"stage": "scoring", "raw_response": "invalid"})
+                raise ValueError("invalid evidence")
+            return {
+                "structured": {
+                    "overall_band": 7.0,
+                    "criteria": [
+                        {"criterion": "Task Response", "score": 7},
+                        {"criterion": "Coherence and Cohesion", "score": 7},
+                        {"criterion": "Lexical Resource", "score": 7},
+                        {"criterion": "Grammatical Range and Accuracy", "score": 7},
+                    ],
+                },
+                "usage": {},
+                "model": "test-model",
+                "prompt_version": "test",
+            }
+
+        case = CalibrationCase(
+            model_input=BlindModelInput("Question", "Essay"),
+            evaluation=EvaluationLabel("official-01", 7.0),
+            source_type="official_internal",
+            provenance="Official source",
+        )
+        results, events = run_evaluation([case], 2, grader=grader)
+
+        self.assertEqual([run["status"] for run in results[0]["runs"]], ["error", "ok"])
+        self.assertEqual(results[0]["runs"][0]["error_type"], "ValueError")
+        self.assertEqual(events[0]["raw_response"], "invalid")
+        summary = summarize_gold(results)
+        self.assertEqual(summary["overall"]["successful_runs"], 1)
+        self.assertEqual(summary["overall"]["failed_runs"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

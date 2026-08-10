@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.ai_grader import grade_essay_package
+from src.ai_grader import PRODUCTION_MODEL_SNAPSHOT, grade_essay_package
 from src.report_schema import PROMPT_VERSION, SCHEMA_VERSION, SKILL_VERSION, score_snapshot
 
 
@@ -189,9 +189,28 @@ def summarize_gold(case_results: list[dict[str, Any]]) -> dict[str, Any]:
     within_0_5 = 0
     within_1_0 = 0
     summaries: list[dict[str, Any]] = []
+    attempted_runs = 0
+    successful_runs = 0
     for result in case_results:
         expected = float(result["expected_overall"])
-        metrics = repeatability_metrics([run["snapshot"] for run in result["runs"]])
+        attempted_runs += len(result["runs"])
+        valid_runs = [run for run in result["runs"] if run.get("status", "ok") == "ok"]
+        successful_runs += len(valid_runs)
+        if not valid_runs:
+            summaries.append(
+                {
+                    "case_id": result["case_id"],
+                    "expected_overall": expected,
+                    "mean_scores": {key: None for key in SCORE_KEYS},
+                    "absolute_error": None,
+                    "signed_error": None,
+                    "max_spread": {key: None for key in SCORE_KEYS},
+                    "successful_runs": 0,
+                    "failed_runs": len(result["runs"]),
+                }
+            )
+            continue
+        metrics = repeatability_metrics([run["snapshot"] for run in valid_runs])
         predicted_mean = metrics["means"]["Overall Band"]
         signed_error = predicted_mean - expected
         absolute_error = abs(signed_error)
@@ -210,17 +229,23 @@ def summarize_gold(case_results: list[dict[str, Any]]) -> dict[str, Any]:
                 "absolute_error": absolute_error,
                 "signed_error": signed_error,
                 "max_spread": metrics["max_spread"],
+                "successful_runs": len(valid_runs),
+                "failed_runs": len(result["runs"]) - len(valid_runs),
             }
         )
     return {
         "cases": summaries,
         "overall": {
-            "mae": mean(errors),
-            "within_0_5_rate": within_0_5 / len(errors),
-            "within_1_0_rate": within_1_0 / len(errors),
-            "max_absolute_error": max(errors),
+            "mae": mean(errors) if errors else None,
+            "within_0_5_rate": within_0_5 / len(errors) if errors else None,
+            "within_1_0_rate": within_1_0 / len(errors) if errors else None,
+            "max_absolute_error": max(errors) if errors else None,
             "high_band_mean_bias": mean(high_bias) if high_bias else None,
             "low_band_mean_bias": mean(low_bias) if low_bias else None,
+            "attempted_runs": attempted_runs,
+            "successful_runs": successful_runs,
+            "failed_runs": attempted_runs - successful_runs,
+            "success_rate": successful_runs / attempted_runs if attempted_runs else None,
         },
     }
 
@@ -233,7 +258,11 @@ def _write_csvs(output: Path, case_results: list[dict[str, Any]], summary: dict[
     with (output / "runs.csv").open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["case_id", "run", "expected_overall", *SCORE_KEYS, "latency_seconds", "input_tokens", "output_tokens", "total_tokens"],
+            fieldnames=[
+                "case_id", "run", "expected_overall", "status", *SCORE_KEYS,
+                "latency_seconds", "input_tokens", "output_tokens", "total_tokens",
+                "error_type", "error_message",
+            ],
         )
         writer.writeheader()
         for case in case_results:
@@ -243,9 +272,12 @@ def _write_csvs(output: Path, case_results: list[dict[str, Any]], summary: dict[
                         "case_id": case["case_id"],
                         "run": run_index,
                         "expected_overall": case.get("expected_overall"),
-                        **run["snapshot"],
+                        "status": run.get("status", "ok"),
+                        **(run.get("snapshot") or {}),
                         "latency_seconds": run["latency_seconds"],
                         **run["usage"],
+                        "error_type": run.get("error_type"),
+                        "error_message": run.get("error_message"),
                     }
                 )
     with (output / "summary.csv").open("w", newline="", encoding="utf-8-sig") as handle:
@@ -267,12 +299,23 @@ def _write_csvs(output: Path, case_results: list[dict[str, Any]], summary: dict[
 def _markdown(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
     rows = []
     for item in summary.get("cases", []):
+        predicted = item["mean_scores"]["Overall Band"]
+        attempts = item.get("successful_runs", 0) + item.get("failed_runs", 0)
+        if predicted is None:
+            rows.append(
+                f"| {item['case_id']} | {item['expected_overall']:.1f} | failed | n/a | n/a | "
+                f"{item.get('successful_runs', 0)}/{attempts} |"
+            )
+            continue
         rows.append(
             f"| {item['case_id']} | {item['expected_overall']:.1f} | "
-            f"{item['mean_scores']['Overall Band']:.2f} | {item['absolute_error']:.2f} | "
-            f"{item['max_spread']['Overall Band']:.1f} |"
+            f"{predicted:.2f} | {item['absolute_error']:.2f} | "
+            f"{item['max_spread']['Overall Band']:.1f} | "
+            f"{item.get('successful_runs', attempts)}/{attempts} |"
         )
     overall = summary.get("overall", {})
+    metric = lambda name: "n/a" if overall.get(name) is None else f"{overall[name]:.3f}"
+    rate = lambda name: "n/a" if overall.get(name) is None else f"{overall[name]:.1%}"
     return f"""# EssayPilot private calibration report
 
 This is a small official-anchor calibration, not a claim of examiner-level accuracy.
@@ -283,18 +326,20 @@ This is a small official-anchor calibration, not a claim of examiner-level accur
 - Prompt version: {metadata['prompt_version']}
 - Skill version: {metadata['skill_version']}
 
-| Case | Official | Mean predicted | Absolute error | Max spread |
-|---|---:|---:|---:|---:|
+| Case | Official | Mean predicted | Absolute error | Max spread | Successful runs |
+|---|---:|---:|---:|---:|---:|
 {chr(10).join(rows)}
 
 ## Aggregate
 
-- Overall MAE: {overall.get('mae', 0):.3f}
-- Within ±0.5: {overall.get('within_0_5_rate', 0):.1%}
-- Within ±1.0: {overall.get('within_1_0_rate', 0):.1%}
-- Maximum error: {overall.get('max_absolute_error', 0):.3f}
+- Overall MAE: {metric('mae')}
+- Within +/-0.5: {rate('within_0_5_rate')}
+- Within +/-1.0: {rate('within_1_0_rate')}
+- Maximum error: {metric('max_absolute_error')}
 - High-band mean bias: {overall.get('high_band_mean_bias')}
 - Low-band mean bias: {overall.get('low_band_mean_bias')}
+- Successful runs: {overall.get('successful_runs', 0)}/{overall.get('attempted_runs', 0)}
+- Failed runs: {overall.get('failed_runs', 0)}
 """
 
 
@@ -311,28 +356,43 @@ def run_evaluation(
         for _ in range(repeats):
             event_batch: list[dict[str, Any]] = []
             started = time.perf_counter()
-            package = grader(
-                task_type="Task 2",
-                topic=case.model_input.task_prompt,
-                essay=case.model_input.candidate_response,
-                audit_hook=event_batch.append,
-            )
-            latency = time.perf_counter() - started
-            structured = dict(package["structured"])
-            usage = dict(package.get("usage") or {})
-            runs.append(
-                {
-                    "snapshot": score_snapshot(structured),
-                    "latency_seconds": round(latency, 3),
-                    "usage": {
-                        "input_tokens": usage.get("input_tokens"),
-                        "output_tokens": usage.get("output_tokens"),
-                        "total_tokens": usage.get("total_tokens"),
-                    },
-                    "model": package.get("model"),
-                    "prompt_version": package.get("prompt_version"),
-                }
-            )
+            try:
+                package = grader(
+                    task_type="Task 2",
+                    topic=case.model_input.task_prompt,
+                    essay=case.model_input.candidate_response,
+                    audit_hook=event_batch.append,
+                )
+                latency = time.perf_counter() - started
+                structured = dict(package["structured"])
+                usage = dict(package.get("usage") or {})
+                runs.append(
+                    {
+                        "status": "ok",
+                        "snapshot": score_snapshot(structured),
+                        "latency_seconds": round(latency, 3),
+                        "usage": {
+                            "input_tokens": usage.get("input_tokens"),
+                            "output_tokens": usage.get("output_tokens"),
+                            "total_tokens": usage.get("total_tokens"),
+                        },
+                        "model": package.get("model"),
+                        "prompt_version": package.get("prompt_version"),
+                    }
+                )
+            except Exception as exc:
+                runs.append(
+                    {
+                        "status": "error",
+                        "snapshot": None,
+                        "latency_seconds": round(time.perf_counter() - started, 3),
+                        "usage": {"input_tokens": None, "output_tokens": None, "total_tokens": None},
+                        "model": PRODUCTION_MODEL_SNAPSHOT,
+                        "prompt_version": PROMPT_VERSION,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    }
+                )
             audit_events.extend(event_batch)
         results.append(
             {
@@ -382,7 +442,11 @@ def main() -> int:
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "mode": args.mode,
         "repeats": repeats,
-        "model": results[0]["runs"][0]["model"],
+        "model": (
+            results[0]["runs"][0].get("model")
+            if results and results[0]["runs"]
+            else PRODUCTION_MODEL_SNAPSHOT
+        ),
         "prompt_version": PROMPT_VERSION,
         "skill_version": SKILL_VERSION,
         "schema_version": SCHEMA_VERSION,
