@@ -138,6 +138,39 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(summary["overall"]["successful_runs"], 1)
         self.assertEqual(summary["overall"]["failed_runs"], 1)
 
+    def test_runtime_leak_check_rejects_evaluation_metadata_in_messages(self):
+        def grader(**kwargs):
+            kwargs["audit_hook"](
+                {
+                    "stage": "scoring",
+                    "messages": [{"role": "user", "content": "secret-case-id"}],
+                    "raw_response": "{}",
+                }
+            )
+            return {
+                "structured": {
+                    "overall_band": 7.0,
+                    "criteria": [
+                        {"criterion": "Task Response", "score": 7},
+                        {"criterion": "Coherence and Cohesion", "score": 7},
+                        {"criterion": "Lexical Resource", "score": 7},
+                        {"criterion": "Grammatical Range and Accuracy", "score": 7},
+                    ],
+                },
+                "usage": {},
+                "model": "test-model",
+                "prompt_version": "test",
+            }
+
+        case = CalibrationCase(
+            model_input=BlindModelInput("Question", "Essay"),
+            evaluation=EvaluationLabel("secret-case-id", 7.0, "private comment"),
+            source_type="official_internal",
+            provenance="private source",
+        )
+        with self.assertRaisesRegex(RuntimeError, "metadata leaked"):
+            run_evaluation([case], 1, grader=grader)
+
 
 if __name__ == "__main__":
     unittest.main()

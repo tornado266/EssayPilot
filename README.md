@@ -266,11 +266,27 @@ python scripts/import_calibration_docx.py --docx PATH_TO_PRIVATE_TRANSCRIPT.docx
 python scripts/run_calibration.py --dataset .private/calibration/official_task2.json --mode gold --repeats 3 --label baseline --dry-run
 ```
 
-After configuring `OPENAI_API_KEY`, remove `--dry-run`. Each paid run writes a
-private JSON audit record, per-call CSV, per-case CSV, and Markdown summary. The
+After configuring `OPENAI_API_KEY`, remove `--dry-run`. Gold runs default to
+three repeats with `reasoning_effort=none`; use `--reasoning-effort low` only
+for a complete preregistered comparison, never to cherry-pick one response.
+Each paid run writes a private JSON audit record, per-call CSV, per-case CSV,
+and Markdown summary. Invalid JSON, schema, or evidence is retried once with
+the same model; individual failures are recorded without aborting the batch.
+The
 grader receives only the task prompt and candidate response; official bands,
 case identifiers, source metadata, and examiner comments remain in the eval
 process and are never included in model messages.
+
+Compare locked runs without copying private essays into the report:
+
+```bash
+python scripts/compare_calibration.py --baseline PATH_TO_BASELINE_RUN_JSON --candidate PATH_TO_NONE_RUN_JSON --alternative PATH_TO_LOW_RUN_JSON --output .private/calibration/comparison.md
+```
+
+The comparison checks the accuracy and spread acceptance targets plus the
+reasoning-adoption gate. Run artifacts include model snapshot, reasoning,
+prompt/skill/schema versions, production file hashes, stage latency, Token
+usage, and cost under the supplied runtime price configuration.
 
 ## License
 

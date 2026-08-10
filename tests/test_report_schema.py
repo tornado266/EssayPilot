@@ -94,10 +94,30 @@ class ReportSchemaTests(unittest.TestCase):
         with self.assertRaises(ExaminerResultError):
             calculate_overall([{"score": value} for value in [7, 7, 6.5, 6]])
 
+    def test_overall_rejects_boolean_missing_and_out_of_range_scores(self):
+        invalid_vectors = (
+            [7, 7, True, 6],
+            [7, 7, None, 6],
+            [7, 7, 10, 6],
+            [7, 7, -1, 6],
+        )
+        for vector in invalid_vectors:
+            with self.subTest(vector=vector), self.assertRaises(ExaminerResultError):
+                calculate_overall([{"score": value} for value in vector])
+
     def test_independent_asymmetric_criteria_are_allowed(self):
         scoring = {
             "criteria": [
-                {"criterion": label, "score": score, "reason": "当前表现", "evidence": ["Public transport reduces traffic."], "next_band_limit": "下一档差距"}
+                {
+                    "criterion": label,
+                    "score": score,
+                    "reason": "当前表现",
+                    "positive_evidence": ["Public transport reduces traffic."],
+                    "limitation_evidence": ["Governments should improve bus services."],
+                    "limitation_frequency": "occasional",
+                    "readability_impact": "minor",
+                    "next_band_limit": "下一档差距",
+                }
                 for label, score in zip(CRITERIA, [4, 8, 8, 7], strict=True)
             ],
             "uncertainty": {"level": "low", "adjacent_band_direction": "none", "reason": "证据充分"},
@@ -109,11 +129,65 @@ class ReportSchemaTests(unittest.TestCase):
 
     def test_material_uncertainty_drives_a_real_range(self):
         scoring = {
-            "criteria": valid_result()["criteria"],
+            "criteria": [
+                {
+                    "criterion": item["criterion"],
+                    "score": item["score"],
+                    "reason": item["reason"],
+                    "positive_evidence": ["Public transport reduces traffic."],
+                    "limitation_evidence": ["Governments should improve bus services."],
+                    "limitation_frequency": "occasional",
+                    "readability_impact": "minor",
+                    "next_band_limit": item["next_band_limit"],
+                }
+                for item in valid_result()["criteria"]
+            ],
             "uncertainty": {"level": "material", "adjacent_band_direction": "higher", "reason": "相邻档证据接近"},
         }
         result = validate_scoring_decision(scoring, ESSAY)
         self.assertEqual(estimated_band_range(result), (6.5, 7.0))
+
+    def test_recurring_limitation_requires_multiple_exact_examples(self):
+        scoring = {
+            "criteria": [
+                {
+                    "criterion": label,
+                    "score": 6,
+                    "reason": "当前表现",
+                    "positive_evidence": ["Public transport reduces traffic."],
+                    "limitation_evidence": ["Governments should improve bus services."],
+                    "limitation_frequency": "recurring",
+                    "readability_impact": "minor",
+                    "next_band_limit": "下一档差距",
+                }
+                for label in CRITERIA
+            ],
+            "uncertainty": {"level": "low", "adjacent_band_direction": "none", "reason": "证据充分"},
+        }
+        with self.assertRaises(ExaminerResultError):
+            validate_scoring_decision(scoring, ESSAY)
+
+    def test_gra_six_cannot_be_justified_by_only_occasional_minor_errors(self):
+        criteria = []
+        for label in CRITERIA:
+            criteria.append(
+                {
+                    "criterion": label,
+                    "score": 7 if label != "Grammatical Range and Accuracy" else 6,
+                    "reason": "当前表现",
+                    "positive_evidence": ["Public transport reduces traffic."],
+                    "limitation_evidence": ["Governments should improve bus services."],
+                    "limitation_frequency": "occasional",
+                    "readability_impact": "minor",
+                    "next_band_limit": "下一档差距",
+                }
+            )
+        scoring = {
+            "criteria": criteria,
+            "uncertainty": {"level": "low", "adjacent_band_direction": "none", "reason": "证据充分"},
+        }
+        with self.assertRaises(ExaminerResultError):
+            validate_scoring_decision(scoring, ESSAY)
 
     def test_submission_hash_ignores_spacing_and_case(self):
         self.assertEqual(

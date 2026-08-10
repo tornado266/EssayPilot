@@ -4,7 +4,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from src.ai_grader import AIGraderError, grade_essay_package
+from src.ai_grader import AIGraderError, build_client, grade_essay_package
 from src.report_schema import SCORING_DECISION_JSON_SCHEMA, TEACHING_FEEDBACK_JSON_SCHEMA
 from test_report_schema import ESSAY, valid_result
 
@@ -24,9 +24,31 @@ class FakeCompletions:
 
 
 class TwoStageGraderTests(unittest.TestCase):
+    def test_missing_api_key_fails_locally_without_a_provider_call(self):
+        with patch(
+            "src.ai_grader.get_provider_config",
+            return_value=("OPENAI_API_KEY", None, "https://api.openai.com/v1"),
+        ):
+            with self.assertRaisesRegex(ValueError, "OPENAI_API_KEY is missing"):
+                build_client("OpenAI")
+
     def scoring_payload(self):
+        criteria = []
+        for item in valid_result()["criteria"]:
+            criteria.append(
+                {
+                    "criterion": item["criterion"],
+                    "score": item["score"],
+                    "reason": item["reason"],
+                    "positive_evidence": ["Public transport reduces traffic."],
+                    "limitation_evidence": ["Governments should improve bus services."],
+                    "limitation_frequency": "occasional",
+                    "readability_impact": "minor",
+                    "next_band_limit": item["next_band_limit"],
+                }
+            )
         return {
-            "criteria": deepcopy(valid_result()["criteria"]),
+            "criteria": criteria,
             "uncertainty": {
                 "level": "low",
                 "adjacent_band_direction": "none",
@@ -82,7 +104,7 @@ class TwoStageGraderTests(unittest.TestCase):
         self.assertNotIn("api_key", str(events).casefold())
 
     def test_invalid_teaching_response_fails_the_whole_package(self):
-        completions = FakeCompletions([json.dumps(self.scoring_payload()), "{"])
+        completions = FakeCompletions([json.dumps(self.scoring_payload()), "{", "{"])
         client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
         with (
             patch("src.ai_grader.build_client", return_value=client),
@@ -90,6 +112,55 @@ class TwoStageGraderTests(unittest.TestCase):
         ):
             with self.assertRaises(AIGraderError):
                 grade_essay_package(task_type="Task 2", topic="Question", essay=ESSAY)
+        self.assertEqual(len(completions.calls), 3)
+
+    def test_invalid_scoring_response_is_retried_once_without_model_fallback(self):
+        invalid = self.scoring_payload()
+        invalid["criteria"][0]["positive_evidence"] = ["invented quote"]
+        completions = FakeCompletions(
+            [
+                json.dumps(invalid),
+                json.dumps(self.scoring_payload()),
+                json.dumps(self.teaching_payload(), ensure_ascii=False),
+            ]
+        )
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        events = []
+        with (
+            patch("src.ai_grader.build_client", return_value=client),
+            patch("src.ai_grader.get_provider_config", return_value=("OPENAI_API_KEY", "key", "https://api.openai.com/v1")),
+        ):
+            package = grade_essay_package(
+                task_type="Task 2", topic="Question", essay=ESSAY, audit_hook=events.append
+            )
+
+        self.assertEqual([event["attempt"] for event in events], [1, 2, 1])
+        self.assertIn("validation_error", events[0])
+        self.assertEqual({call["model"] for call in completions.calls}, {"gpt-5.4-mini-2026-03-17"})
+        self.assertEqual(package["usage"]["total_tokens"], 90)
+
+    def test_second_teaching_attempt_drops_only_unsupported_optional_items(self):
+        teaching = self.teaching_payload()
+        teaching["priorities"] = [
+            {"title": "x", "evidence": "invented quote", "why": "x", "action": "x"}
+        ]
+        completions = FakeCompletions(
+            [
+                json.dumps(self.scoring_payload()),
+                json.dumps(teaching),
+                json.dumps(teaching),
+            ]
+        )
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        with (
+            patch("src.ai_grader.build_client", return_value=client),
+            patch("src.ai_grader.get_provider_config", return_value=("OPENAI_API_KEY", "key", "https://api.openai.com/v1")),
+        ):
+            package = grade_essay_package(task_type="Task 2", topic="Question", essay=ESSAY)
+
+        self.assertEqual(package["structured"]["priorities"], [])
+        self.assertEqual(package["sanitized_teaching_fields"], ["priorities"])
+        self.assertEqual(len(completions.calls), 3)
 
 
 if __name__ == "__main__":

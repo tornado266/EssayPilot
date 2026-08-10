@@ -325,6 +325,11 @@ This is a small official-anchor calibration, not a claim of examiner-level accur
 - Repeats: {metadata['repeats']}
 - Prompt version: {metadata['prompt_version']}
 - Skill version: {metadata['skill_version']}
+- Schema version: {metadata['schema_version']}
+- Reasoning effort: {metadata.get('reasoning_effort', 'none')}
+- Estimated API cost: ${metadata.get('usage', {}).get('estimated_usd', 0):.4f}
+- Scoring latency total: {metadata.get('stage_latency_seconds', {}).get('scoring', 'not captured')} seconds
+- Teaching latency total: {metadata.get('stage_latency_seconds', {}).get('teaching', 'not captured')} seconds
 
 | Case | Official | Mean predicted | Absolute error | Max spread | Successful runs |
 |---|---:|---:|---:|---:|---:|
@@ -347,13 +352,14 @@ def run_evaluation(
     cases: list[CalibrationCase],
     repeats: int,
     grader: Callable[..., dict[str, object]] = grade_essay_package,
+    reasoning_effort: str = "none",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Run blind production calls; labels never cross the grader boundary."""
     results: list[dict[str, Any]] = []
     audit_events: list[dict[str, Any]] = []
     for case in cases:
         runs = []
-        for _ in range(repeats):
+        for run_number in range(1, repeats + 1):
             event_batch: list[dict[str, Any]] = []
             started = time.perf_counter()
             try:
@@ -362,6 +368,7 @@ def run_evaluation(
                     topic=case.model_input.task_prompt,
                     essay=case.model_input.candidate_response,
                     audit_hook=event_batch.append,
+                    reasoning_effort=reasoning_effort,
                 )
                 latency = time.perf_counter() - started
                 structured = dict(package["structured"])
@@ -381,19 +388,48 @@ def run_evaluation(
                     }
                 )
             except Exception as exc:
+                event_usage = [event.get("usage") or {} for event in event_batch]
+                def summed_usage(name: str) -> int | None:
+                    values = [usage.get(name) for usage in event_usage]
+                    return sum(int(value) for value in values if value is not None) if any(value is not None for value in values) else None
+
                 runs.append(
                     {
                         "status": "error",
                         "snapshot": None,
                         "latency_seconds": round(time.perf_counter() - started, 3),
-                        "usage": {"input_tokens": None, "output_tokens": None, "total_tokens": None},
+                        "usage": {
+                            "input_tokens": summed_usage("input_tokens"),
+                            "output_tokens": summed_usage("output_tokens"),
+                            "total_tokens": summed_usage("total_tokens"),
+                        },
                         "model": PRODUCTION_MODEL_SNAPSHOT,
                         "prompt_version": PROMPT_VERSION,
                         "error_type": type(exc).__name__,
                         "error_message": str(exc),
                     }
                 )
+            forbidden = {
+                case.evaluation.case_id,
+                case.evaluation.examiner_comment,
+                case.evaluation.source_reference,
+                case.provenance,
+            }
+            request_text = json.dumps(
+                [event.get("messages") for event in event_batch], ensure_ascii=False
+            )
+            leaked = [value for value in forbidden if value and value in request_text]
+            if leaked:
+                raise RuntimeError("Evaluation metadata leaked into a model request.")
+            for event in event_batch:
+                event["case_id"] = case.evaluation.case_id
+                event["run"] = run_number
             audit_events.extend(event_batch)
+            print(
+                f"[{case.evaluation.case_id}] run {run_number}/{repeats}: {runs[-1]['status']}",
+                file=sys.stderr,
+                flush=True,
+            )
         results.append(
             {
                 "case_id": case.evaluation.case_id,
@@ -412,6 +448,7 @@ def main() -> int:
     parser.add_argument("--case", default="")
     parser.add_argument("--label", default="calibration")
     parser.add_argument("--output-dir", type=Path, default=ROOT / ".private" / "calibration" / "runs")
+    parser.add_argument("--reasoning-effort", choices=("none", "low"), default="none")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--input-price-per-million", type=float, default=0.75)
     parser.add_argument("--output-price-per-million", type=float, default=4.50)
@@ -433,7 +470,7 @@ def main() -> int:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output = args.output_dir / f"{args.label}-{timestamp}"
     output.mkdir(parents=True, exist_ok=False)
-    results, audit_events = run_evaluation(cases, repeats)
+    results, audit_events = run_evaluation(cases, repeats, reasoning_effort=args.reasoning_effort)
     summary = summarize_gold(results) if args.mode == "gold" else {"cases": results}
     total_input = sum((run["usage"].get("input_tokens") or 0) for case in results for run in case["runs"])
     total_output = sum((run["usage"].get("output_tokens") or 0) for case in results for run in case["runs"])
@@ -447,13 +484,25 @@ def main() -> int:
             if results and results[0]["runs"]
             else PRODUCTION_MODEL_SNAPSHOT
         ),
+        "reasoning_effort": args.reasoning_effort,
         "prompt_version": PROMPT_VERSION,
         "skill_version": SKILL_VERSION,
         "schema_version": SCHEMA_VERSION,
         "dataset_sha256": _file_sha256(args.dataset),
         "production_file_sha256": {
             str(path.relative_to(ROOT)): _file_sha256(path)
-            for path in (ROOT / "src" / "ai_grader.py", ROOT / "src" / "prompts.py", ROOT / "src" / "report_schema.py")
+            for path in (
+                ROOT / "src" / "ai_grader.py",
+                ROOT / "src" / "prompts.py",
+                ROOT / "src" / "report_schema.py",
+                ROOT / "src" / "text_utils.py",
+                ROOT / "skills" / "ielts-writing" / "SKILL.md",
+                ROOT / "skills" / "ielts-writing" / "references" / "scoring-protocol.md",
+            )
+        },
+        "stage_latency_seconds": {
+            stage: round(sum(float(event.get("latency_seconds") or 0) for event in audit_events if event.get("stage") == stage), 3)
+            for stage in ("scoring", "teaching")
         },
         "usage": {
             "input_tokens": total_input,

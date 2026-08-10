@@ -47,6 +47,9 @@ class PromptTests(unittest.TestCase):
         prompt = build_scoring_prompt("Task 2", "Question", "Essay text")
         self.assertIn("score-only schema", prompt)
         self.assertIn("independently", prompt)
+        self.assertIn("positive_evidence", prompt)
+        self.assertIn("limitation_evidence", prompt)
+        self.assertIn("A single local error cannot determine a band", prompt)
         self.assertIn("Do not return or infer an Overall Band", prompt)
         self.assertNotIn("provisional overall", prompt.casefold())
         self.assertNotIn("## 11.", prompt)
@@ -60,6 +63,15 @@ class PromptTests(unittest.TestCase):
         self.assertIn("Do not output `criteria`", prompt)
         self.assertNotIn("criteria", TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["properties"])
         self.assertNotIn("criteria", TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["required"])
+        self.assertIn("may be an empty list", prompt)
+
+    def test_model_prompt_preserves_submitted_text_verbatim(self):
+        essay = "First paragraph — don’t collapse.\r\n\r\nSecond-line with a hyphen.\n"
+        prompt = build_scoring_prompt("Task 2", "Question “as typed”", essay)
+        between_markers = prompt.split("<<<BEGIN_STUDENT_ESSAY>>>\n", 1)[1].split(
+            "\n<<<END_STUDENT_ESSAY>>>", 1
+        )[0]
+        self.assertEqual(between_markers, essay)
 
     def test_unverified_band_samples_are_not_loaded_as_anchors(self):
         self.assertEqual(load_band_sample_anchors(), "")
