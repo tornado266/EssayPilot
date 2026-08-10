@@ -1,6 +1,16 @@
 import unittest
 
-from scripts.run_calibration import gold_metrics, repeatability_metrics, validate_dataset
+from scripts.run_calibration import (
+    BlindModelInput,
+    CalibrationCase,
+    EvaluationLabel,
+    gold_metrics,
+    normalize_cases,
+    repeatability_metrics,
+    run_evaluation,
+    summarize_gold,
+    validate_dataset,
+)
 
 
 class CalibrationTests(unittest.TestCase):
@@ -34,6 +44,60 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(metrics["mae"]["Overall Band"], 0.5)
         self.assertEqual(metrics["mean_bias"]["Task Response"], -1.0)
         self.assertIsNone(metrics["weighted_kappa"])
+
+    def test_private_gold_accepts_overall_without_criterion_labels(self):
+        payload = {
+            "source_type": "official_internal",
+            "cases": [
+                {
+                    "model_input": {"task_prompt": "Question", "candidate_response": "Essay"},
+                    "evaluation": {
+                        "case_id": "official-01",
+                        "expected_overall": 7.5,
+                        "examiner_comment": "Must stay private",
+                        "source_heading": "Official source",
+                    },
+                }
+            ],
+        }
+        cases = normalize_cases(payload)
+        validate_dataset(cases, "gold")
+        self.assertEqual(cases[0].evaluation.expected_overall, 7.5)
+
+    def test_labels_never_cross_the_grader_boundary(self):
+        received = []
+
+        def grader(**kwargs):
+            received.append(kwargs)
+            return {
+                "structured": {
+                    "overall_band": 7.0,
+                    "criteria": [
+                        {"criterion": "Task Response", "score": 7},
+                        {"criterion": "Coherence and Cohesion", "score": 7},
+                        {"criterion": "Lexical Resource", "score": 7},
+                        {"criterion": "Grammatical Range and Accuracy", "score": 7},
+                    ],
+                },
+                "usage": {},
+                "model": "test-model",
+                "prompt_version": "test",
+            }
+
+        case = CalibrationCase(
+            model_input=BlindModelInput("Question only", "Essay only"),
+            evaluation=EvaluationLabel("secret-case-id", 7.5, "Private examiner comment"),
+            source_type="official_internal",
+            provenance="Official source",
+        )
+        results, _ = run_evaluation([case], 1, grader=grader)
+
+        self.assertEqual(received[0]["topic"], "Question only")
+        self.assertEqual(received[0]["essay"], "Essay only")
+        self.assertNotIn("secret-case-id", str(received[0]))
+        self.assertNotIn("Private examiner comment", str(received[0]))
+        summary = summarize_gold(results)
+        self.assertEqual(summary["cases"][0]["absolute_error"], 0.5)
 
 
 if __name__ == "__main__":

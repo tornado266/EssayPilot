@@ -257,6 +257,21 @@ The repeatability runner uses paid API calls and checks every score's spread aga
 python -m scripts.run_calibration --repeats 3
 ```
 
+Private official transcripts and run artifacts must stay under
+`.private/calibration/`, which is ignored by Git. Import and validate a
+structured internal transcript before making any paid calls:
+
+```bash
+python scripts/import_calibration_docx.py --docx PATH_TO_PRIVATE_TRANSCRIPT.docx --out .private/calibration/official_task2.json
+python scripts/run_calibration.py --dataset .private/calibration/official_task2.json --mode gold --repeats 3 --label baseline --dry-run
+```
+
+After configuring `OPENAI_API_KEY`, remove `--dry-run`. Each paid run writes a
+private JSON audit record, per-call CSV, per-case CSV, and Markdown summary. The
+grader receives only the task prompt and candidate response; official bands,
+case identifiers, source metadata, and examiner comments remain in the eval
+process and are never included in model messages.
+
 ## License
 
 This repository is intended for learning, portfolio demonstration, and IELTS writing practice. The bundled Noto Sans SC font is distributed under the SIL Open Font License 1.1.

@@ -64,6 +64,23 @@ class TwoStageGraderTests(unittest.TestCase):
         self.assertEqual(package["usage"]["total_tokens"], 60)
         self.assertIn("estimated practice band", package["report"])
 
+    def test_private_audit_hook_observes_both_calls_without_changing_them(self):
+        completions = FakeCompletions(
+            [json.dumps(self.scoring_payload(), ensure_ascii=False), json.dumps(self.teaching_payload(), ensure_ascii=False)]
+        )
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        events = []
+        with (
+            patch("src.ai_grader.build_client", return_value=client),
+            patch("src.ai_grader.get_provider_config", return_value=("OPENAI_API_KEY", "key", "https://api.openai.com/v1")),
+        ):
+            grade_essay_package(task_type="Task 2", topic="Question", essay=ESSAY, audit_hook=events.append)
+
+        self.assertEqual([event["stage"] for event in events], ["scoring", "teaching"])
+        self.assertEqual(events[0]["messages"], completions.calls[0]["messages"])
+        self.assertEqual(events[1]["messages"], completions.calls[1]["messages"])
+        self.assertNotIn("api_key", str(events).casefold())
+
     def test_invalid_teaching_response_fails_the_whole_package(self):
         completions = FakeCompletions([json.dumps(self.scoring_payload()), "{"])
         client = SimpleNamespace(chat=SimpleNamespace(completions=completions))

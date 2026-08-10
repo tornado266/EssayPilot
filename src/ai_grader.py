@@ -2,7 +2,9 @@
 
 import json
 import os
+import time
 from datetime import datetime, timezone
+from typing import Any, Callable
 
 from openai import APIConnectionError, APIStatusError, OpenAI, OpenAIError
 import streamlit as st
@@ -140,6 +142,7 @@ def grade_essay_package(
     task_type: str,
     topic: str,
     essay: str,
+    audit_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, object]:
     """Return a validated, versioned Task 2 examiner package from the fixed model."""
     if task_type != "Task 2":
@@ -153,44 +156,70 @@ def grade_essay_package(
     client = build_client("OpenAI")
     scoring_prompt = build_scoring_prompt(task_type, topic, essay)
     try:
+        scoring_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are EssayPilot's IELTS Writing Task 2 scoring component. "
+                    "Use only the supplied official-descriptor reference and return "
+                    "four independent, evidence-based criterion decisions."
+                ),
+            },
+            {"role": "user", "content": scoring_prompt},
+        ]
+        scoring_started = time.perf_counter()
         scoring_response = client.chat.completions.create(
             model=PRODUCTION_MODEL_SNAPSHOT,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are EssayPilot's IELTS Writing Task 2 scoring component. "
-                        "Use only the supplied official-descriptor reference and return "
-                        "four independent, evidence-based criterion decisions."
-                    ),
-                },
-                {"role": "user", "content": scoring_prompt},
-            ],
+            messages=scoring_messages,
             response_format={"type": "json_schema", "json_schema": SCORING_DECISION_JSON_SCHEMA},
             max_completion_tokens=5000,
             reasoning_effort="none",
         )
         scoring_raw = scoring_response.choices[0].message.content or ""
+        if audit_hook is not None:
+            audit_hook(
+                {
+                    "stage": "scoring",
+                    "model": PRODUCTION_MODEL_SNAPSHOT,
+                    "reasoning_effort": "none",
+                    "messages": scoring_messages,
+                    "raw_response": scoring_raw,
+                    "latency_seconds": round(time.perf_counter() - scoring_started, 3),
+                }
+            )
         scoring = validate_scoring_decision(json.loads(scoring_raw), essay)
 
         teaching_prompt = build_teaching_prompt(task_type, topic, essay, scoring)
+        teaching_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are EssayPilot's IELTS writing coach. The supplied scoring "
+                    "decision is validated and locked. Generate teaching material only."
+                ),
+            },
+            {"role": "user", "content": teaching_prompt},
+        ]
+        teaching_started = time.perf_counter()
         teaching_response = client.chat.completions.create(
             model=PRODUCTION_MODEL_SNAPSHOT,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are EssayPilot's IELTS writing coach. The supplied scoring "
-                        "decision is validated and locked. Generate teaching material only."
-                    ),
-                },
-                {"role": "user", "content": teaching_prompt},
-            ],
+            messages=teaching_messages,
             response_format={"type": "json_schema", "json_schema": TEACHING_FEEDBACK_JSON_SCHEMA},
             max_completion_tokens=14000,
             reasoning_effort="none",
         )
         teaching_raw = teaching_response.choices[0].message.content or ""
+        if audit_hook is not None:
+            audit_hook(
+                {
+                    "stage": "teaching",
+                    "model": PRODUCTION_MODEL_SNAPSHOT,
+                    "reasoning_effort": "none",
+                    "messages": teaching_messages,
+                    "raw_response": teaching_raw,
+                    "latency_seconds": round(time.perf_counter() - teaching_started, 3),
+                }
+            )
         teaching = json.loads(teaching_raw)
         if "criteria" in teaching or "overall_band" in teaching:
             raise ValueError("The teaching stage attempted to modify locked scores.")
