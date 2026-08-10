@@ -7,14 +7,17 @@ from datetime import datetime, timezone
 from openai import APIConnectionError, APIStatusError, OpenAI, OpenAIError
 import streamlit as st
 
-from src.prompts import build_grading_prompt, build_structured_grading_prompt, load_skill_scoring_rules
+from src.prompts import build_scoring_prompt, build_teaching_prompt, load_skill_scoring_rules
 from src.chinese_report import examiner_result_to_markdown
 from src.report_schema import (
-    EXAMINER_JSON_SCHEMA,
     PROMPT_VERSION,
     SCHEMA_VERSION,
+    SCORING_DECISION_JSON_SCHEMA,
     SKILL_VERSION,
+    TEACHING_FEEDBACK_JSON_SCHEMA,
+    estimated_band_range,
     validate_examiner_result,
+    validate_scoring_decision,
 )
 
 
@@ -132,180 +135,6 @@ def completion_options(
     return {"temperature": 0.0, "max_tokens": max_output_tokens}
 
 
-def _grade_essay_legacy(provider: str, task_type: str, topic: str, essay: str, model: str) -> str:
-    """Send the IELTS essay to an AI provider and return a markdown correction report."""
-    _, api_key, base_url = get_provider_config(provider)
-    client = build_client(provider)
-
-    prompt = build_grading_prompt(
-        task_type=task_type,
-        topic=topic,
-        essay=essay,
-    )
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert IELTS Writing examiner.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            **completion_options(provider, model, 8000),
-        )
-    except APIStatusError as exc:
-        raise AIGraderError(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_key_loaded=bool(api_key),
-            original_error=exc,
-            status_code=exc.status_code,
-        ) from exc
-    except (APIConnectionError, OpenAIError) as exc:
-        raise AIGraderError(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_key_loaded=bool(api_key),
-            original_error=exc,
-        ) from exc
-    except Exception as exc:
-        raise AIGraderError(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_key_loaded=bool(api_key),
-            original_error=exc,
-        ) from exc
-
-    report = response.choices[0].message.content or ""
-
-    if "单句提分训练" not in report:
-        fallback_prompt = f"""
-The previous IELTS report missed its final training section.
-Create only the missing final section below, based strictly on the student's essay.
-
-Requirements:
-- Choose several of the weakest sentences from the student's essay.
-- Ask the student to rewrite these sentences.
-- Do not provide reference rewrites.
-- Return only this section in Markdown.
-- Use exactly this structure:
-
-## 11. 单句提分训练
-
-【练习任务】
-请改写下面这几句话，使其更符合雅思6.5-7分水平：
-
-1. "（原句）"
-2. "（原句）"
-3. "（原句）"
-
-IELTS task type:
-{task_type}
-
-Essay question:
-{topic}
-
-Student essay:
-{essay}
-""".strip()
-
-        try:
-            fallback_response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert IELTS Writing examiner.",
-                    },
-                    {"role": "user", "content": fallback_prompt},
-                ],
-                **completion_options(provider, model, 1600),
-            )
-            extra_section = fallback_response.choices[0].message.content or ""
-            if extra_section.strip():
-                report = f"{report.rstrip()}\n\n{extra_section.strip()}"
-        except Exception:
-            report = (
-                f"{report.rstrip()}\n\n"
-                "## 11. 单句提分训练\n\n"
-                "【练习任务】\n"
-                "请从你的作文中选择几句表达最简单或最不准确的句子，"
-                "改写成更符合雅思6.5-7分水平的句子。\n\n"
-                "本部分原句提取失败，请重新点击批改生成练习句子。"
-            )
-
-    if "写作提升验证" not in report:
-        logic_prompt = f"""
-The previous IELTS report missed the writing improvement validation section.
-Create only the missing section below, based strictly on the student's essay.
-
-Requirements:
-- Choose 2-3 core logic or structure problems.
-- Choose one original paragraph or key fragment for each task.
-- Give one rewrite task for each fragment.
-- Do not review the student's rewrite here.
-- Return only this section in Markdown.
-- Use exactly this structure:
-
-## 12. 写作提升验证
-
-【提升练习】
-请根据刚才的问题，重写你文章中的一个关键部分：
-
-### 任务 1
-问题：论点不清 / 段落没有发展 / 例子不支持观点
-
-任务：
-改写/重写下面内容，使其逻辑更清晰、更符合雅思6.5水平：
-
-"（原文片段）"
-
-要求：
-- 2-4句话
-- 要有清晰论点 + 解释 + 例子
-
-IELTS task type:
-{task_type}
-
-Essay question:
-{topic}
-
-Student essay:
-{essay}
-""".strip()
-
-        try:
-            logic_response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert IELTS Writing examiner.",
-                    },
-                    {"role": "user", "content": logic_prompt},
-                ],
-                **completion_options(provider, model, 1800),
-            )
-            logic_section = logic_response.choices[0].message.content or ""
-            if logic_section.strip():
-                report = f"{report.rstrip()}\n\n{logic_section.strip()}"
-        except Exception:
-            report = (
-                f"{report.rstrip()}\n\n"
-                "## 12. 写作提升验证\n\n"
-                "【提升练习】\n"
-                "请根据刚才的问题，重写你文章中的一个关键部分。\n\n"
-                "本部分生成失败，请重新点击批改生成提升练习。"
-            )
-
-    return report
-
-
 def grade_essay_package(
     *,
     task_type: str,
@@ -322,26 +151,52 @@ def grade_essay_package(
 
     _, api_key, base_url = get_provider_config("OpenAI")
     client = build_client("OpenAI")
-    prompt = build_structured_grading_prompt(task_type, topic, essay)
+    scoring_prompt = build_scoring_prompt(task_type, topic, essay)
     try:
-        response = client.chat.completions.create(
+        scoring_response = client.chat.completions.create(
             model=PRODUCTION_MODEL_SNAPSHOT,
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "You are EssayPilot's strict IELTS Writing Task 2 examiner. "
-                        "Follow the supplied scoring Skill and JSON schema exactly."
+                        "You are EssayPilot's IELTS Writing Task 2 scoring component. "
+                        "Use only the supplied official-descriptor reference and return "
+                        "four independent, evidence-based criterion decisions."
                     ),
                 },
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": scoring_prompt},
             ],
-            response_format={"type": "json_schema", "json_schema": EXAMINER_JSON_SCHEMA},
-            max_completion_tokens=16000,
+            response_format={"type": "json_schema", "json_schema": SCORING_DECISION_JSON_SCHEMA},
+            max_completion_tokens=5000,
             reasoning_effort="none",
         )
-        raw = response.choices[0].message.content or ""
-        structured = validate_examiner_result(json.loads(raw), essay)
+        scoring_raw = scoring_response.choices[0].message.content or ""
+        scoring = validate_scoring_decision(json.loads(scoring_raw), essay)
+
+        teaching_prompt = build_teaching_prompt(task_type, topic, essay, scoring)
+        teaching_response = client.chat.completions.create(
+            model=PRODUCTION_MODEL_SNAPSHOT,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are EssayPilot's IELTS writing coach. The supplied scoring "
+                        "decision is validated and locked. Generate teaching material only."
+                    ),
+                },
+                {"role": "user", "content": teaching_prompt},
+            ],
+            response_format={"type": "json_schema", "json_schema": TEACHING_FEEDBACK_JSON_SCHEMA},
+            max_completion_tokens=14000,
+            reasoning_effort="none",
+        )
+        teaching_raw = teaching_response.choices[0].message.content or ""
+        teaching = json.loads(teaching_raw)
+        if "criteria" in teaching or "overall_band" in teaching:
+            raise ValueError("The teaching stage attempted to modify locked scores.")
+        merged = dict(teaching)
+        merged["criteria"] = scoring["criteria"]
+        structured = validate_examiner_result(merged, essay)
     except APIStatusError as exc:
         raise AIGraderError(
             provider="OpenAI",
@@ -368,7 +223,14 @@ def grade_essay_package(
             original_error=exc,
         ) from exc
 
-    usage = getattr(response, "usage", None)
+    scoring_usage = getattr(scoring_response, "usage", None)
+    teaching_usage = getattr(teaching_response, "usage", None)
+
+    def combined_usage(name: str) -> int | None:
+        values = [getattr(item, name, None) for item in (scoring_usage, teaching_usage)]
+        return sum(int(value) for value in values if value is not None) if any(value is not None for value in values) else None
+
+    band_range = estimated_band_range(scoring)
     return {
         "model": PRODUCTION_MODEL_SNAPSHOT,
         "model_family": PRODUCTION_MODEL,
@@ -377,11 +239,13 @@ def grade_essay_package(
         "skill_version": SKILL_VERSION,
         "graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "structured": structured,
-        "report": examiner_result_to_markdown(structured),
+        "scoring": scoring,
+        "estimated_band_range": list(band_range),
+        "report": examiner_result_to_markdown(structured, estimated_range=band_range),
         "usage": {
-            "input_tokens": getattr(usage, "prompt_tokens", None),
-            "output_tokens": getattr(usage, "completion_tokens", None),
-            "total_tokens": getattr(usage, "total_tokens", None),
+            "input_tokens": combined_usage("prompt_tokens"),
+            "output_tokens": combined_usage("completion_tokens"),
+            "total_tokens": combined_usage("total_tokens"),
         },
     }
 
@@ -543,8 +407,6 @@ Rules:
         ) from exc
 
     return response.choices[0].message.content or ""
-
-
 def review_logic_rewrite(
     provider: str,
     problem: str,
@@ -632,100 +494,6 @@ Rules:
         ) from exc
 
     return response.choices[0].message.content or ""
-
-
-def _compare_draft_progress_legacy(
-    provider: str,
-    task_question: str,
-    draft_1_text: str,
-    draft_1_scores: dict[str, float | None],
-    draft_2_text: str,
-    draft_2_scores: dict[str, float | None],
-    model: str,
-) -> str:
-    """Compare two drafts after both have been scored by the main examiner."""
-    _, api_key, base_url = get_provider_config(provider)
-    client = build_client(provider)
-    prompt = f"""
-You are an IELTS revision coach comparing two versions of the same essay.
-Do not rescore either essay. Treat the supplied scores as final.
-Compare only evidence visible in the two drafts and give concise Chinese feedback.
-
-Essay question:
-{task_question}
-
-Draft 1 scores:
-{draft_1_scores}
-
-Draft 1:
-{draft_1_text}
-
-Draft 2 scores:
-{draft_2_scores}
-
-Draft 2:
-{draft_2_text}
-
-Return only Markdown with exactly these sections:
-
-### 已经改善的问题
-- Identify concrete improvements in argument, structure, vocabulary, or grammar.
-- Name the criterion with the largest score improvement.
-
-### 仍然存在的问题
-- Identify recurring weaknesses and criteria without clear improvement.
-- Explain briefly why the next band has not yet been reached.
-
-### 下一次训练重点
-- Give only one or two specific priorities.
-
-Rules:
-- Quote short evidence from both drafts when useful.
-- Never invent changes that are not visible.
-- Do not repeat the score table.
-- Keep the response practical and concise.
-""".strip()
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a precise IELTS revision comparison coach.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            **completion_options(provider, model, 1400),
-        )
-    except APIStatusError as exc:
-        raise AIGraderError(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_key_loaded=bool(api_key),
-            original_error=exc,
-            status_code=exc.status_code,
-        ) from exc
-    except (APIConnectionError, OpenAIError) as exc:
-        raise AIGraderError(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_key_loaded=bool(api_key),
-            original_error=exc,
-        ) from exc
-    except Exception as exc:
-        raise AIGraderError(
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_key_loaded=bool(api_key),
-            original_error=exc,
-        ) from exc
-
-    return response.choices[0].message.content or ""
-
 
 def compare_draft_progress(
     provider: str,

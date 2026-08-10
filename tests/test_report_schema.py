@@ -4,8 +4,10 @@ from src.report_schema import (
     CRITERIA,
     ExaminerResultError,
     calculate_overall,
+    estimated_band_range,
     submission_hash,
     validate_examiner_result,
+    validate_scoring_decision,
 )
 from src.chinese_report import examiner_result_to_markdown
 
@@ -55,19 +57,63 @@ class ReportSchemaTests(unittest.TestCase):
         with self.assertRaises(ExaminerResultError):
             validate_examiner_result(data, ESSAY)
 
-    def test_allows_ellipsis_around_a_real_quote(self):
+    def test_every_evidence_item_must_be_exact(self):
+        data = valid_result()
+        data["criteria"][0]["evidence"] = [
+            "Public transport reduces traffic.",
+            "This quote was invented.",
+        ]
+        with self.assertRaises(ExaminerResultError):
+            validate_examiner_result(data, ESSAY)
+
+    def test_rejects_ellipsis_wrapped_evidence(self):
         data = valid_result()
         data["criteria"][0]["evidence"] = ["…Public transport reduces traffic.…"]
+        with self.assertRaises(ExaminerResultError):
+            validate_examiner_result(data, ESSAY)
+
+    def test_allows_outer_quote_marks(self):
+        data = valid_result()
+        data["criteria"][0]["evidence"] = ["“Public transport reduces traffic.”"]
         self.assertEqual(validate_examiner_result(data, ESSAY)["overall_band"], 6.5)
 
-    def test_allows_a_list_of_exact_lexical_items(self):
+    def test_allows_separate_exact_lexical_items(self):
         data = valid_result()
-        data["criteria"][2]["evidence"] = ['"transport", "traffic", "services"']
+        data["criteria"][2]["evidence"] = ["transport", "traffic", "services"]
         self.assertEqual(validate_examiner_result(data, ESSAY)["overall_band"], 6.5)
 
     def test_requires_four_scores(self):
         with self.assertRaises(ExaminerResultError):
             calculate_overall(valid_result()["criteria"][:3])
+
+    def test_overall_rounding_is_program_owned(self):
+        first = [{"score": value} for value in [7, 7, 6, 6]]
+        second = [{"score": value} for value in [7, 7, 7, 6]]
+        self.assertEqual(calculate_overall(first), 6.5)
+        self.assertEqual(calculate_overall(second), 7.0)
+        with self.assertRaises(ExaminerResultError):
+            calculate_overall([{"score": value} for value in [7, 7, 6.5, 6]])
+
+    def test_independent_asymmetric_criteria_are_allowed(self):
+        scoring = {
+            "criteria": [
+                {"criterion": label, "score": score, "reason": "当前表现", "evidence": ["Public transport reduces traffic."], "next_band_limit": "下一档差距"}
+                for label, score in zip(CRITERIA, [4, 8, 8, 7], strict=True)
+            ],
+            "uncertainty": {"level": "low", "adjacent_band_direction": "none", "reason": "证据充分"},
+        }
+        result = validate_scoring_decision(scoring, ESSAY)
+        self.assertEqual([item["score"] for item in result["criteria"]], [4, 8, 8, 7])
+        self.assertEqual(result["overall_band"], 7.0)
+        self.assertEqual(estimated_band_range(result), (7.0, 7.0))
+
+    def test_material_uncertainty_drives_a_real_range(self):
+        scoring = {
+            "criteria": valid_result()["criteria"],
+            "uncertainty": {"level": "material", "adjacent_band_direction": "higher", "reason": "相邻档证据接近"},
+        }
+        result = validate_scoring_decision(scoring, ESSAY)
+        self.assertEqual(estimated_band_range(result), (6.5, 7.0))
 
     def test_submission_hash_ignores_spacing_and_case(self):
         self.assertEqual(

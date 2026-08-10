@@ -6,12 +6,13 @@ import math
 import re
 import unicodedata
 import hashlib
+from copy import deepcopy
 from typing import Any
 
 
 SCHEMA_VERSION = "2.1"
-PROMPT_VERSION = "task2-structured-zh-expression-v2-2026-08-09"
-SKILL_VERSION = "ielts-writing-phase2-v1"
+PROMPT_VERSION = "task2-two-stage-zh-official-descriptors-v3-2026-08-10"
+SKILL_VERSION = "ielts-writing-task2-official-v2"
 CRITERIA = (
     "Task Response",
     "Coherence and Cohesion",
@@ -207,15 +208,53 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
 }
 
 
+SCORING_DECISION_JSON_SCHEMA: dict[str, Any] = {
+    "name": "essaypilot_task2_scoring_decision",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["criteria", "uncertainty"],
+        "properties": {
+            "criteria": deepcopy(EXAMINER_JSON_SCHEMA["schema"]["properties"]["criteria"]),
+            "uncertainty": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["level", "adjacent_band_direction", "reason"],
+                "properties": {
+                    "level": {"type": "string", "enum": ["low", "material"]},
+                    "adjacent_band_direction": {
+                        "type": "string",
+                        "enum": ["lower", "higher", "none"],
+                    },
+                    "reason": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
+TEACHING_FEEDBACK_JSON_SCHEMA: dict[str, Any] = deepcopy(EXAMINER_JSON_SCHEMA)
+TEACHING_FEEDBACK_JSON_SCHEMA["name"] = "essaypilot_task2_teaching_feedback"
+TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["required"].remove("criteria")
+del TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["properties"]["criteria"]
+
+
 class ExaminerResultError(ValueError):
     """Raised when a structured examiner response is incomplete or inconsistent."""
 
 
 def calculate_overall(criteria: list[dict[str, Any]]) -> float:
     """Calculate the IELTS half-band result from four whole-band criteria."""
-    scores = [int(item["score"]) for item in criteria]
-    if len(scores) != 4 or any(score < 0 or score > 9 for score in scores):
+    raw_scores = [item.get("score") for item in criteria]
+    if (
+        len(raw_scores) != 4
+        or any(not isinstance(score, int) or isinstance(score, bool) for score in raw_scores)
+        or any(score < 0 or score > 9 for score in raw_scores)
+    ):
         raise ExaminerResultError("Exactly four whole-band criterion scores are required.")
+    scores = [int(score) for score in raw_scores]
     average = sum(scores) / 4
     return math.floor(average * 2 + 0.5) / 2
 
@@ -248,6 +287,69 @@ def _quote_is_present(quote: str, essay: str) -> bool:
     return any(" ".join(words[index : index + 6]) in clean_essay for index in range(max(0, len(words) - 5)))
 
 
+def _exact_quote_is_present(quote: str, essay: str) -> bool:
+    """Require the complete normalized quotation, not merely one matching fragment."""
+    def normalize(value: str) -> str:
+        value = unicodedata.normalize("NFKC", value).casefold()
+        value = value.replace("’", "'").replace("‘", "'")
+        return " ".join(value.strip().strip('“”\"').split())
+
+    clean_quote = normalize(quote)
+    return len(clean_quote) >= 3 and clean_quote in normalize(essay)
+
+
+def validate_scoring_decision(data: dict[str, Any], essay: str) -> dict[str, Any]:
+    """Validate and freeze the score-only model response."""
+    if not isinstance(data, dict):
+        raise ExaminerResultError("The scoring response is not a JSON object.")
+    if "overall_band" in data:
+        raise ExaminerResultError("Overall Band is calculated by EssayPilot, not the model.")
+    criteria = data.get("criteria")
+    if not isinstance(criteria, list):
+        raise ExaminerResultError("The scoring response is missing criterion scores.")
+    labels = [item.get("criterion") for item in criteria if isinstance(item, dict)]
+    if sorted(labels) != sorted(CRITERIA):
+        raise ExaminerResultError("The examiner must return each IELTS criterion exactly once.")
+    for item in criteria:
+        score = item.get("score")
+        if not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 9:
+            raise ExaminerResultError("Criterion scores must be whole numbers from 0 to 9.")
+        evidence = item.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            raise ExaminerResultError(f"{item['criterion']} has no essay evidence.")
+        if not all(_exact_quote_is_present(str(quote), essay) for quote in evidence):
+            raise ExaminerResultError(
+                f"Every {item['criterion']} evidence item must be present in the essay."
+            )
+        if not str(item.get("reason", "")).strip() or not str(item.get("next_band_limit", "")).strip():
+            raise ExaminerResultError(f"{item['criterion']} lacks a complete descriptor explanation.")
+    uncertainty = data.get("uncertainty")
+    if not isinstance(uncertainty, dict):
+        raise ExaminerResultError("The scoring response is missing uncertainty metadata.")
+    level = uncertainty.get("level")
+    direction = uncertainty.get("adjacent_band_direction")
+    if level not in {"low", "material"} or direction not in {"lower", "higher", "none"}:
+        raise ExaminerResultError("The scoring uncertainty metadata is invalid.")
+    if level == "low" and direction != "none":
+        raise ExaminerResultError("Low uncertainty must not claim an adjacent-band direction.")
+    if level == "material" and direction == "none":
+        raise ExaminerResultError("Material uncertainty must identify an adjacent-band direction.")
+    normalized = deepcopy(data)
+    normalized["overall_band"] = calculate_overall(criteria)
+    return normalized
+
+
+def estimated_band_range(scoring: dict[str, Any]) -> tuple[float, float]:
+    """Derive a narrow display range from validated uncertainty, never a fixed offset."""
+    overall = float(scoring["overall_band"])
+    uncertainty = scoring["uncertainty"]
+    if uncertainty["level"] == "low":
+        return overall, overall
+    if uncertainty["adjacent_band_direction"] == "lower":
+        return max(0.0, overall - 0.5), overall
+    return overall, min(9.0, overall + 0.5)
+
+
 def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]:
     """Validate key invariants and add program-owned score/version metadata."""
     if not isinstance(data, dict):
@@ -273,8 +375,8 @@ def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]
         evidence = item.get("evidence")
         if not isinstance(evidence, list) or not evidence:
             raise ExaminerResultError(f"{item['criterion']} has no essay evidence.")
-        if not any(_quote_is_present(str(quote), essay) for quote in evidence):
-            raise ExaminerResultError(f"{item['criterion']} evidence is not present in the essay.")
+        if not all(_exact_quote_is_present(str(quote), essay) for quote in evidence):
+            raise ExaminerResultError(f"Every {item['criterion']} evidence item must be present in the essay.")
     for correction in data.get("sentence_corrections", []):
         if not _quote_is_present(str(correction.get("original", "")), essay):
             raise ExaminerResultError("A sentence correction does not quote the submitted essay.")
@@ -298,113 +400,3 @@ def score_snapshot(data: dict[str, Any]) -> dict[str, float | None]:
         "Lexical Resource": mapping.get("Lexical Resource"),
         "Grammar Range & Accuracy": mapping.get("Grammatical Range and Accuracy"),
     }
-
-
-def examiner_result_to_markdown(data: dict[str, Any]) -> str:
-    """Render the strict result in the legacy report shape used by the UI and exports."""
-    overall = float(data["overall_band"])
-    lower = max(0.0, overall - 0.5)
-    criteria_rows = []
-    for item in data["criteria"]:
-        evidence = "; ".join(f'“{quote.strip().strip(chr(34))}”' for quote in item["evidence"][:2])
-        reason = f"{item['reason']} Evidence: {evidence} Next-band limit: {item['next_band_limit']}"
-        criteria_rows.append(f"| {item['criterion']} | {item['score']} | {item['score']} | {reason} |")
-
-    def coaching(items: list[dict[str, Any]]) -> str:
-        blocks = []
-        for index, item in enumerate(items, 1):
-            blocks.append(
-                f"{index}. **{item['title']}**\n"
-                f"   - **Original evidence:** “{item['evidence']}”\n"
-                f"   - **Why it matters:** {item['why']}\n"
-                f"   - **Action:** {item['action']}"
-            )
-        return "\n\n".join(blocks)
-
-    corrections = "\n".join(
-        f"| {item['original'].replace('|', '/')} | {item['problem'].replace('|', '/')} | {item['improved'].replace('|', '/')} |"
-        for item in data["sentence_corrections"]
-    )
-    paragraphs = "\n\n".join(
-        f"### Paragraph {item['paragraph']}\n**What works:** {item['strength']}\n\n"
-        f"**What weakens the band score:** {item['limitation']}\n\n"
-        f"**One concrete improvement:** {item['improvement']}"
-        for item in data["paragraph_feedback"]
-    )
-    expressions = "\n".join(
-        f"| {item['expression'].replace('|', '/')} | {item['meaning'].replace('|', '/')} | {item['example'].replace('|', '/')} |"
-        for item in data["useful_expressions"]
-    )
-    sentence_training = "\n".join(
-        f'{index}. "{item["original"]}"\n   - 目标：{item["goal"]}\n   - 参考：{item["reference"]}'
-        for index, item in enumerate(data["sentence_training"], 1)
-    )
-    logic_training = "\n\n".join(
-        f"### 任务 {index}\n问题：{item['problem']}\n\n任务：{item['task']}\n\n"
-        f'原文：“{item["original"]}”\n\n要求：\n' + "\n".join(f"- {rule}" for rule in item["requirements"])
-        for index, item in enumerate(data["logic_training"], 1)
-    )
-    next_practice = data["next_practice"]
-    return f"""# IELTS Writing Examiner Report
-
-## 1. Overall Band Score
-
-**Estimated band range: {lower:.1f}-{overall:.1f}**
-
-**Likely score: {overall:.1f}**
-
-{data['summary']}
-
-## 2. Four Criteria Scores
-
-| Criterion | Band Range | Likely Score | Why |
-|---|---:|---:|---|
-{chr(10).join(criteria_rows)}
-
-## 3. Top 3 Score-Boosting Priorities
-
-{coaching(data['priorities'])}
-
-## 4. Main Problems
-
-{coaching(data['problems'])}
-
-## 5. Sentence-level Corrections
-
-| Original | Problem | Improved version |
-|---|---|---|
-{corrections}
-
-## 6. Paragraph-level Feedback
-
-{paragraphs}
-
-## 7. Band 7.5 Rewrite
-
-{data['band_75_rewrite']}
-
-## 8. Useful Expressions
-
-| Expression | Meaning | Example |
-|---|---|---|
-{expressions}
-
-## 9. Next Practice Task
-
-**Task:** {next_practice['task']}
-
-- **One sentence pattern to practise:** {next_practice['sentence_pattern']}
-- **One warning about what to avoid next time:** {next_practice['warning']}
-
-## 11. 单句提分训练
-
-【练习任务】请先独立改写，再查看参考并提交点评。
-
-{sentence_training}
-
-## 12. 写作提升验证
-
-【提升练习】围绕本轮最低评分项完成段落级重写。
-
-{logic_training}
-""".strip()
