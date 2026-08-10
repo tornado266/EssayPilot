@@ -3,7 +3,6 @@
 import base64
 import hashlib
 import html
-import math
 import re
 import uuid
 from collections import Counter
@@ -38,7 +37,7 @@ from src.learning_assets import (
 from src.expression_catalog import FUNCTION_LABELS, TOPIC_LABELS, load_expression_catalog
 from src.share_card import build_result_card_svg
 from src.storage import markdown_to_pdf, save_markdown_record
-from src.report_schema import PROMPT_VERSION, score_snapshot, submission_hash
+from src.report_schema import ExaminerResultError, PROMPT_VERSION, calculate_overall, score_snapshot, submission_hash
 from src.text_utils import count_words, word_count_warning
 
 
@@ -975,17 +974,21 @@ def extract_criteria_scores(markdown: str) -> dict[str, str]:
 
 
 def calculate_overall_band(markdown: str) -> float | None:
-    """Calculate the displayed band from the equal-weighted criterion average."""
+    """Read legacy Markdown but delegate rounding and validation to the schema authority."""
     criteria = extract_criteria_scores(markdown)
-    numeric_scores: list[float] = []
+    criterion_rows: list[dict[str, int]] = []
     for value in criteria.values():
         match = re.search(r"\d(?:\.\d)?", value)
         if not match:
             return extract_overall_score(markdown)
-        numeric_scores.append(float(match.group(0)))
-
-    average = sum(numeric_scores) / len(numeric_scores)
-    return math.floor(average * 2 + 0.5) / 2
+        score = float(match.group(0))
+        if not score.is_integer():
+            return None
+        criterion_rows.append({"score": int(score)})
+    try:
+        return calculate_overall(criterion_rows)
+    except ExaminerResultError:
+        return None
 
 
 def draft_training_focus(scores: dict[str, float | None]) -> list[str]:

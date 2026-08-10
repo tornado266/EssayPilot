@@ -10,9 +10,9 @@ from copy import deepcopy
 from typing import Any
 
 
-SCHEMA_VERSION = "2.1"
-PROMPT_VERSION = "task2-two-stage-zh-official-descriptors-v3-2026-08-10"
-SKILL_VERSION = "ielts-writing-task2-official-v2"
+SCHEMA_VERSION = "2.2"
+PROMPT_VERSION = "task2-two-stage-zh-official-descriptors-v4-2026-08-10"
+SKILL_VERSION = "ielts-writing-task2-official-v3"
 CRITERIA = (
     "Task Response",
     "Coherence and Cohesion",
@@ -92,18 +92,18 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
                     },
                 },
             },
-            "priorities": {"type": "array", "minItems": 2, "maxItems": 3, "items": {"$ref": "#/$defs/coaching_item"}},
-            "problems": {"type": "array", "minItems": 2, "maxItems": 5, "items": {"$ref": "#/$defs/coaching_item"}},
+            "priorities": {"type": "array", "minItems": 0, "maxItems": 3, "items": {"$ref": "#/$defs/coaching_item"}},
+            "problems": {"type": "array", "minItems": 0, "maxItems": 5, "items": {"$ref": "#/$defs/coaching_item"}},
             "sentence_corrections": {
                 "type": "array",
-                "minItems": 3,
+                "minItems": 0,
                 "maxItems": 8,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["original", "problem", "improved"],
                     "properties": {
-                        "original": {"type": "string"},
+                        "original": {"type": "string", "minLength": 1, "maxLength": 240},
                         "problem": {"type": "string"},
                         "improved": {"type": "string"},
                     },
@@ -111,7 +111,7 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             },
             "paragraph_feedback": {
                 "type": "array",
-                "minItems": 1,
+                "minItems": 0,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
@@ -160,14 +160,14 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             },
             "sentence_training": {
                 "type": "array",
-                "minItems": 2,
+                "minItems": 0,
                 "maxItems": 4,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["original", "goal", "reference"],
                     "properties": {
-                        "original": {"type": "string"},
+                        "original": {"type": "string", "minLength": 1, "maxLength": 240},
                         "goal": {"type": "string"},
                         "reference": {"type": "string"},
                     },
@@ -175,7 +175,7 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             },
             "logic_training": {
                 "type": "array",
-                "minItems": 1,
+                "minItems": 0,
                 "maxItems": 3,
                 "items": {
                     "type": "object",
@@ -183,7 +183,7 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
                     "required": ["problem", "original", "task", "requirements"],
                     "properties": {
                         "problem": {"type": "string"},
-                        "original": {"type": "string"},
+                        "original": {"type": "string", "minLength": 1, "maxLength": 240},
                         "task": {"type": "string"},
                         "requirements": {"type": "array", "minItems": 1, "items": {"type": "string"}},
                     },
@@ -198,7 +198,7 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
                 "required": ["title", "evidence", "why", "action"],
                 "properties": {
                     "title": {"type": "string"},
-                    "evidence": {"type": "string"},
+                    "evidence": {"type": "string", "minLength": 1, "maxLength": 240},
                     "why": {"type": "string"},
                     "action": {"type": "string"},
                 },
@@ -216,7 +216,42 @@ SCORING_DECISION_JSON_SCHEMA: dict[str, Any] = {
         "additionalProperties": False,
         "required": ["criteria", "uncertainty"],
         "properties": {
-            "criteria": deepcopy(EXAMINER_JSON_SCHEMA["schema"]["properties"]["criteria"]),
+            "criteria": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "criterion", "score", "reason", "positive_evidence",
+                        "limitation_evidence", "limitation_frequency",
+                        "readability_impact", "next_band_limit",
+                    ],
+                    "properties": {
+                        "criterion": {"type": "string", "enum": list(CRITERIA)},
+                        "score": {"type": "integer", "minimum": 0, "maximum": 9},
+                        "reason": {"type": "string"},
+                        "positive_evidence": {
+                            "type": "array", "minItems": 1, "maxItems": 3,
+                            "items": {"type": "string", "minLength": 1, "maxLength": 240},
+                        },
+                        "limitation_evidence": {
+                            "type": "array", "minItems": 0, "maxItems": 3,
+                            "items": {"type": "string", "minLength": 1, "maxLength": 240},
+                        },
+                        "limitation_frequency": {
+                            "type": "string",
+                            "enum": ["isolated", "occasional", "recurring", "pervasive"],
+                        },
+                        "readability_impact": {
+                            "type": "string",
+                            "enum": ["none", "minor", "intermittent", "severe"],
+                        },
+                        "next_band_limit": {"type": "string"},
+                    },
+                },
+            },
             "uncertainty": {
                 "type": "object",
                 "additionalProperties": False,
@@ -310,19 +345,52 @@ def validate_scoring_decision(data: dict[str, Any], essay: str) -> dict[str, Any
     labels = [item.get("criterion") for item in criteria if isinstance(item, dict)]
     if sorted(labels) != sorted(CRITERIA):
         raise ExaminerResultError("The examiner must return each IELTS criterion exactly once.")
+    external_criteria: list[dict[str, Any]] = []
     for item in criteria:
         score = item.get("score")
         if not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 9:
             raise ExaminerResultError("Criterion scores must be whole numbers from 0 to 9.")
-        evidence = item.get("evidence")
-        if not isinstance(evidence, list) or not evidence:
-            raise ExaminerResultError(f"{item['criterion']} has no essay evidence.")
-        if not all(_exact_quote_is_present(str(quote), essay) for quote in evidence):
+        positive = item.get("positive_evidence")
+        limitations = item.get("limitation_evidence")
+        if not isinstance(positive, list) or not positive:
+            raise ExaminerResultError(f"{item['criterion']} has no positive essay evidence.")
+        if not isinstance(limitations, list) or (score < 9 and not limitations):
+            raise ExaminerResultError(f"{item['criterion']} has no limitation essay evidence.")
+        frequency = item.get("limitation_frequency")
+        impact = item.get("readability_impact")
+        if frequency not in {"isolated", "occasional", "recurring", "pervasive"}:
+            raise ExaminerResultError(f"{item['criterion']} has an invalid limitation frequency.")
+        if impact not in {"none", "minor", "intermittent", "severe"}:
+            raise ExaminerResultError(f"{item['criterion']} has an invalid readability impact.")
+        if frequency in {"recurring", "pervasive"} and len(limitations) < 2:
             raise ExaminerResultError(
-                f"Every {item['criterion']} evidence item must be present in the essay."
+                f"{item['criterion']} claims recurring limitations without multiple exact examples."
             )
+        if (
+            item["criterion"] == "Grammatical Range and Accuracy"
+            and score <= 6
+            and frequency in {"isolated", "occasional"}
+            and impact in {"none", "minor"}
+        ):
+            raise ExaminerResultError(
+                "A GRA score of 6 or below is inconsistent with only isolated/occasional "
+                "minor limitations; reconsider the descriptor boundary without auto-adjusting."
+            )
+        evidence = [*positive, *limitations]
+        if not all(_exact_quote_is_present(str(quote), essay) for quote in evidence):
+            raise ExaminerResultError(f"Every {item['criterion']} evidence item must be present in the essay.")
         if not str(item.get("reason", "")).strip() or not str(item.get("next_band_limit", "")).strip():
             raise ExaminerResultError(f"{item['criterion']} lacks a complete descriptor explanation.")
+        combined_evidence = list(dict.fromkeys(str(quote) for quote in evidence))
+        external_criteria.append(
+            {
+                "criterion": item["criterion"],
+                "score": score,
+                "reason": item["reason"],
+                "evidence": combined_evidence,
+                "next_band_limit": item["next_band_limit"],
+            }
+        )
     uncertainty = data.get("uncertainty")
     if not isinstance(uncertainty, dict):
         raise ExaminerResultError("The scoring response is missing uncertainty metadata.")
@@ -335,7 +403,8 @@ def validate_scoring_decision(data: dict[str, Any], essay: str) -> dict[str, Any
     if level == "material" and direction == "none":
         raise ExaminerResultError("Material uncertainty must identify an adjacent-band direction.")
     normalized = deepcopy(data)
-    normalized["overall_band"] = calculate_overall(criteria)
+    normalized["criteria"] = external_criteria
+    normalized["overall_band"] = calculate_overall(external_criteria)
     return normalized
 
 
@@ -348,6 +417,35 @@ def estimated_band_range(scoring: dict[str, Any]) -> tuple[float, float]:
     if uncertainty["adjacent_band_direction"] == "lower":
         return max(0.0, overall - 0.5), overall
     return overall, min(9.0, overall + 0.5)
+
+
+def drop_unverified_optional_teaching_items(
+    data: dict[str, Any], essay: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Drop unsupported optional coaching items after a strict retry, never inventing replacements."""
+    normalized = deepcopy(data)
+    removed: list[str] = []
+    evidence_fields = {
+        "priorities": "evidence",
+        "problems": "evidence",
+        "sentence_corrections": "original",
+        "sentence_training": "original",
+        "logic_training": "original",
+    }
+    for collection, field in evidence_fields.items():
+        items = normalized.get(collection)
+        if not isinstance(items, list):
+            continue
+        kept = [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and _exact_quote_is_present(str(item.get(field, "")), essay)
+        ]
+        if len(kept) != len(items):
+            removed.append(collection)
+            normalized[collection] = kept
+    return normalized, removed
 
 
 def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]:
@@ -377,12 +475,19 @@ def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]
             raise ExaminerResultError(f"{item['criterion']} has no essay evidence.")
         if not all(_exact_quote_is_present(str(quote), essay) for quote in evidence):
             raise ExaminerResultError(f"Every {item['criterion']} evidence item must be present in the essay.")
+    for collection in ("priorities", "problems"):
+        for coaching_item in data.get(collection, []):
+            if not _exact_quote_is_present(str(coaching_item.get("evidence", "")), essay):
+                raise ExaminerResultError(f"A {collection} item does not quote the submitted essay.")
     for correction in data.get("sentence_corrections", []):
-        if not _quote_is_present(str(correction.get("original", "")), essay):
+        if not _exact_quote_is_present(str(correction.get("original", "")), essay):
             raise ExaminerResultError("A sentence correction does not quote the submitted essay.")
     for task in data.get("sentence_training", []):
-        if not _quote_is_present(str(task.get("original", "")), essay):
+        if not _exact_quote_is_present(str(task.get("original", "")), essay):
             raise ExaminerResultError("A sentence training task does not quote the submitted essay.")
+    for task in data.get("logic_training", []):
+        if not _exact_quote_is_present(str(task.get("original", "")), essay):
+            raise ExaminerResultError("A logic training task does not quote the submitted essay.")
     normalized = dict(data)
     normalized["overall_band"] = calculate_overall(criteria)
     normalized["schema_version"] = SCHEMA_VERSION

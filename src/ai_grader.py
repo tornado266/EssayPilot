@@ -17,6 +17,7 @@ from src.report_schema import (
     SCORING_DECISION_JSON_SCHEMA,
     SKILL_VERSION,
     TEACHING_FEEDBACK_JSON_SCHEMA,
+    drop_unverified_optional_teaching_items,
     estimated_band_range,
     validate_examiner_result,
     validate_scoring_decision,
@@ -143,10 +144,13 @@ def grade_essay_package(
     topic: str,
     essay: str,
     audit_hook: Callable[[dict[str, Any]], None] | None = None,
+    reasoning_effort: str = "none",
 ) -> dict[str, object]:
     """Return a validated, versioned Task 2 examiner package from the fixed model."""
     if task_type != "Task 2":
         raise ValueError("EssayPilot V2 currently supports IELTS Writing Task 2 only.")
+    if reasoning_effort not in {"none", "low"}:
+        raise ValueError("reasoning_effort must be 'none' or 'low'.")
     if not load_skill_scoring_rules().strip():
         raise RuntimeError(
             "The installed IELTS scoring Skill could not be loaded. Grading was stopped."
@@ -155,6 +159,62 @@ def grade_essay_package(
     _, api_key, base_url = get_provider_config("OpenAI")
     client = build_client("OpenAI")
     scoring_prompt = build_scoring_prompt(task_type, topic, essay)
+    observed_responses: list[Any] = []
+
+    def response_usage(response: Any) -> dict[str, int | None]:
+        usage = getattr(response, "usage", None)
+        return {
+            "input_tokens": getattr(usage, "prompt_tokens", None),
+            "output_tokens": getattr(usage, "completion_tokens", None),
+            "total_tokens": getattr(usage, "total_tokens", None),
+        }
+
+    def validated_completion(
+        *,
+        stage: str,
+        messages: list[dict[str, str]],
+        response_schema: dict[str, Any],
+        max_completion_tokens: int,
+        validator: Callable[[dict[str, Any], int], dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Make one model decision, retrying once only for invalid structured output."""
+        last_error: Exception | None = None
+        for attempt in (1, 2):
+            started = time.perf_counter()
+            response = client.chat.completions.create(
+                model=PRODUCTION_MODEL_SNAPSHOT,
+                messages=messages,
+                response_format={"type": "json_schema", "json_schema": response_schema},
+                max_completion_tokens=max_completion_tokens,
+                reasoning_effort=reasoning_effort,
+            )
+            observed_responses.append(response)
+            raw = response.choices[0].message.content or ""
+            event = {
+                "stage": stage,
+                "attempt": attempt,
+                "model": PRODUCTION_MODEL_SNAPSHOT,
+                "reasoning_effort": reasoning_effort,
+                "messages": messages,
+                "raw_response": raw,
+                "latency_seconds": round(time.perf_counter() - started, 3),
+                "usage": response_usage(response),
+            }
+            try:
+                result = validator(json.loads(raw), attempt)
+            except (json.JSONDecodeError, ValueError, RuntimeError) as exc:
+                last_error = exc
+                event["validation_error"] = f"{type(exc).__name__}: {exc}"
+                if audit_hook is not None:
+                    audit_hook(event)
+                if attempt == 2:
+                    raise
+                continue
+            if audit_hook is not None:
+                audit_hook(event)
+            return result
+        raise RuntimeError("Structured response validation failed.") from last_error
+
     try:
         scoring_messages = [
             {
@@ -167,27 +227,13 @@ def grade_essay_package(
             },
             {"role": "user", "content": scoring_prompt},
         ]
-        scoring_started = time.perf_counter()
-        scoring_response = client.chat.completions.create(
-            model=PRODUCTION_MODEL_SNAPSHOT,
+        scoring = validated_completion(
+            stage="scoring",
             messages=scoring_messages,
-            response_format={"type": "json_schema", "json_schema": SCORING_DECISION_JSON_SCHEMA},
+            response_schema=SCORING_DECISION_JSON_SCHEMA,
             max_completion_tokens=5000,
-            reasoning_effort="none",
+            validator=lambda payload, _attempt: validate_scoring_decision(payload, essay),
         )
-        scoring_raw = scoring_response.choices[0].message.content or ""
-        if audit_hook is not None:
-            audit_hook(
-                {
-                    "stage": "scoring",
-                    "model": PRODUCTION_MODEL_SNAPSHOT,
-                    "reasoning_effort": "none",
-                    "messages": scoring_messages,
-                    "raw_response": scoring_raw,
-                    "latency_seconds": round(time.perf_counter() - scoring_started, 3),
-                }
-            )
-        scoring = validate_scoring_decision(json.loads(scoring_raw), essay)
 
         teaching_prompt = build_teaching_prompt(task_type, topic, essay, scoring)
         teaching_messages = [
@@ -200,32 +246,26 @@ def grade_essay_package(
             },
             {"role": "user", "content": teaching_prompt},
         ]
-        teaching_started = time.perf_counter()
-        teaching_response = client.chat.completions.create(
-            model=PRODUCTION_MODEL_SNAPSHOT,
+
+        sanitized_teaching_fields: list[str] = []
+
+        def validate_teaching(teaching: dict[str, Any], attempt: int) -> dict[str, Any]:
+            if "criteria" in teaching or "overall_band" in teaching:
+                raise ValueError("The teaching stage attempted to modify locked scores.")
+            if attempt == 2:
+                teaching, removed = drop_unverified_optional_teaching_items(teaching, essay)
+                sanitized_teaching_fields.extend(removed)
+            merged = dict(teaching)
+            merged["criteria"] = scoring["criteria"]
+            return validate_examiner_result(merged, essay)
+
+        structured = validated_completion(
+            stage="teaching",
             messages=teaching_messages,
-            response_format={"type": "json_schema", "json_schema": TEACHING_FEEDBACK_JSON_SCHEMA},
+            response_schema=TEACHING_FEEDBACK_JSON_SCHEMA,
             max_completion_tokens=14000,
-            reasoning_effort="none",
+            validator=validate_teaching,
         )
-        teaching_raw = teaching_response.choices[0].message.content or ""
-        if audit_hook is not None:
-            audit_hook(
-                {
-                    "stage": "teaching",
-                    "model": PRODUCTION_MODEL_SNAPSHOT,
-                    "reasoning_effort": "none",
-                    "messages": teaching_messages,
-                    "raw_response": teaching_raw,
-                    "latency_seconds": round(time.perf_counter() - teaching_started, 3),
-                }
-            )
-        teaching = json.loads(teaching_raw)
-        if "criteria" in teaching or "overall_band" in teaching:
-            raise ValueError("The teaching stage attempted to modify locked scores.")
-        merged = dict(teaching)
-        merged["criteria"] = scoring["criteria"]
-        structured = validate_examiner_result(merged, essay)
     except APIStatusError as exc:
         raise AIGraderError(
             provider="OpenAI",
@@ -252,17 +292,16 @@ def grade_essay_package(
             original_error=exc,
         ) from exc
 
-    scoring_usage = getattr(scoring_response, "usage", None)
-    teaching_usage = getattr(teaching_response, "usage", None)
-
     def combined_usage(name: str) -> int | None:
-        values = [getattr(item, name, None) for item in (scoring_usage, teaching_usage)]
+        values = [getattr(getattr(response, "usage", None), name, None) for response in observed_responses]
         return sum(int(value) for value in values if value is not None) if any(value is not None for value in values) else None
 
     band_range = estimated_band_range(scoring)
     return {
         "model": PRODUCTION_MODEL_SNAPSHOT,
         "model_family": PRODUCTION_MODEL,
+        "reasoning_effort": reasoning_effort,
+        "sanitized_teaching_fields": sorted(set(sanitized_teaching_fields)),
         "schema_version": SCHEMA_VERSION,
         "prompt_version": PROMPT_VERSION,
         "skill_version": SKILL_VERSION,

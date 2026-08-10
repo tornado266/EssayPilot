@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
+
+from src.text_utils import text_diagnostics
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1] / "skills" / "ielts-writing"
@@ -46,9 +47,8 @@ def _task2_only(task_type: str) -> None:
 
 
 def _text_diagnostics(essay: str) -> str:
-    words = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", essay)
-    paragraphs = [paragraph for paragraph in essay.splitlines() if paragraph.strip()]
-    return f"word_count={len(words)}; non_empty_paragraphs={len(paragraphs)}"
+    diagnostics = text_diagnostics(essay)
+    return "; ".join(f"{name}={value}" for name, value in diagnostics.items())
 
 
 def build_scoring_prompt(task_type: str, topic: str, essay: str) -> str:
@@ -66,23 +66,32 @@ Decision contract:
 - Return JSON matching the supplied score-only schema; never return Markdown.
 - Judge Task Response, Coherence and Cohesion, Lexical Resource, and Grammatical Range and Accuracy independently.
 - Return each criterion exactly once with a whole-number band from 0 to 9.
-- In `reason`, describe Current performance in concise Chinese and identify the descriptor features demonstrated.
-- In `next_band_limit`, explain Why not the next band in concise Chinese. If the score is 9, state that no higher public band exists.
-- Every `evidence` value must be an exact, unedited substring of the submitted English essay. Include at least one item for every criterion.
+- For each criterion, first identify the higher-band features sustained across the response; only then determine which descriptor limitation prevents the adjacent higher band.
+- In `reason`, describe the sustained current performance in concise Chinese, including the demonstrated descriptor features before limitations.
+- Put only short, contiguous, exact, unedited essay substrings in `positive_evidence` and `limitation_evidence` (normally 3-25 words and never more than one sentence per item). Never join separate fragments, add separators such as `/` or `','`, add ellipses, correct text, or paraphrase. Provide at least one positive item for every criterion and at least one limitation item unless the criterion score is 9.
+- Classify the observed limitation frequency as isolated, occasional, recurring, or pervasive and its readability impact as none, minor, intermittent, or severe. A recurring/pervasive claim requires at least two separate exact examples.
+- In `next_band_limit`, explain the descriptor boundary to the next band in concise Chinese. If the score is 9, state that no higher public band exists.
 - Do not return or infer an Overall Band. EssayPilot calculates it after validation.
 - Set uncertainty to `material` only when the text genuinely supports an adjacent whole-band interpretation; identify `lower` or `higher`. Otherwise use `low` and `none`.
 - Text diagnostics are audit context only. They cannot deduct points, cap a criterion, or override descriptor evidence.
 - Do not treat a stylistic preference, a named sentence construction, apparent memorisation, or suspected authorship as an automatic scoring rule.
+- Judge errors by frequency, range, effect on readability, and the proportion of error-free sentences. A single local error cannot determine a band.
+- Never let the weakest criterion pull down another criterion. Do not count one spelling error in both LR and GRA, use Band 9 perfection as the threshold for Band 7, or let teaching advice decide a score.
+- Sustained Band 7 or Band 8 features must receive their descriptor band even when isolated imperfections remain.
+- Occasional omissions/lapses are compatible with Band 8 in TR, CC, and LR; a few non-impairing errors are compatible with Band 8 in GRA. Band 6 requires limitations characteristic of Band 6 across the response, not merely the existence of an imperfection.
+- In GRA specifically, isolated or occasional minor errors that do not reduce clarity cannot support Band 6. Do not label the errors occasional/minor and then score as though they were recurring or reduced control across the response.
 
 Audit diagnostics:
 {_text_diagnostics(essay)}
 
-Essay question:
+Essay question (verbatim between markers):
+<<<BEGIN_ESSAY_QUESTION>>>
 {topic}
+<<<END_ESSAY_QUESTION>>>
 
-Student essay:
-{essay}
-""".strip()
+Student essay (verbatim between markers):
+<<<BEGIN_STUDENT_ESSAY>>>
+""" + essay + "\n<<<END_STUDENT_ESSAY>>>"
 
 
 def build_teaching_prompt(
@@ -103,19 +112,21 @@ Teaching contract:
 - Return JSON matching the supplied teaching-only schema; never return Markdown.
 - Do not output `criteria`, criterion scores, or an Overall Band, and do not revise or reinterpret the locked decision.
 - Organise coaching conceptually as: Current performance, Why not the next band, and Next training action. The first two are already locked; make priorities and actions directly address those gaps.
-- Use exact unedited essay substrings in every coaching `evidence`, `sentence_corrections.original`, `sentence_training.original`, and `logic_training.original` field.
+- Use one short, contiguous, exact, unedited essay substring in every coaching `evidence`, `sentence_corrections.original`, `sentence_training.original`, and `logic_training.original` field. Never join fragments, use `/`, insert line breaks between separate quotations, or use ellipses.
 - Use Chinese for explanations and instructions. Keep submitted quotations, improved sentences, the model rewrite, reusable expressions, examples, the next IELTS question, sentence patterns, and sentence-training references in English.
-- Create 2-3 priorities and 2-5 main problems. Make actions specific rather than prescribing a construction as a scoring requirement.
-- Create 3-8 sentence corrections, paragraph feedback, a realistic Band 7.5 model rewrite close to the student's ideas, 6-8 transferable expressions, one next practice task, 2-4 sentence tasks, and 1-3 logic tasks.
+- Return only genuine issues supported by the essay. Any of priorities, problems, sentence corrections, paragraph feedback, sentence tasks, or logic tasks may be an empty list; never invent a defect to fill a quota.
+- Make actions specific rather than prescribing a construction as a scoring requirement. Also create a realistic Band 7.5 model rewrite close to the student's ideas, 6-8 transferable expressions, and one next practice task.
 - The learner should attempt training before using references; references are product-layer support, not scoring evidence.
 - Classify the topic using the schema enum and use reusable error categories in `error_tags`.
 
-Essay question:
+Essay question (verbatim between markers):
+<<<BEGIN_ESSAY_QUESTION>>>
 {topic}
+<<<END_ESSAY_QUESTION>>>
 
-Student essay:
-{essay}
-""".strip()
+Student essay (verbatim between markers):
+<<<BEGIN_STUDENT_ESSAY>>>
+""" + essay + "\n<<<END_STUDENT_ESSAY>>>"
 
 
 def build_structured_grading_prompt(task_type: str, topic: str, essay: str) -> str:

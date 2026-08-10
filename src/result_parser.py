@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any
 
@@ -38,7 +39,7 @@ def _extract_json_object(text: str) -> str:
 
 def parse_band(value: Any) -> float | None:
     """Return a valid IELTS band score, or None when parsing is not possible."""
-    if value is None:
+    if value is None or isinstance(value, bool):
         return None
 
     try:
@@ -49,8 +50,8 @@ def parse_band(value: Any) -> float | None:
             return None
         score = float(match.group(0))
 
-    if 0 <= score <= 9:
-        return round(score * 2) / 2
+    if math.isfinite(score) and 0 <= score <= 9 and score * 2 == int(score * 2):
+        return score
     return None
 
 

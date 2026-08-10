@@ -28,6 +28,7 @@ from reportlab.platypus import (
 )
 
 from src.result_parser import parse_band
+from src.report_schema import ExaminerResultError, calculate_overall
 
 
 RECORDS_DIR = Path("records")
@@ -442,7 +443,15 @@ def save_markdown_record(
 
     parsed_result = parsed_result or {}
     parsed_data = parsed_result.get("data", {}) if parsed_result.get("ok") else {}
-    overall_band = parse_band(parsed_data.get("overall_band"))
+    overall_band = None
+    structured_criteria = (examiner_data or {}).get("criteria")
+    if isinstance(structured_criteria, list):
+        try:
+            overall_band = calculate_overall(structured_criteria)
+        except ExaminerResultError:
+            overall_band = None
+    if overall_band is None:
+        overall_band = parse_band(parsed_data.get("overall_band"))
     if overall_band is None:
         score_match = SCORE_PATTERN.search(report)
         overall_band = parse_band(score_match.group(1)) if score_match else None
