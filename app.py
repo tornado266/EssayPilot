@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import html
+import json
 import re
 import uuid
 from collections import Counter
@@ -37,7 +38,17 @@ from src.learning_assets import (
 from src.expression_catalog import FUNCTION_LABELS, TOPIC_LABELS, load_expression_catalog
 from src.share_card import build_result_card_svg
 from src.storage import markdown_to_pdf, save_markdown_record
-from src.report_schema import ExaminerResultError, PROMPT_VERSION, calculate_overall, score_snapshot, submission_hash
+from src.report_schema import (
+    ExaminerResultError,
+    REPORT_PROMPT_VERSION,
+    SCORING_PROMPT_VERSION,
+    SCORING_SKILL_VERSION,
+    calculate_overall,
+    format_practice_band_interval,
+    learner_safe_report_markdown,
+    score_snapshot,
+    submission_hash,
+)
 from src.text_utils import count_words, word_count_warning
 
 
@@ -1013,12 +1024,16 @@ def render_score_change(
     draft_2_scores: dict[str, float | None],
 ) -> None:
     """Show compact Draft 1 to Draft 2 score changes."""
-    st.subheader("分数变化")
+    st.subheader("估分区间与四项变化")
     for label in draft_1_scores:
         before = draft_1_scores.get(label)
         after = draft_2_scores.get(label)
-        before_text = f"{before:.1f}" if before is not None else "-"
-        after_text = f"{after:.1f}" if after is not None else "-"
+        if label == "Overall Band":
+            before_text = format_practice_band_interval(before)
+            after_text = format_practice_band_interval(after)
+        else:
+            before_text = f"{before:.0f}" if before is not None else "-"
+            after_text = f"{after:.0f}" if after is not None else "-"
         st.write(f"**{SCORE_DISPLAY_NAMES.get(label, label)}：** {before_text} → {after_text}")
 
 
@@ -1043,14 +1058,19 @@ def render_draft_2_training(
 
     st.markdown("#### 第一稿简要结果")
     score_columns = st.columns(5)
-    short_labels = ["总分", "TR", "CC", "LR", "GRA"]
+    short_labels = ["估分区间", "TR", "CC", "LR", "GRA"]
     for column, short_label, score in zip(
         score_columns,
         short_labels,
         draft_1["scores"].values(),
         strict=False,
     ):
-        column.metric(short_label, f"{score:.1f}" if score is not None else "-")
+        value = (
+            format_practice_band_interval(score)
+            if short_label == "估分区间"
+            else (f"{score:.0f}" if score is not None else "-")
+        )
+        column.metric(short_label, value)
 
     st.markdown("#### 本次重写重点")
     for focus in draft_training_focus(draft_1["scores"]):
@@ -1291,9 +1311,9 @@ def extract_paragraph_strengths(markdown: str) -> list[str]:
 
 
 def render_overall_band(score: float | None) -> None:
-    """Render the hero-style overall IELTS band card."""
+    """Render the learner-safe practice interval without the internal point score."""
     color, background = get_band_color(score)
-    score_text = f"{score:.1f}" if score is not None else "等待评分"
+    score_text = format_practice_band_interval(score)
     st.markdown(
         f"""
         <div style="
@@ -1306,13 +1326,13 @@ def render_overall_band(score: float | None) -> None:
             margin-bottom:1rem;
         ">
             <div style="font-size:0.95rem;font-weight:700;color:#31545c;">
-                雅思写作预估总分
+                雅思写作练习估分区间
             </div>
             <div style="font-size:4rem;line-height:1;font-weight:900;color:{color};">
                 {score_text}
             </div>
             <div style="font-size:0.9rem;color:#5f7378;margin-top:0.35rem;">
-                根据四项整数分由程序统一计算
+                精确 Overall 仅用于内部一致性；四项整数分仍可查看
             </div>
         </div>
         """,
@@ -1824,6 +1844,15 @@ def list_correction_history(user_id: str) -> list[dict[str, object]]:
         task_match = re.search(r"- (?:任务类型|Task Type):\s*(.+)", markdown)
         words_match = re.search(r"- Word Count:\s*(\d+)", markdown)
 
+        score = calculate_overall_band(markdown)
+        json_path = path.with_suffix(".json")
+        if score is None and json_path.exists():
+            try:
+                metadata = json.loads(json_path.read_text(encoding="utf-8"))
+                stored_score = metadata.get("overall_band") if isinstance(metadata, dict) else None
+                score = float(stored_score) if isinstance(stored_score, (int, float)) else None
+            except (OSError, ValueError, json.JSONDecodeError):
+                score = None
         history.append(
             {
                 "file": path.name,
@@ -1831,7 +1860,7 @@ def list_correction_history(user_id: str) -> list[dict[str, object]]:
                 "created_at": created_match.group(1) if created_match else path.stem,
                 "task_type": task_match.group(1) if task_match else "未知",
                 "word_count": int(words_match.group(1)) if words_match else None,
-                "score": calculate_overall_band(markdown),
+                "score": score,
             }
         )
 
@@ -1839,60 +1868,30 @@ def list_correction_history(user_id: str) -> list[dict[str, object]]:
 
 
 def render_history(user_id: str) -> None:
-    """Render local score history and trend chart."""
+    """Render local history without exposing point Overall estimates."""
     history = list_correction_history(user_id)
     scored_history = [item for item in history if item["score"] is not None]
     training_history = list_draft_training_history(user_id)
 
-    st.subheader("历史分数趋势")
+    st.subheader("历史练习估分")
     if not scored_history:
         st.info("还没有评分记录。完成一次批改后，这里会显示你的分数趋势。")
     else:
-        chart_data = pd.DataFrame(
-            {
-                "练习日期": [item["created_at"] for item in scored_history[-10:]],
-                "雅思分数": [item["score"] for item in scored_history[-10:]],
-            }
-        )
-        trend_chart = (
-            alt.Chart(chart_data)
-            .mark_line(point=alt.OverlayMarkDef(filled=True, size=85), strokeWidth=3)
-            .encode(
-                x=alt.X(
-                    "练习日期:N",
-                    sort=None,
-                    title=None,
-                    axis=alt.Axis(labelAngle=-25, labelLimit=150),
-                ),
-                y=alt.Y(
-                    "雅思分数:Q",
-                    title="雅思分数",
-                    scale=alt.Scale(domain=[3, 9], clamp=True),
-                    axis=alt.Axis(values=[3, 4, 5, 6, 7, 8, 9]),
-                ),
-                tooltip=[
-                    alt.Tooltip("练习日期:N", title="练习日期"),
-                    alt.Tooltip("雅思分数:Q", title="雅思分数", format=".1f"),
-                ],
+        for item in reversed(scored_history[-10:]):
+            st.caption(
+                f"{item['created_at']} · 练习估分区间 "
+                f"{format_practice_band_interval(item['score'])}"
             )
-            .properties(height=300)
-            .configure_view(strokeWidth=0)
-            .configure_axis(gridColor="#d9e8ea", labelColor="#526d73", titleColor="#294e56")
-            .configure_line(color="#287d86")
-            .configure_point(color="#e87961")
-        )
-        st.altair_chart(trend_chart, width="stretch")
-        st.caption("显示最近 10 次可以读取分数的批改记录。")
 
     if training_history:
         st.subheader("第二稿训练历史")
         for record in reversed(training_history[-5:]):
             draft_1_score = record.get("draft_1_scores", {}).get("Overall Band")
             draft_2_score = record.get("draft_2_scores", {}).get("Overall Band")
-            before = f"{draft_1_score:.1f}" if isinstance(draft_1_score, (int, float)) else "-"
-            after = f"{draft_2_score:.1f}" if isinstance(draft_2_score, (int, float)) else "-"
+            before = format_practice_band_interval(draft_1_score) if isinstance(draft_1_score, (int, float)) else "-"
+            after = format_practice_band_interval(draft_2_score) if isinstance(draft_2_score, (int, float)) else "-"
             with st.expander(
-                f"第一稿 → 第二稿 · 总分：{before} → {after}",
+                f"第一稿 → 第二稿 · 估分区间：{before} → {after}",
                 expanded=False,
             ):
                 st.caption(str(record.get("timestamp", "")))
@@ -1971,13 +1970,13 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
                 latest_revision_gain = float(revised) - float(original)
     render_dashboard_stats(
         [
-            ("最新总分", f"{latest_score:.1f}", "IELTS Task 2"),
+            ("最新估分区间", format_practice_band_interval(latest_score), "IELTS Task 2"),
             ("当前薄弱项", weakest, f"下一优先：{next_weakest}" if next_weakest else "根据最新批改"),
-            ("较上一次", f"{delta:+.1f}" if delta is not None else "暂无对比", "这是首篇记录" if delta is None else "总分变化"),
+            ("较上一次", "已有新记录" if delta is not None else "暂无对比", "这是首篇记录" if delta is None else "请结合四项分观察变化"),
             ("待完成训练", len(pending), "单句与逻辑任务"),
             (
                 "最近第二稿提升",
-                f"{latest_revision_gain:+.1f}" if latest_revision_gain is not None else "暂无",
+                "已完成验证" if latest_revision_gain is not None else "暂无",
                 "提交第二稿后显示" if latest_revision_gain is None else "与第一稿对比",
             ),
         ],
@@ -1985,7 +1984,7 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
     )
 
     essay_data = latest.get("essays") if isinstance(latest.get("essays"), dict) else {}
-    latest_is_legacy = str(latest.get("prompt_version") or "") != PROMPT_VERSION
+    latest_is_legacy = str(latest.get("prompt_version") or "") != REPORT_PROMPT_VERSION
     if latest_is_legacy:
         st.info("最近一份是旧版英文报告。它会继续保留，不会自动消耗 Token 重新生成。")
     if st.button("继续上一次训练", type="primary", use_container_width=True):
@@ -2022,7 +2021,6 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
     tag_counts: Counter[str] = Counter()
     for run in reversed(runs):
         created = str(run.get("created_at", ""))[:10]
-        chart_rows.append({"练习日期": created, "能力维度": "总分", "分数": run.get("overall_band")})
         for item in run.get("criteria") or []:
             if isinstance(item, dict):
                 chart_rows.append({
@@ -2141,7 +2139,7 @@ def render_demo_page() -> None:
     with report_tab:
         st.subheader("评分、诊断与改写")
         score_columns = st.columns(5)
-        demo_scores = [("总分", "7.0"), ("TR", "7"), ("CC", "7"), ("LR", "6"), ("GRA", "7")]
+        demo_scores = [("估分区间", "6.5–8.5"), ("TR", "7"), ("CC", "7"), ("LR", "6"), ("GRA", "7")]
         for column, (label, value) in zip(score_columns, demo_scores):
             with column:
                 render_score_card(label, value, "静态示范")
@@ -2468,17 +2466,34 @@ def grade_submission(
     grading_cache = st.session_state.setdefault("grading_cache", {})
     cached_entry = grading_cache.get(fingerprint)
     package: dict[str, object] | None = None
+    locked_scoring_package: dict[str, object] | None = None
     cloud_ids: dict[str, str] = {}
     reused_result = False
     if isinstance(cached_entry, dict):
         candidate = dict(cached_entry.get("package") or {})
-        if candidate.get("prompt_version") == PROMPT_VERSION:
+        if candidate.get("prompt_version") == REPORT_PROMPT_VERSION:
             package = candidate
             cloud_ids = dict(cached_entry.get("cloud_ids") or {})
             reused_result = bool(package)
+        elif (
+            candidate.get("scoring_prompt_version") == SCORING_PROMPT_VERSION
+            and candidate.get("skill_version") == SCORING_SKILL_VERSION
+            and isinstance(candidate.get("scoring"), dict)
+        ):
+            locked_scoring_package = {
+                "provider": candidate.get("provider") or "OpenAI",
+                "model": candidate.get("model") or PRODUCTION_MODEL,
+                "response_model": candidate.get("response_model"),
+                "system_fingerprint": candidate.get("system_fingerprint"),
+                "reasoning_effort": candidate.get("reasoning_effort") or "none",
+                "prompt_version": SCORING_PROMPT_VERSION,
+                "skill_version": SCORING_SKILL_VERSION,
+                "scoring": candidate["scoring"],
+                "usage": {},
+            }
     if package is None and user is not None:
         try:
-            cached_cloud = store.find_cached_grading(user, fingerprint, PROMPT_VERSION)
+            cached_cloud = store.find_cached_grading(user, fingerprint, REPORT_PROMPT_VERSION)
         except CloudStoreError:
             cached_cloud = None
             st.session_state.cloud_cache_warning = True
@@ -2499,8 +2514,31 @@ def grade_submission(
                 "grading_run_id": str(cached_cloud.get("id") or ""),
             }
             reused_result = True
+        elif locked_scoring_package is None:
+            try:
+                cached_score = store.find_cached_scoring(user, fingerprint, SCORING_PROMPT_VERSION)
+            except CloudStoreError:
+                cached_score = None
+            if cached_score:
+                cached_json = cached_score.get("report_json") or {}
+                if isinstance(cached_json, dict):
+                    locked = cached_json.get("locked_scoring_decision")
+                    if isinstance(locked, dict):
+                        locked_scoring_package = {
+                            "provider": "OpenAI",
+                            "model": str(cached_score.get("model") or PRODUCTION_MODEL),
+                            "prompt_version": SCORING_PROMPT_VERSION,
+                            "skill_version": SCORING_SKILL_VERSION,
+                            "scoring": locked,
+                            "usage": {},
+                        }
     if package is None:
-        package = grade_essay_package(task_type="Task 2", topic=topic, essay=essay)
+        package = grade_essay_package(
+            task_type="Task 2",
+            topic=topic,
+            essay=essay,
+            locked_scoring_package=locked_scoring_package,
+        )
     report = str(package["report"])
     structured = dict(package["structured"])
     scores = score_snapshot(structured)
@@ -2658,6 +2696,7 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
         st.info("还没有可显示的批改报告。")
         st.button("去提交作文", type="primary", on_click=navigate, args=("write",))
         return
+    report = learner_safe_report_markdown(report, structured.get("overall_band"))
     ensure_learning_assets(store, user)
     st.markdown('<div class="section-kicker">批改报告</div>', unsafe_allow_html=True)
     st.title("先看最影响提分的问题")
@@ -2677,6 +2716,8 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                     st.markdown(f"### {item.get('title', '提分重点')}")
                     st.write(item.get("why", ""))
                     st.success(str(item.get("action", "")))
+                    if item.get("success_check"):
+                        st.caption(f"完成检查：{item['success_check']}")
     corrections = [item for item in structured.get("sentence_corrections", []) if isinstance(item, dict)]
     essay = str(st.session_state.get("essay_input") or "")
     overview_tab, correction_tab, full_tab = st.tabs(["重点诊断", "原文问题地图", "完整报告与下载"])
@@ -3023,7 +3064,6 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
         rows: list[dict[str, object]] = []
         for run in reversed(runs):
             date = str(run.get("created_at", ""))[:10]
-            rows.append({"日期": date, "能力": "总分", "分数": run.get("overall_band")})
             for criterion in run.get("criteria") or []:
                 if isinstance(criterion, dict):
                     rows.append({"日期": date, "能力": CRITERION_DISPLAY_NAMES.get(str(criterion.get("criterion")), str(criterion.get("criterion"))), "分数": criterion.get("score")})
@@ -3063,7 +3103,10 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
             revised = revision.get("score_snapshot") if isinstance(revision.get("score_snapshot"), dict) else {}
             before = float(original.get("overall_band") or 0)
             after = float(revised.get("Overall Band") or 0)
-            with st.expander(f"总分 {before:.1f} → {after:.1f}（{after - before:+.1f}）"):
+            with st.expander(
+                f"估分区间 {format_practice_band_interval(before)} → "
+                f"{format_practice_band_interval(after)}"
+            ):
                 st.markdown(str(revision.get("progress_report") or ""))
     with share_tab:
         if not runs:

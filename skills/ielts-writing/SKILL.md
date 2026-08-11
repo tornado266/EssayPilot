@@ -13,6 +13,8 @@ Before scoring, read all three references:
 - `references/assessment-criteria.md`
 - `references/scoring-protocol.md`
 
+Before creating teaching feedback, also read `references/feedback-protocol.md`. This teaching-only reference must not influence a criterion band.
+
 Score Task Response, Coherence and Cohesion, Lexical Resource, and Grammatical Range and Accuracy independently. For each criterion, identify sustained positive features before limitations, then return a whole band from 0 to 9, separate exact positive and limitation quotations, why the sustained performance exceeds the adjacent lower band, and why it does not yet meet the next band. Do not return an Overall Band; the application calculates it.
 
 Treat word count, paragraph count, repetition scans, or similar diagnostics only as prompts to inspect the essay. They cannot deduct points, cap a band, or replace descriptor matching. Do not penalise a stylistic choice merely because another style is preferred.

@@ -13,13 +13,22 @@ import streamlit as st
 from src.prompts import build_scoring_prompt, build_teaching_prompt, load_skill_scoring_rules
 from src.chinese_report import examiner_result_to_markdown
 from src.report_schema import (
+    FEEDBACK_PROMPT_VERSION,
+    FEEDBACK_SKILL_VERSION,
+    OVERALL_CALIBRATION_OFFSET,
+    OVERALL_CALIBRATION_VERSION,
     PROMPT_VERSION,
+    REPORT_PROMPT_VERSION,
     SCHEMA_VERSION,
+    SCORING_PROMPT_VERSION,
+    SCORING_SKILL_VERSION,
     SCORING_DECISION_JSON_SCHEMA,
     SKILL_VERSION,
     TEACHING_FEEDBACK_JSON_SCHEMA,
     drop_unverified_optional_teaching_items,
     estimated_band_range,
+    format_practice_band_interval,
+    restore_score_evidence_roles,
     validate_examiner_result,
     validate_scoring_decision,
 )
@@ -45,8 +54,16 @@ class GradingModelConfig:
     def __post_init__(self) -> None:
         if self.provider not in {"OpenAI", "DeepSeek"}:
             raise ValueError("provider must be 'OpenAI' or 'DeepSeek'.")
-        if self.reasoning_effort not in {"none", "low"}:
-            raise ValueError("reasoning_effort must be 'none' or 'low'.")
+        allowed_efforts = (
+            {"none", "low", "high", "max"}
+            if self.provider == "DeepSeek"
+            else {"none", "low"}
+        )
+        if self.reasoning_effort not in allowed_efforts:
+            allowed = ", ".join(sorted(allowed_efforts))
+            raise ValueError(
+                f"reasoning_effort for {self.provider} must be one of: {allowed}."
+            )
 
 
 def get_runtime_setting(name: str, default: str | None = None) -> str | None:
@@ -213,7 +230,13 @@ def _provider_request(
     if config.reasoning_effort == "none":
         request["extra_body"] = {"thinking": {"type": "disabled"}}
     else:
-        request["reasoning_effort"] = "low"
+        # DeepSeek V4 maps low/medium to high. Send the official effective
+        # value explicitly so calibration metadata matches provider behavior.
+        request["reasoning_effort"] = (
+            "max" if config.reasoning_effort == "max" else "high"
+        )
+        request["extra_body"] = {"thinking": {"type": "enabled"}}
+        request["timeout"] = 180.0
     return request
 
 
@@ -349,6 +372,8 @@ def grade_scoring_decision(
         "system_fingerprint": last_event.get("system_fingerprint"),
         "reasoning_effort": config.reasoning_effort,
         "schema_version": SCHEMA_VERSION,
+        "overall_calibration_version": OVERALL_CALIBRATION_VERSION,
+        "overall_calibration_offset": OVERALL_CALIBRATION_OFFSET,
         "prompt_version": PROMPT_VERSION,
         "skill_version": SKILL_VERSION,
         "graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -367,20 +392,36 @@ def grade_essay_package(
     reasoning_effort: str = "none",
     scoring_provider: str = PRODUCTION_SCORING_PROVIDER,
     scoring_model: str = PRODUCTION_SCORING_MODEL,
+    teaching_provider: str = PRODUCTION_TEACHING_PROVIDER,
+    teaching_model: str = PRODUCTION_TEACHING_MODEL,
+    teaching_reasoning_effort: str = "none",
+    locked_scoring_package: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Return the locked score plus teaching feedback without score mutation."""
-    scoring_package = grade_scoring_decision(
-        task_type=task_type,
-        topic=topic,
-        essay=essay,
-        audit_hook=audit_hook,
-        provider=scoring_provider,
-        model=scoring_model,
-        reasoning_effort=reasoning_effort,
-    )
-    scoring = dict(scoring_package["scoring"])
+    scoring_reused = locked_scoring_package is not None
+    if locked_scoring_package is None:
+        scoring_package = grade_scoring_decision(
+            task_type=task_type,
+            topic=topic,
+            essay=essay,
+            audit_hook=audit_hook,
+            provider=scoring_provider,
+            model=scoring_model,
+            reasoning_effort=reasoning_effort,
+        )
+    else:
+        scoring_package = dict(locked_scoring_package)
+        if scoring_package.get("prompt_version") != SCORING_PROMPT_VERSION:
+            raise ValueError("The cached scoring decision uses a different scoring prompt version.")
+        if scoring_package.get("skill_version") != SCORING_SKILL_VERSION:
+            raise ValueError("The cached scoring decision uses a different scoring Skill version.")
+        cached_scoring = scoring_package.get("scoring")
+        if not isinstance(cached_scoring, dict) or "criteria" not in cached_scoring or "uncertainty" not in cached_scoring:
+            raise ValueError("The cached scoring decision is incomplete.")
+        scoring_package.setdefault("usage", {})
+    scoring = restore_score_evidence_roles(dict(scoring_package["scoring"]))
     teaching_config = GradingModelConfig(
-        PRODUCTION_TEACHING_PROVIDER, PRODUCTION_TEACHING_MODEL, "none"
+        teaching_provider, teaching_model, teaching_reasoning_effort
     )
     teaching_client = build_client(teaching_config.provider)
     teaching_messages = [
@@ -433,6 +474,10 @@ def grade_essay_package(
         for name in ("input_tokens", "output_tokens", "total_tokens")
     }
     band_range = estimated_band_range(scoring)
+    structured["locked_scoring_decision"] = scoring
+    structured["scoring_prompt_version"] = SCORING_PROMPT_VERSION
+    structured["feedback_prompt_version"] = FEEDBACK_PROMPT_VERSION
+    structured["feedback_skill_version"] = FEEDBACK_SKILL_VERSION
     return {
         "provider": scoring_package["provider"],
         "model": scoring_package["model"],
@@ -442,10 +487,17 @@ def grade_essay_package(
         "reasoning_effort": reasoning_effort,
         "teaching_provider": teaching_config.provider,
         "teaching_model": teaching_config.model,
+        "teaching_reasoning_effort": teaching_config.reasoning_effort,
         "sanitized_teaching_fields": sorted(set(sanitized_teaching_fields)),
+        "scoring_reused": scoring_reused,
         "schema_version": SCHEMA_VERSION,
-        "prompt_version": PROMPT_VERSION,
-        "skill_version": SKILL_VERSION,
+        "overall_calibration_version": OVERALL_CALIBRATION_VERSION,
+        "overall_calibration_offset": OVERALL_CALIBRATION_OFFSET,
+        "prompt_version": REPORT_PROMPT_VERSION,
+        "scoring_prompt_version": SCORING_PROMPT_VERSION,
+        "feedback_prompt_version": FEEDBACK_PROMPT_VERSION,
+        "skill_version": SCORING_SKILL_VERSION,
+        "feedback_skill_version": FEEDBACK_SKILL_VERSION,
         "graded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "structured": structured,
         "scoring": scoring,
@@ -539,6 +591,14 @@ def review_sentence_rewrite(
     _, api_key, base_url = get_provider_config(provider)
     client = build_client(provider)
 
+    visible_draft_1_scores = dict(draft_1_scores)
+    visible_draft_2_scores = dict(draft_2_scores)
+    visible_draft_1_scores["Practice Band Interval"] = format_practice_band_interval(
+        visible_draft_1_scores.pop("Overall Band", None)
+    )
+    visible_draft_2_scores["Practice Band Interval"] = format_practice_band_interval(
+        visible_draft_2_scores.pop("Overall Band", None)
+    )
     prompt = f"""
 You are an IELTS Writing sentence coach for a Chinese high school student.
 Review the student's rewritten sentence against the original sentence.
@@ -722,13 +782,13 @@ Essay question:
 {task_question}
 
 Draft 1 scores:
-{draft_1_scores}
+{visible_draft_1_scores}
 
 Draft 1:
 {draft_1_text}
 
 Draft 2 scores:
-{draft_2_scores}
+{visible_draft_2_scores}
 
 Draft 2:
 {draft_2_text}
@@ -750,6 +810,7 @@ Rules:
 - Quote short evidence from both drafts when useful.
 - Never invent changes that are not visible.
 - Do not repeat the score table.
+- Never state or infer a point Overall score; refer only to the supplied practice interval and four criterion scores.
 - Keep the response practical and concise.
 """.strip()
 

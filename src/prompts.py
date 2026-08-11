@@ -16,6 +16,7 @@ SCORING_REFERENCE_PATHS = (
     SKILL_DIR / "references" / "assessment-criteria.md",
     SKILL_DIR / "references" / "scoring-protocol.md",
 )
+FEEDBACK_REFERENCE_PATH = SKILL_DIR / "references" / "feedback-protocol.md"
 OFFICIAL_DESCRIPTOR_VERSION = "updated May 2023"
 
 
@@ -39,6 +40,15 @@ def load_skill_scoring_rules() -> str:
     except OSError:
         return ""
     return "\n\n".join(sections)
+
+
+def load_skill_feedback_rules() -> str:
+    """Load teaching-only rules without changing the scoring prompt or cache."""
+    try:
+        text = FEEDBACK_REFERENCE_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return text
 
 
 def _task2_only(task_type: str) -> None:
@@ -101,10 +111,16 @@ def build_teaching_prompt(
     """Build teaching output from a validated score that cannot be changed."""
     _task2_only(task_type)
     locked = json.dumps(locked_scoring, ensure_ascii=False, indent=2)
+    feedback_rules = load_skill_feedback_rules()
+    if not feedback_rules:
+        raise RuntimeError("The IELTS feedback Skill reference could not be loaded.")
     return f"""Create teaching feedback for a Chinese IELTS learner from the locked scoring decision below.
 
 Locked scoring decision (read-only):
 {locked}
+
+Feedback Skill rules:
+{feedback_rules}
 
 Teaching contract:
 - Return JSON matching the supplied teaching-only schema; never return Markdown.
@@ -112,10 +128,17 @@ Teaching contract:
 - Organise coaching conceptually as: Current performance, Why not the next band, and Next training action. The first two are already locked; make priorities and actions directly address those gaps.
 - Use one short, contiguous, exact, unedited essay substring in every coaching `evidence`, `sentence_corrections.original`, `sentence_training.original`, and `logic_training.original` field. Never join fragments, use `/`, insert line breaks between separate quotations, or use ellipses.
 - Use Chinese for explanations and instructions. Keep submitted quotations, improved sentences, the model rewrite, reusable expressions, examples, the next IELTS question, sentence patterns, and sentence-training references in English.
-- Return only genuine issues supported by the essay. Any of priorities, problems, sentence corrections, paragraph feedback, sentence tasks, or logic tasks may be an empty list; never invent a defect to fill a quota.
+- Return only genuine issues supported by the essay. Problems, sentence corrections, paragraph feedback, and optional extra tasks may be empty; never invent a defect merely to fill those sections.
+- Return exactly two `priorities`, ordered by learning impact. For each, set `criterion` to TR, CC, LR, or GRA; select one allowed `action_type`; write one minimal, concrete `action`; and write an observable `success_check`.
+- For the first priority, choose its criterion first and copy `evidence` exactly from that criterion's locked `limitation_evidence`. Do not shorten, combine, correct, or paraphrase it. The second priority evidence must be one contiguous exact essay substring.
+- For each priority, create at least one `sentence_training` or `logic_training` item whose `original` exactly equals that priority's `evidence`. This is the required feedback-to-training closed loop.
 - Make actions specific rather than prescribing a construction as a scoring requirement. Also create a realistic Band 7.5 model rewrite close to the student's ideas, 6-8 transferable expressions, and one next practice task.
 - The learner should attempt training before using references; references are product-layer support, not scoring evidence.
 - Classify the topic using the schema enum and use reusable error categories in `error_tags`.
+- Select the first priority by learning impact: an unsupported or underdeveloped central idea normally precedes local language repair; a recurring language pattern may precede a minor structural issue. Never infer a flaw only because it is common in the corpus.
+- Missing task response, position, central-idea development, and paragraph logic normally outrank local errors. Isolated spelling, article, punctuation, and word-choice errors belong in sentence corrections; only a recurring readability-affecting language pattern may become a priority.
+- Never claim that IELTS requires a fixed word count, paragraph count, template, number of linking words, vocabulary quota, or named sentence construction.
+- Distinguish a broad observed pattern from a specific subtype. If the essay supports only a general accuracy problem, do not invent a particular article, tense, or preposition diagnosis.
 
 Essay question (verbatim between markers):
 <<<BEGIN_ESSAY_QUESTION>>>

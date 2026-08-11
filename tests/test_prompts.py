@@ -8,6 +8,7 @@ from src.prompts import (
     build_structured_grading_prompt,
     build_teaching_prompt,
     load_band_sample_anchors,
+    load_skill_feedback_rules,
     load_skill_scoring_rules,
 )
 from src.report_schema import TEACHING_FEEDBACK_JSON_SCHEMA
@@ -64,7 +65,11 @@ class PromptTests(unittest.TestCase):
         self.assertIn("Do not output `criteria`", prompt)
         self.assertNotIn("criteria", TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["properties"])
         self.assertNotIn("criteria", TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["required"])
-        self.assertIn("may be an empty list", prompt)
+        self.assertIn("Return exactly two `priorities`", prompt)
+        self.assertIn("Feedback Skill rules", prompt)
+        self.assertIn("exactly two main priorities", load_skill_feedback_rules())
+        self.assertNotIn("kaggle_", prompt.casefold())
+        self.assertNotIn("Examiner_Commen", prompt)
 
     def test_model_prompt_preserves_submitted_text_verbatim(self):
         essay = "First paragraph — don’t collapse.\r\n\r\nSecond-line with a hyphen.\n"

@@ -238,6 +238,31 @@ class SupabaseStore:
             return result[0]
         return None
 
+    def find_cached_scoring(
+        self,
+        user: CloudUser,
+        content_hash: str,
+        scoring_prompt_version: str,
+    ) -> dict[str, Any] | None:
+        """Find a locked score independently of the teaching/report version."""
+        result = self._request(
+            "GET",
+            "/rest/v1/grading_runs",
+            access_token=user.access_token,
+            params={
+                "select": "id,essay_id,report_json,model,skill_version,created_at,essays!inner(content_hash)",
+                "essays.content_hash": f"eq.{content_hash}",
+                "report_json->>scoring_prompt_version": f"eq.{scoring_prompt_version}",
+                "order": "created_at.desc",
+                "limit": "1",
+            },
+        )
+        if isinstance(result, list) and result:
+            report_json = result[0].get("report_json")
+            if isinstance(report_json, dict) and isinstance(report_json.get("locked_scoring_decision"), dict):
+                return result[0]
+        return None
+
     def list_grading_runs(self, user: CloudUser, limit: int = 30) -> list[dict[str, Any]]:
         result = self._request(
             "GET",

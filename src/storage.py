@@ -28,7 +28,12 @@ from reportlab.platypus import (
 )
 
 from src.result_parser import parse_band
-from src.report_schema import ExaminerResultError, calculate_overall
+from src.report_schema import (
+    ExaminerResultError,
+    calculate_overall,
+    format_practice_band_interval,
+    learner_safe_report_markdown,
+)
 
 
 RECORDS_DIR = Path("records")
@@ -68,6 +73,7 @@ def build_markdown_record(
 ) -> str:
     """Build a complete downloadable record without writing it to disk."""
     created_at = created_at or datetime.now()
+    report = learner_safe_report_markdown(report, overall_band)
     return dedent(
         f"""
         # 雅思写作批改记录
@@ -75,7 +81,7 @@ def build_markdown_record(
         - 任务类型: {task_type}
         - 词数: {word_count}
         - 创建时间: {created_at.strftime("%Y-%m-%d %H:%M:%S")}
-        - 总分: {overall_band if overall_band is not None else "暂无"}
+        - 预估分数区间: {format_practice_band_interval(overall_band)}
         - 匿名用户编号: {user_id if user_id is not None else "旧版记录"}
 
         ## 英文作文题目
@@ -249,10 +255,27 @@ def markdown_to_pdf(markdown: str) -> bytes:
     task_type = field(r"^- (?:任务类型|Task Type):\s*(.+)$")
     word_count = field(r"^- (?:词数|Word Count):\s*(.+)$")
     created_at = field(r"^- (?:创建时间|Created At):\s*(.+)$")
+    interval = field(r"^- (?:预估分数区间|Practice Band Interval):\s*(.+)$")
     overall_band = field(r"^- (?:总分|Overall Band):\s*(.+)$")
-    if overall_band in {"暂无", "N/A"}:
+    if interval == "暂无" and overall_band not in {"暂无", "N/A"}:
+        try:
+            interval = format_practice_band_interval(float(overall_band))
+        except (TypeError, ValueError, ExaminerResultError):
+            interval = "暂无"
+    if interval == "暂无":
         score_match = SCORE_PATTERN.search(report)
-        overall_band = score_match.group(1) if score_match else "暂无"
+        if score_match:
+            overall_band = score_match.group(1)
+        interval = (
+            format_practice_band_interval(float(score_match.group(1)))
+            if score_match else "暂无"
+        )
+    if interval != "暂无":
+        try:
+            legacy_point = float(overall_band)
+        except (TypeError, ValueError):
+            legacy_point = None
+        report = learner_safe_report_markdown(report, legacy_point)
 
     question_match = re.search(
         r"## (?:英文作文题目|Essay Question)\s*(.*?)\s*## (?:学生原稿|Student Essay)",
@@ -281,7 +304,7 @@ def markdown_to_pdf(markdown: str) -> bytes:
     ]
 
     score_card = Table(
-        [[Paragraph("总分", score_label), Paragraph(overall_band, score_style)]],
+        [[Paragraph("练习估分区间", score_label), Paragraph(interval, score_style)]],
         colWidths=[55 * mm, 40 * mm],
         rowHeights=[22 * mm],
         hAlign="CENTER",

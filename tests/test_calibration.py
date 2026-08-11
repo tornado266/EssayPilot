@@ -6,6 +6,7 @@ from scripts.run_calibration import (
     EvaluationLabel,
     acceptance_status,
     apply_split_manifest,
+    filter_by_expected_overall,
     gold_metrics,
     normalize_cases,
     repeatability_metrics,
@@ -16,6 +17,27 @@ from scripts.run_calibration import (
 
 
 class CalibrationTests(unittest.TestCase):
+    def test_expected_overall_filter_is_inclusive_and_keeps_model_input_blind(self):
+        cases = [
+            CalibrationCase(
+                model_input=BlindModelInput(f"Question {band}", f"Essay {band}"),
+                evaluation=EvaluationLabel(f"case-{band}", band),
+                source_type="official_internal",
+                provenance="fixture",
+            )
+            for band in (5.0, 5.5, 7.5, 8.0)
+        ]
+
+        selected = filter_by_expected_overall(cases, minimum=5.5, maximum=7.5)
+
+        self.assertEqual(
+            [case.evaluation.expected_overall for case in selected], [5.5, 7.5]
+        )
+        self.assertEqual(
+            [case.model_input.task_prompt for case in selected],
+            ["Question 5.5", "Question 7.5"],
+        )
+
     def test_synthetic_case_is_rejected_as_gold(self):
         case = {
             "id": "synthetic",

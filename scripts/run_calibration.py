@@ -156,6 +156,23 @@ def apply_split_manifest(cases: list[CalibrationCase], payload: dict[str, Any]) 
     return result
 
 
+def filter_by_expected_overall(
+    cases: list[CalibrationCase],
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> list[CalibrationCase]:
+    """Select gold cases by label without adding labels to blind model input."""
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise ValueError("expected overall minimum cannot exceed maximum")
+    return [
+        case
+        for case in cases
+        if case.evaluation.expected_overall is not None
+        and (minimum is None or case.evaluation.expected_overall >= minimum)
+        and (maximum is None or case.evaluation.expected_overall <= maximum)
+    ]
+
+
 def validate_dataset(cases: list[Any], mode: str) -> None:
     """Validate provenance and labels without requiring unavailable criterion gold."""
     normalized = cases if cases and isinstance(cases[0], CalibrationCase) else normalize_cases(cases)
@@ -421,6 +438,13 @@ def _markdown(summary: dict[str, Any], metadata: dict[str, Any]) -> str:
     overall = summary.get("overall", {})
     metric = lambda name: "n/a" if overall.get(name) is None else f"{overall[name]:.3f}"
     rate = lambda name: "n/a" if overall.get(name) is None else f"{overall[name]:.1%}"
+    label_filter = metadata.get("expected_overall_filter") or {}
+    filter_line = (
+        f"- Official Overall filter: {label_filter.get('minimum')} to "
+        f"{label_filter.get('maximum')} (inclusive)\n"
+        if label_filter
+        else ""
+    )
     return f"""# EssayPilot private calibration report
 
 This is a small official-anchor calibration, not a claim of examiner-level accuracy.
@@ -434,7 +458,7 @@ This is a small official-anchor calibration, not a claim of examiner-level accur
 - Skill version: {metadata['skill_version']}
 - Schema version: {metadata['schema_version']}
 - Reasoning effort: {metadata.get('reasoning_effort', 'none')}
-- Estimated API cost: ${metadata.get('usage', {}).get('estimated_usd', 0):.4f}
+{filter_line}- Estimated API cost: ${metadata.get('usage', {}).get('estimated_usd', 0):.4f}
 - Scoring latency total: {metadata.get('stage_latency_seconds', {}).get('scoring', 'not captured')} seconds
 - Teaching latency total: {metadata.get('stage_latency_seconds', {}).get('teaching', 'not captured')} seconds
 
@@ -593,13 +617,19 @@ def main() -> int:
     parser.add_argument("--mode", choices=("repeatability", "gold"), default="repeatability")
     parser.add_argument("--repeats", type=int)
     parser.add_argument("--case", default="")
+    parser.add_argument("--expected-overall-min", type=float)
+    parser.add_argument("--expected-overall-max", type=float)
     parser.add_argument("--split-manifest", type=Path)
     parser.add_argument(
         "--subset", choices=("all", "development", "holdout", "sensitivity"), default="all"
     )
     parser.add_argument("--label", default="calibration")
     parser.add_argument("--output-dir", type=Path, default=ROOT / ".private" / "calibration" / "runs")
-    parser.add_argument("--reasoning-effort", choices=("none", "low"), default="none")
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("none", "low", "high", "max"),
+        default="none",
+    )
     parser.add_argument("--provider", choices=("OpenAI", "DeepSeek"), default="OpenAI")
     parser.add_argument("--model", default=PRODUCTION_MODEL_SNAPSHOT)
     parser.add_argument(
@@ -613,6 +643,17 @@ def main() -> int:
     repeats = args.repeats if args.repeats is not None else (5 if args.mode == "repeatability" else 3)
     if repeats < (2 if args.mode == "repeatability" else 1):
         parser.error("repeatability needs at least 2 runs; gold mode needs at least 1")
+    if any(
+        value is not None and not 0 <= value <= 9
+        for value in (args.expected_overall_min, args.expected_overall_max)
+    ):
+        parser.error("expected overall filters must be between 0 and 9")
+    if (
+        args.expected_overall_min is not None
+        and args.expected_overall_max is not None
+        and args.expected_overall_min > args.expected_overall_max
+    ):
+        parser.error("expected overall minimum cannot exceed maximum")
     default_prices = MODEL_PRICES_USD_PER_MILLION.get((args.provider, args.model))
     if default_prices is None and (
         args.input_price_per_million is None or args.output_price_per_million is None
@@ -631,6 +672,12 @@ def main() -> int:
         cases = [case for case in cases if case.split == args.subset]
     if args.case:
         cases = [case for case in cases if case.evaluation.case_id == args.case]
+    if args.expected_overall_min is not None or args.expected_overall_max is not None:
+        cases = filter_by_expected_overall(
+            cases,
+            minimum=args.expected_overall_min,
+            maximum=args.expected_overall_max,
+        )
     validate_dataset(cases, args.mode)
     if args.dry_run:
         print(json.dumps({
@@ -638,6 +685,10 @@ def main() -> int:
             "mode": args.mode,
             "cases": len(cases),
             "subset": args.subset,
+            "expected_overall_filter": {
+                "minimum": args.expected_overall_min,
+                "maximum": args.expected_overall_max,
+            },
             "provider": args.provider,
             "model": args.model,
             "pipeline": "full-package" if args.full_package else "score-only",
@@ -677,7 +728,10 @@ def main() -> int:
         output_price = default_prices[1] if default_prices else 0.0
     acceptance = (
         acceptance_status(summary, args.subset)
-        if args.mode == "gold" and args.subset in {"development", "holdout"}
+        if args.mode == "gold"
+        and args.subset in {"development", "holdout"}
+        and args.expected_overall_min is None
+        and args.expected_overall_max is None
         else {}
     )
     estimated_cost = total_input / 1_000_000 * input_price + total_output / 1_000_000 * output_price
@@ -716,6 +770,15 @@ def main() -> int:
         "model": args.model,
         "pipeline": "full-package" if args.full_package else "score-only",
         "subset": args.subset,
+        "expected_overall_filter": (
+            {
+                "minimum": args.expected_overall_min,
+                "maximum": args.expected_overall_max,
+            }
+            if args.expected_overall_min is not None
+            or args.expected_overall_max is not None
+            else None
+        ),
         "reasoning_effort": args.reasoning_effort,
         "prompt_version": PROMPT_VERSION,
         "skill_version": SKILL_VERSION,

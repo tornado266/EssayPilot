@@ -21,6 +21,13 @@ Evaluate errors by their frequency, range, effect on readability, and the propor
 
 Occasional omissions or lapses remain compatible with Band 8 in Task Response, Coherence and Cohesion, and Lexical Resource. A few errors that do not impair communication remain compatible with Band 8 in Grammatical Range and Accuracy. Band 6 requires limitations characteristic of Band 6 across the response; the mere existence of an imperfection is not enough. Any claim that a limitation is recurring or pervasive must be supported by multiple exact examples from different locations.
 
+Cross-case audits support four distinctions already implicit in the official descriptors:
+
+- Task coverage and idea development are separate. Merely touching every question part does not demonstrate well-extended support, while one locally thin example does not erase otherwise sustained development.
+- Visible linking words are not the same as logical progression. Judge the relationship and ordering of ideas, not the presence or count of linkers.
+- A repeated or formulaic conclusion primarily affects Task Response when it weakens the position or development; it affects Coherence and Cohesion only when progression or organisation is also impaired.
+- A generic impression of “grammar errors” cannot justify a specific article, tense, preposition, or sentence-structure diagnosis. Select GRA from the demonstrated frequency, range, accuracy, and readability impact across the submitted essay.
+
 ## 3. Evidence rules
 
 Every evidence item must be a short, contiguous, exact, locatable quotation from the submitted response. Keep positive and limitation evidence separate. Do not join distant fragments, add ellipses, invent, silently correct, or paraphrase evidence.
@@ -38,3 +45,7 @@ Validate the four decisions and calculate Overall in application code. After thi
 - Next training action: give a focused exercise that could close that gap.
 
 Teaching advice may recommend any construction or strategy that fits the student's actual need, but it must not present a preferred sentence type, template, vocabulary count, or stylistic choice as a scoring requirement.
+
+## 6. Source hierarchy for future audits
+
+Official public descriptors and verified official examples are authoritative. Low-confidence holistic labels or comments merely claimed to be examiner feedback may reveal a possible failure pattern during offline auditing, but they cannot establish criterion boundaries, back-solve four criterion scores, override an official descriptor, or appear as identifiable anchors in the scoring prompt. Treat their Overall values as metadata and report their evaluation separately.

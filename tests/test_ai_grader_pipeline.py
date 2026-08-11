@@ -10,7 +10,15 @@ from src.ai_grader import (
     grade_essay_package,
     grade_scoring_decision,
 )
-from src.report_schema import SCORING_DECISION_JSON_SCHEMA, TEACHING_FEEDBACK_JSON_SCHEMA
+from src.report_schema import (
+    FEEDBACK_PROMPT_VERSION,
+    REPORT_PROMPT_VERSION,
+    SCORING_DECISION_JSON_SCHEMA,
+    SCORING_PROMPT_VERSION,
+    SCORING_SKILL_VERSION,
+    TEACHING_FEEDBACK_JSON_SCHEMA,
+    validate_scoring_decision,
+)
 from test_report_schema import ESSAY, valid_result
 
 
@@ -80,6 +88,11 @@ class TwoStageGraderTests(unittest.TestCase):
         ):
             package = grade_essay_package(task_type="Task 2", topic="Question", essay=ESSAY)
 
+        self.assertEqual(package["prompt_version"], REPORT_PROMPT_VERSION)
+        self.assertEqual(package["scoring_prompt_version"], SCORING_PROMPT_VERSION)
+        self.assertEqual(package["feedback_prompt_version"], FEEDBACK_PROMPT_VERSION)
+        self.assertIn("locked_scoring_decision", package["structured"])
+
         self.assertEqual(len(completions.calls), 2)
         self.assertEqual(
             completions.calls[0]["response_format"]["json_schema"]["name"],
@@ -89,9 +102,35 @@ class TwoStageGraderTests(unittest.TestCase):
             completions.calls[1]["response_format"]["json_schema"]["name"],
             TEACHING_FEEDBACK_JSON_SCHEMA["name"],
         )
-        self.assertEqual(package["structured"]["overall_band"], 6.5)
-        self.assertEqual(package["estimated_band_range"], [6.5, 6.5])
+        self.assertEqual(package["structured"]["raw_overall_band"], 6.5)
+        self.assertEqual(package["structured"]["overall_band"], 7.0)
+        self.assertEqual(package["estimated_band_range"], [6.5, 8.5])
         self.assertEqual(package["usage"]["total_tokens"], 60)
+
+    def test_feedback_upgrade_reuses_locked_scoring_without_a_scoring_call(self):
+        completions = FakeCompletions([
+            json.dumps(self.teaching_payload(), ensure_ascii=False),
+        ])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        locked = validate_scoring_decision(self.scoring_payload(), ESSAY)
+        cached_package = {
+            "provider": "OpenAI",
+            "model": "gpt-5.4-mini-2026-03-17",
+            "prompt_version": SCORING_PROMPT_VERSION,
+            "skill_version": SCORING_SKILL_VERSION,
+            "scoring": locked,
+            "usage": {},
+        }
+        with patch("src.ai_grader.build_client", return_value=client):
+            package = grade_essay_package(
+                task_type="Task 2",
+                topic="Question",
+                essay=ESSAY,
+                locked_scoring_package=cached_package,
+            )
+        self.assertEqual(len(completions.calls), 1)
+        self.assertTrue(package["scoring_reused"])
+        self.assertEqual(package["structured"]["overall_band"], locked["overall_band"])
         self.assertIn("estimated practice band", package["report"])
 
     def test_private_audit_hook_observes_both_calls_without_changing_them(self):
@@ -161,7 +200,7 @@ class TwoStageGraderTests(unittest.TestCase):
             )
 
         self.assertEqual(len(completions.calls), 1)
-        self.assertEqual(package["structured"]["overall_band"], 6.5)
+        self.assertEqual(package["structured"]["overall_band"], 7.0)
         self.assertNotIn("report", package)
 
     def test_deepseek_uses_json_object_and_disables_thinking(self):
@@ -186,10 +225,100 @@ class TwoStageGraderTests(unittest.TestCase):
         self.assertNotIn("json_schema", str(call["response_format"]))
         self.assertEqual(package["provider"], "DeepSeek")
 
+    def test_full_package_can_explicitly_use_deepseek_none_for_both_stages(self):
+        completions = FakeCompletions([
+            json.dumps(self.scoring_payload(), ensure_ascii=False),
+            json.dumps(self.teaching_payload(), ensure_ascii=False),
+        ])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        with (
+            patch("src.ai_grader.build_client", return_value=client),
+            patch(
+                "src.ai_grader.get_provider_config",
+                return_value=("DEEPSEEK_API_KEY", "key", "https://api.deepseek.com"),
+            ),
+        ):
+            package = grade_essay_package(
+                task_type="Task 2", topic="Question", essay=ESSAY,
+                scoring_provider="DeepSeek", scoring_model="deepseek-v4-pro",
+                teaching_provider="DeepSeek", teaching_model="deepseek-v4-pro",
+                reasoning_effort="none", teaching_reasoning_effort="none",
+            )
+        self.assertEqual(len(completions.calls), 2)
+        self.assertEqual({call["model"] for call in completions.calls}, {"deepseek-v4-pro"})
+        self.assertTrue(all(call["extra_body"] == {"thinking": {"type": "disabled"}} for call in completions.calls))
+        self.assertEqual(package["teaching_provider"], "DeepSeek")
+        self.assertEqual(package["teaching_reasoning_effort"], "none")
+
+    def test_scoring_and_feedback_models_are_configured_independently(self):
+        completions = FakeCompletions([
+            json.dumps(self.scoring_payload(), ensure_ascii=False),
+            json.dumps(self.teaching_payload(), ensure_ascii=False),
+        ])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        with (
+            patch("src.ai_grader.build_client", return_value=client),
+            patch(
+                "src.ai_grader.get_provider_config",
+                side_effect=lambda provider: (
+                    ("DEEPSEEK_API_KEY", "key", "https://api.deepseek.com")
+                    if provider == "DeepSeek"
+                    else ("OPENAI_API_KEY", "key", "https://api.openai.com/v1")
+                ),
+            ),
+        ):
+            package = grade_essay_package(
+                task_type="Task 2", topic="Question", essay=ESSAY,
+                scoring_provider="OpenAI", scoring_model="gpt-5.4-mini-2026-03-17",
+                teaching_provider="DeepSeek", teaching_model="deepseek-v4-pro",
+                reasoning_effort="none", teaching_reasoning_effort="none",
+            )
+        self.assertIn("json_schema", completions.calls[0]["response_format"])
+        self.assertEqual(completions.calls[1]["response_format"], {"type": "json_object"})
+        self.assertEqual(completions.calls[1]["extra_body"], {"thinking": {"type": "disabled"}})
+        self.assertEqual(package["teaching_provider"], "DeepSeek")
+        self.assertEqual(package["teaching_model"], "deepseek-v4-pro")
+
+    def test_deepseek_explicitly_enables_high_and_max_thinking(self):
+        for effort in ("high", "max"):
+            with self.subTest(effort=effort):
+                completions = FakeCompletions([json.dumps(self.scoring_payload())])
+                client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+                with (
+                    patch("src.ai_grader.build_client", return_value=client),
+                    patch(
+                        "src.ai_grader.get_provider_config",
+                        return_value=(
+                            "DEEPSEEK_API_KEY",
+                            "key",
+                            "https://api.deepseek.com",
+                        ),
+                    ),
+                ):
+                    package = grade_scoring_decision(
+                        task_type="Task 2",
+                        topic="Question",
+                        essay=ESSAY,
+                        provider="DeepSeek",
+                        model="deepseek-v4-pro",
+                        reasoning_effort=effort,
+                    )
+
+                call = completions.calls[0]
+                self.assertEqual(call["reasoning_effort"], effort)
+                self.assertEqual(
+                    call["extra_body"], {"thinking": {"type": "enabled"}}
+                )
+                self.assertEqual(call["timeout"], 180.0)
+                self.assertEqual(package["reasoning_effort"], effort)
+
     def test_second_teaching_attempt_drops_only_unsupported_optional_items(self):
         teaching = self.teaching_payload()
-        teaching["priorities"] = [
-            {"title": "x", "evidence": "invented quote", "why": "x", "action": "x"}
+        teaching["problems"] = [
+            {
+                "title": "x", "evidence": "invented quote", "why": "x", "action": "x",
+                "criterion": "TR", "action_type": "repair", "success_check": "x",
+            }
         ]
         completions = FakeCompletions(
             [
@@ -205,8 +334,8 @@ class TwoStageGraderTests(unittest.TestCase):
         ):
             package = grade_essay_package(task_type="Task 2", topic="Question", essay=ESSAY)
 
-        self.assertEqual(package["structured"]["priorities"], [])
-        self.assertEqual(package["sanitized_teaching_fields"], ["priorities"])
+        self.assertEqual(package["structured"]["problems"], [])
+        self.assertEqual(package["sanitized_teaching_fields"], ["problems"])
         self.assertEqual(len(completions.calls), 3)
 
 

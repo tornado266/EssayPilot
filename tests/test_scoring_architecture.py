@@ -12,7 +12,7 @@ from src.report_schema import (
 
 class ScoringArchitectureTests(unittest.TestCase):
     def test_external_schema_stays_compatible_with_integer_criteria(self):
-        self.assertEqual(SCHEMA_VERSION, "2.3")
+        self.assertEqual(SCHEMA_VERSION, "2.6")
         criterion_schema = EXAMINER_JSON_SCHEMA["schema"]["properties"]["criteria"]["items"]
         self.assertEqual(criterion_schema["properties"]["score"]["type"], "integer")
         self.assertIn("criteria", EXAMINER_JSON_SCHEMA["schema"]["required"])
@@ -57,6 +57,17 @@ class ScoringArchitectureTests(unittest.TestCase):
         self.assertNotIn("math.floor", legacy_reader)
         self.assertIn("calculate_overall(structured_criteria)", storage)
         self.assertIn('"p_overall_band": structured["overall_band"]', cloud)
+
+    def test_learner_surfaces_use_intervals_while_internal_storage_keeps_overall(self):
+        root = Path(__file__).resolve().parents[1]
+        app = (root / "app.py").read_text(encoding="utf-8-sig")
+        report = (root / "src" / "chinese_report.py").read_text(encoding="utf-8")
+        card = (root / "src" / "share_card.py").read_text(encoding="utf-8")
+        hero = app.split("def render_overall_band", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("format_practice_band_interval(score)", hero)
+        self.assertNotIn('f"{score:.1f}"', hero)
+        self.assertNotIn("最可能分数", report)
+        self.assertNotIn("{overall_band:.1f}", card)
 
 
 if __name__ == "__main__":
