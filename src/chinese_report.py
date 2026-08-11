@@ -5,8 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from src.expression_catalog import FUNCTION_LABELS
-from src.report_schema import estimated_band_range
-
 CRITERION_DISPLAY_NAMES = {
     "Task Response": "任务回应（TR）",
     "Coherence and Cohesion": "连贯与衔接（CC）",
@@ -22,7 +20,7 @@ def examiner_result_to_markdown(
 ) -> str:
     """把结构化评分结果转换为可下载、可兼容旧工具的中文 Markdown。"""
     overall = float(data["overall_band"])
-    lower, upper = estimated_range or estimated_band_range({"overall_band": overall})
+    del estimated_range  # Kept for compatibility with cached callers.
     criteria_rows: list[str] = []
     for item in data["criteria"]:
         evidence = "；".join(f'“{str(quote).strip().strip(chr(34))}”' for quote in item["evidence"][:2])
@@ -77,7 +75,7 @@ def examiner_result_to_markdown(
 
 ## 1. 总分
 
-**预估分数区间：{lower:.1f}–{upper:.1f}**
+**Overall：{overall:.1f}**
 
 {data['summary']}
 

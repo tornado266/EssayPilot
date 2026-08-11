@@ -27,7 +27,6 @@ from src.report_schema import (
     TEACHING_FEEDBACK_JSON_SCHEMA,
     drop_unverified_optional_teaching_items,
     estimated_band_range,
-    format_practice_band_interval,
     restore_score_evidence_roles,
     validate_examiner_result,
     validate_scoring_decision,
@@ -591,14 +590,6 @@ def review_sentence_rewrite(
     _, api_key, base_url = get_provider_config(provider)
     client = build_client(provider)
 
-    visible_draft_1_scores = dict(draft_1_scores)
-    visible_draft_2_scores = dict(draft_2_scores)
-    visible_draft_1_scores["Practice Band Interval"] = format_practice_band_interval(
-        visible_draft_1_scores.pop("Overall Band", None)
-    )
-    visible_draft_2_scores["Practice Band Interval"] = format_practice_band_interval(
-        visible_draft_2_scores.pop("Overall Band", None)
-    )
     prompt = f"""
 You are an IELTS Writing sentence coach for a Chinese high school student.
 Review the student's rewritten sentence against the original sentence.
@@ -773,6 +764,8 @@ def compare_draft_progress(
     """Compare two scored drafts and return concise Chinese coaching."""
     _, api_key, base_url = get_provider_config(provider)
     client = build_client(provider)
+    visible_draft_1_scores = dict(draft_1_scores)
+    visible_draft_2_scores = dict(draft_2_scores)
     prompt = f"""
 You are an IELTS revision coach comparing two versions of the same essay.
 Do not rescore either essay. Treat the supplied scores as final.
@@ -810,7 +803,7 @@ Rules:
 - Quote short evidence from both drafts when useful.
 - Never invent changes that are not visible.
 - Do not repeat the score table.
-- Never state or infer a point Overall score; refer only to the supplied practice interval and four criterion scores.
+- Treat the supplied point Overall and four criterion scores as final; do not alter or infer new scores.
 - Keep the response practical and concise.
 """.strip()
 

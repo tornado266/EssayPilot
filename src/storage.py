@@ -31,14 +31,14 @@ from src.result_parser import parse_band
 from src.report_schema import (
     ExaminerResultError,
     calculate_overall,
-    format_practice_band_interval,
+    format_overall_band,
     learner_safe_report_markdown,
 )
 
 
 RECORDS_DIR = Path("records")
 PDF_FONT_PATH = Path(__file__).resolve().parents[1] / "assets" / "fonts" / "NotoSansSC-Regular.ttf"
-SCORE_PATTERN = re.compile(r"(?:最可能分数|Likely Score|Overall Band Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
+SCORE_PATTERN = re.compile(r"(?:最可能分数|Likely Score|Overall Band Score|Overall Band|Overall|总分|likely score)[^\d]*(\d(?:\.\d)?)")
 
 INK = colors.HexColor("#173B45")
 TEAL = colors.HexColor("#287D86")
@@ -81,7 +81,7 @@ def build_markdown_record(
         - 任务类型: {task_type}
         - 词数: {word_count}
         - 创建时间: {created_at.strftime("%Y-%m-%d %H:%M:%S")}
-        - 预估分数区间: {format_practice_band_interval(overall_band)}
+        - Overall: {format_overall_band(overall_band)}
         - 匿名用户编号: {user_id if user_id is not None else "旧版记录"}
 
         ## 英文作文题目
@@ -255,27 +255,19 @@ def markdown_to_pdf(markdown: str) -> bytes:
     task_type = field(r"^- (?:任务类型|Task Type):\s*(.+)$")
     word_count = field(r"^- (?:词数|Word Count):\s*(.+)$")
     created_at = field(r"^- (?:创建时间|Created At):\s*(.+)$")
-    interval = field(r"^- (?:预估分数区间|Practice Band Interval):\s*(.+)$")
-    overall_band = field(r"^- (?:总分|Overall Band):\s*(.+)$")
-    if interval == "暂无" and overall_band not in {"暂无", "N/A"}:
-        try:
-            interval = format_practice_band_interval(float(overall_band))
-        except (TypeError, ValueError, ExaminerResultError):
-            interval = "暂无"
-    if interval == "暂无":
+    legacy_interval = field(r"^- (?:预估分数区间|Practice Band Interval):\s*(.+)$")
+    overall_band = field(r"^- (?:总分|Overall Band|Overall):\s*(.+)$")
+    if overall_band in {"暂无", "N/A"}:
         score_match = SCORE_PATTERN.search(report)
         if score_match:
             overall_band = score_match.group(1)
-        interval = (
-            format_practice_band_interval(float(score_match.group(1)))
-            if score_match else "暂无"
-        )
-    if interval != "暂无":
-        try:
-            legacy_point = float(overall_band)
-        except (TypeError, ValueError):
-            legacy_point = None
-        report = learner_safe_report_markdown(report, legacy_point)
+    try:
+        exact_score = format_overall_band(float(overall_band))
+        report = learner_safe_report_markdown(report, float(overall_band))
+    except (TypeError, ValueError, ExaminerResultError):
+        exact_score = None
+    score_label_text = "Overall" if exact_score is not None else "练习估分区间"
+    score_value = exact_score or legacy_interval
 
     question_match = re.search(
         r"## (?:英文作文题目|Essay Question)\s*(.*?)\s*## (?:学生原稿|Student Essay)",
@@ -304,7 +296,7 @@ def markdown_to_pdf(markdown: str) -> bytes:
     ]
 
     score_card = Table(
-        [[Paragraph("练习估分区间", score_label), Paragraph(interval, score_style)]],
+        [[Paragraph(score_label_text, score_label), Paragraph(score_value, score_style)]],
         colWidths=[55 * mm, 40 * mm],
         rowHeights=[22 * mm],
         hAlign="CENTER",

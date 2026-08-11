@@ -8,6 +8,7 @@ from src.report_schema import (
     calculate_overall,
     estimated_band_range,
     feedback_quality_flags,
+    format_overall_band,
     format_practice_band_interval,
     submission_hash,
     validate_examiner_result,
@@ -64,8 +65,8 @@ class ReportSchemaTests(unittest.TestCase):
         self.assertEqual(result["overall_band"], 7.0)
         self.assertEqual(result["overall_calibration_version"], OVERALL_CALIBRATION_VERSION)
         report = examiner_result_to_markdown(result)
-        self.assertIn("**预估分数区间：6.5–8.5**", report)
-        self.assertNotIn("最可能分数", report)
+        self.assertIn("**Overall：7.0**", report)
+        self.assertNotIn("预估分数区间", report)
         self.assertIn("任务回应（TR）", report)
         self.assertIn("Public transport reduces traffic.", report)
         self.assertIn("Reliable public transport can reduce urban congestion.", report)
@@ -196,6 +197,14 @@ class ReportSchemaTests(unittest.TestCase):
             with self.subTest(score=score):
                 self.assertEqual(estimated_band_range({"overall_band": score}), interval)
                 self.assertEqual(format_practice_band_interval(score), f"{interval[0]:.1f}–{interval[1]:.1f}")
+
+    def test_point_overall_formatter_validates_half_band_scores(self):
+        self.assertEqual(format_overall_band(7), "7.0")
+        self.assertEqual(format_overall_band(6.5), "6.5")
+        self.assertEqual(format_overall_band(None), "等待评分")
+        for invalid in (True, 6.25, -0.5, 9.5, "7.0"):
+            with self.subTest(invalid=invalid), self.assertRaises(ExaminerResultError):
+                format_overall_band(invalid)  # type: ignore[arg-type]
 
     def test_first_priority_must_match_locked_limitation_and_link_training(self):
         data = valid_result()

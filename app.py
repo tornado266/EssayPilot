@@ -44,7 +44,7 @@ from src.report_schema import (
     SCORING_PROMPT_VERSION,
     SCORING_SKILL_VERSION,
     calculate_overall,
-    format_practice_band_interval,
+    format_overall_band,
     learner_safe_report_markdown,
     score_snapshot,
     submission_hash,
@@ -64,7 +64,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).parent
 DEMO_REPORT_PATH = BASE_DIR / "data" / "demo_report.md"
-SCORE_PATTERN = re.compile(r"(?:最可能分数|Likely Score|Overall Band Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
+SCORE_PATTERN = re.compile(r"(?:最可能分数|Likely Score|Overall Band Score|Overall Band|Overall|总分|likely score)[^\d]*(\d(?:\.\d)?)")
 CRITERION_DISPLAY_NAMES = {
     "Task Response": "任务回应（TR）",
     "Coherence and Cohesion": "连贯与衔接（CC）",
@@ -447,13 +447,13 @@ def render_score_change(
     draft_2_scores: dict[str, float | None],
 ) -> None:
     """Show compact Draft 1 to Draft 2 score changes."""
-    st.subheader("估分区间与四项变化")
+    st.subheader("Overall 与四项变化")
     for label in draft_1_scores:
         before = draft_1_scores.get(label)
         after = draft_2_scores.get(label)
         if label == "Overall Band":
-            before_text = format_practice_band_interval(before)
-            after_text = format_practice_band_interval(after)
+            before_text = format_overall_band(before)
+            after_text = format_overall_band(after)
         else:
             before_text = f"{before:.0f}" if before is not None else "-"
             after_text = f"{after:.0f}" if after is not None else "-"
@@ -481,7 +481,7 @@ def render_draft_2_training(
 
     st.markdown("#### 第一稿简要结果")
     score_columns = st.columns(5)
-    short_labels = ["估分区间", "TR", "CC", "LR", "GRA"]
+    short_labels = ["Overall", "TR", "CC", "LR", "GRA"]
     for column, short_label, score in zip(
         score_columns,
         short_labels,
@@ -489,8 +489,8 @@ def render_draft_2_training(
         strict=False,
     ):
         value = (
-            format_practice_band_interval(score)
-            if short_label == "估分区间"
+            format_overall_band(score)
+            if short_label == "Overall"
             else (f"{score:.0f}" if score is not None else "-")
         )
         column.metric(short_label, value)
@@ -742,14 +742,14 @@ def extract_paragraph_strengths(markdown: str) -> list[str]:
 
 
 def render_overall_band(score: float | None) -> None:
-    """Render the learner-safe practice interval without the internal point score."""
-    score_text = html.escape(format_practice_band_interval(score))
+    """Render the program-calculated point Overall for the learner."""
+    score_text = html.escape(format_overall_band(score))
     st.markdown(
         f"""
         <div class="ep-overall-card">
-            <div class="ep-overall-card__label">雅思写作练习估分区间</div>
+            <div class="ep-overall-card__label">雅思写作练习 Overall</div>
             <div class="ep-overall-card__value">{score_text}</div>
-            <div class="ep-overall-card__note">精确 Overall 仅用于内部一致性；四项整数分仍可查看</div>
+            <div class="ep-overall-card__note">AI 练习估分，不是 IELTS 官方成绩；四项整数分可继续查看</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1284,7 +1284,7 @@ def list_correction_history(user_id: str) -> list[dict[str, object]]:
 
 
 def render_history(user_id: str) -> None:
-    """Render local history without exposing point Overall estimates."""
+    """Render local history with the point Overall estimate."""
     history = list_correction_history(user_id)
     scored_history = [item for item in history if item["score"] is not None]
     training_history = list_draft_training_history(user_id)
@@ -1295,8 +1295,8 @@ def render_history(user_id: str) -> None:
     else:
         for item in reversed(scored_history[-10:]):
             st.caption(
-                f"{item['created_at']} · 练习估分区间 "
-                f"{format_practice_band_interval(item['score'])}"
+                f"{item['created_at']} · Overall "
+                f"{format_overall_band(item['score'])}"
             )
 
     if training_history:
@@ -1304,10 +1304,10 @@ def render_history(user_id: str) -> None:
         for record in reversed(training_history[-5:]):
             draft_1_score = record.get("draft_1_scores", {}).get("Overall Band")
             draft_2_score = record.get("draft_2_scores", {}).get("Overall Band")
-            before = format_practice_band_interval(draft_1_score) if isinstance(draft_1_score, (int, float)) else "-"
-            after = format_practice_band_interval(draft_2_score) if isinstance(draft_2_score, (int, float)) else "-"
+            before = format_overall_band(draft_1_score) if isinstance(draft_1_score, (int, float)) else "-"
+            after = format_overall_band(draft_2_score) if isinstance(draft_2_score, (int, float)) else "-"
             with st.expander(
-                f"第一稿 → 第二稿 · 估分区间：{before} → {after}",
+                f"第一稿 → 第二稿 · Overall：{before} → {after}",
                 expanded=False,
             ):
                 st.caption(str(record.get("timestamp", "")))
@@ -1386,7 +1386,7 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
                 latest_revision_gain = float(revised) - float(original)
     render_dashboard_stats(
         [
-            ("最新估分区间", format_practice_band_interval(latest_score), "IELTS Task 2"),
+            ("最新 Overall", format_overall_band(latest_score), "IELTS Task 2"),
             ("当前薄弱项", weakest, f"下一优先：{next_weakest}" if next_weakest else "根据最新批改"),
             ("较上一次", "已有新记录" if delta is not None else "暂无对比", "这是首篇记录" if delta is None else "请结合四项分观察变化"),
             ("待完成训练", len(pending), "单句与逻辑任务"),
@@ -1542,7 +1542,7 @@ def render_demo_page() -> None:
     with report_tab:
         st.subheader("评分、诊断与改写")
         score_columns = st.columns(5)
-        demo_scores = [("估分区间", "6.5–8.5"), ("TR", "7"), ("CC", "7"), ("LR", "6"), ("GRA", "7")]
+        demo_scores = [("Overall", "7.0"), ("TR", "7"), ("CC", "7"), ("LR", "6"), ("GRA", "7")]
         for column, (label, value) in zip(score_columns, demo_scores):
             with column:
                 render_score_card(label, value, "静态示范")
@@ -2534,8 +2534,8 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
             before = float(original.get("overall_band") or 0)
             after = float(revised.get("Overall Band") or 0)
             with st.expander(
-                f"估分区间 {format_practice_band_interval(before)} → "
-                f"{format_practice_band_interval(after)}"
+                f"Overall {format_overall_band(before)} → "
+                f"{format_overall_band(after)}"
             ):
                 st.markdown(str(revision.get("progress_report") or ""))
     with share_tab:

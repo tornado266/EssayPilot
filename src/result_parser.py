@@ -7,7 +7,7 @@ import math
 import re
 from typing import Any
 
-from src.report_schema import format_practice_band_interval
+from src.report_schema import format_overall_band
 
 
 CRITERIA_LABELS = {
@@ -101,9 +101,7 @@ def structured_report_to_markdown(parsed: dict[str, Any]) -> str:
     data = parsed.get("data", {})
     lines = ["# 雅思写作批改报告", ""]
     overall = data.get("overall_band")
-    lines.extend(
-        ["## 分数概览", "", f"预估分数区间：{format_practice_band_interval(overall)}", ""]
-    )
+    lines.extend(["## 分数概览", "", f"Overall：{format_overall_band(overall)}", ""])
 
     lines.extend(["## 四项评分", ""])
     criteria = data.get("criteria_scores", {})

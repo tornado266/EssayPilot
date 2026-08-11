@@ -515,18 +515,30 @@ def format_practice_band_interval(overall: float | int | None) -> str:
     return f"{lower:.1f}–{upper:.1f}"
 
 
+def format_overall_band(overall: float | int | None) -> str:
+    """Format the program-calculated Overall Band for learner-facing surfaces."""
+    if overall is None:
+        return "等待评分"
+    if isinstance(overall, bool) or not isinstance(overall, (int, float)):
+        raise ExaminerResultError("A numeric Overall Band is required.")
+    value = float(overall)
+    if not 0.0 <= value <= 9.0 or value * 2 != round(value * 2):
+        raise ExaminerResultError("Overall Band must use half-band steps from 0 to 9.")
+    return f"{value:.1f}"
+
+
 def learner_safe_report_markdown(markdown: str, overall: float | int | None) -> str:
-    """Replace legacy point-Overall lines when a report is shown or downloaded."""
+    """Normalize legacy score lines to the current learner-facing point Overall."""
     if overall is None:
         return markdown
-    interval = format_practice_band_interval(overall)
-    point_line = re.compile(
-        r"(?im)^\s*(?:\*\*)?(?:最可能分数|Likely Score|Overall Band Score|Overall Band|总分)"
+    score = format_overall_band(overall)
+    score_line = re.compile(
+        r"(?im)^\s*(?:\*\*)?(?:预估分数区间|Practice Band Interval|最可能分数|Likely Score|Overall Band Score|Overall Band|Overall|总分)"
         r"\s*[:：][^\r\n]*(?:\*\*)?\s*$"
     )
-    replacement = f"**预估分数区间：{interval}**"
-    if point_line.search(markdown):
-        return point_line.sub(replacement, markdown)
+    replacement = f"**Overall：{score}**"
+    if score_line.search(markdown):
+        return score_line.sub(replacement, markdown)
     return markdown
 
 
