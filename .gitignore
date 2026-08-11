@@ -7,3 +7,5 @@ __pycache__/
 streamlit.*.log
 records/*.md
 !records/.gitkeep
+data/raw/kaggle_ielts/
+data/processed/kaggle_ielts/

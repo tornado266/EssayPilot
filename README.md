@@ -131,6 +131,35 @@ This keeps the examiner report useful without turning the product into a one-cli
 | Report export | ReportLab with an embedded Noto Sans SC font |
 | Persistence | Supabase Auth/Postgres, with local Markdown/JSON fallback |
 
+## Kaggle Task 2 Skill Data Audit
+
+Kaggle learner data is training and audit material, never an official scoring reference. Raw text and generated corpora stay in ignored local directories. The public split manifest contains only case IDs, content hashes, counts, and score distributions.
+
+```powershell
+# Zero-cost profile; writes nothing.
+python scripts/build_kaggle_training_library.py --input data/raw/kaggle_ielts/ielts-writing-scored-essays-dataset.zip --dry-run
+
+# Build clean data and the fixed 42/8/12 examiner-claimed split.
+python scripts/build_kaggle_training_library.py --input data/raw/kaggle_ielts/ielts-writing-scored-essays-dataset.zip --source-url https://www.kaggle.com/datasets/mazlumi/ielts-writing-scored-essays-dataset
+
+# Aggregate official and development-only rule support without source text.
+python scripts/build_skill_rule_audit.py
+
+# Refresh weak labels without changing any frozen split membership.
+python scripts/refresh_kaggle_feedback_labels.py --unlock-holdout --write
+
+# Paid annotation stays a dry run unless --execute is supplied; maximum 20 cases.
+python scripts/annotate_kaggle_cases.py --dry-run
+
+# Evaluation is dry-run by default. The registered candidate is DeepSeek V4 Pro
+# with thinking disabled. Holdout additionally requires --unlock-holdout.
+python scripts/run_feedback_skill_eval.py --split validation
+python scripts/run_feedback_skill_eval.py --split holdout --unlock-holdout
+python scripts/run_kaggle_scoring_holdout.py --provider DeepSeek --model deepseek-v4-pro --reasoning-effort none --unlock-holdout
+```
+
+The 12-case holdout stays under `.private/kaggle_ielts/`. A successful final evaluation writes a consumed sentinel, preventing silent reuse for prompt tuning. Kaggle score metrics remain separate from official calibration metrics. These commands do not change the production model automatically; a candidate must pass the official and locked gates first.
+
 ## Quick Start
 
 ### 1. Clone the repository
