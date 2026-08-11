@@ -31,7 +31,8 @@ class LearningAssetTests(unittest.TestCase):
             mastered_count=2,
             draft_gain=0.5,
         )
-        self.assertIn("6.5", svg)
+        self.assertIn("6.0–7.5", svg)
+        self.assertNotIn(">6.5<", svg)
         self.assertIn("补充论证解释链", svg)
         self.assertNotIn("email", svg.casefold())
         self.assertEqual(ElementTree.fromstring(svg).tag, "{http://www.w3.org/2000/svg}svg")

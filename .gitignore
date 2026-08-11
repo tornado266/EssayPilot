@@ -1,8 +1,12 @@
 .env
+.private/
 .venv/
 __pycache__/
 *.pyc
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 streamlit.*.log
 records/*.md
 !records/.gitkeep
+data/raw/kaggle_ielts/
+data/processed/kaggle_ielts/

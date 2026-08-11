@@ -131,6 +131,35 @@ This keeps the examiner report useful without turning the product into a one-cli
 | Report export | ReportLab with an embedded Noto Sans SC font |
 | Persistence | Supabase Auth/Postgres, with local Markdown/JSON fallback |
 
+## Kaggle Task 2 Skill Data Audit
+
+Kaggle learner data is training and audit material, never an official scoring reference. Raw text and generated corpora stay in ignored local directories. The public split manifest contains only case IDs, content hashes, counts, and score distributions.
+
+```powershell
+# Zero-cost profile; writes nothing.
+python scripts/build_kaggle_training_library.py --input data/raw/kaggle_ielts/ielts-writing-scored-essays-dataset.zip --dry-run
+
+# Build clean data and the fixed 42/8/12 examiner-claimed split.
+python scripts/build_kaggle_training_library.py --input data/raw/kaggle_ielts/ielts-writing-scored-essays-dataset.zip --source-url https://www.kaggle.com/datasets/mazlumi/ielts-writing-scored-essays-dataset
+
+# Aggregate official and development-only rule support without source text.
+python scripts/build_skill_rule_audit.py
+
+# Refresh weak labels without changing any frozen split membership.
+python scripts/refresh_kaggle_feedback_labels.py --unlock-holdout --write
+
+# Paid annotation stays a dry run unless --execute is supplied; maximum 20 cases.
+python scripts/annotate_kaggle_cases.py --dry-run
+
+# Evaluation is dry-run by default. The registered candidate is DeepSeek V4 Pro
+# with thinking disabled. Holdout additionally requires --unlock-holdout.
+python scripts/run_feedback_skill_eval.py --split validation
+python scripts/run_feedback_skill_eval.py --split holdout --unlock-holdout
+python scripts/run_kaggle_scoring_holdout.py --provider DeepSeek --model deepseek-v4-pro --reasoning-effort none --unlock-holdout
+```
+
+The 12-case holdout stays under `.private/kaggle_ielts/`. A successful final evaluation writes a consumed sentinel, preventing silent reuse for prompt tuning. Kaggle score metrics remain separate from official calibration metrics. These commands do not change the production model automatically; a candidate must pass the official and locked gates first.
+
 ## Quick Start
 
 ### 1. Clone the repository
@@ -168,6 +197,8 @@ Create a local `.env` file:
 
 ```dotenv
 OPENAI_API_KEY=your_openai_api_key
+# Optional: required only for private DeepSeek V4 calibration runs
+DEEPSEEK_API_KEY=your_deepseek_api_key
 
 # Optional: enables email-code login and cross-device records
 SUPABASE_URL=https://your-project.supabase.co
@@ -207,6 +238,8 @@ Then open `http://localhost:8501`.
 
 ```toml
 OPENAI_API_KEY = "your_openai_api_key"
+# Optional: required only if DeepSeek becomes the validated scoring provider
+DEEPSEEK_API_KEY = "your_deepseek_api_key"
 SUPABASE_URL = "https://your-project.supabase.co"
 SUPABASE_ANON_KEY = "your_publishable_anon_key"
 SUPABASE_SERVICE_ROLE_KEY = "your_private_service_role_key"
@@ -251,10 +284,52 @@ Offline contract tests never call the API:
 python -m unittest discover -s tests -v
 ```
 
-The repeatability runner uses paid API calls and checks every score's spread against the 0.5-band tolerance:
+The repeatability runner uses paid API calls. Candidate screening is score-only by default, so it does not pay for or wait for teaching feedback:
 
 ```bash
-python -m scripts.run_calibration --repeats 3
+python -m scripts.run_calibration --repeats 3 --provider OpenAI --model gpt-5.4-mini-2026-03-17
+```
+
+Private official transcripts and run artifacts must stay under
+`.private/calibration/`, which is ignored by Git. Import and validate a
+structured internal transcript before making any paid calls:
+
+```bash
+python scripts/import_calibration_docx.py --docx PATH_TO_PRIVATE_TRANSCRIPT.docx --out .private/calibration/official_task2.json
+python scripts/run_calibration.py --dataset .private/calibration/official_task2-expanded.json --split-manifest .private/calibration/splits.json --subset development --mode gold --repeats 3 --label mini-development --provider OpenAI --model gpt-5.4-mini-2026-03-17 --dry-run
+```
+
+After configuring `OPENAI_API_KEY`, remove `--dry-run`. Gold runs default to
+three repeats with `reasoning_effort=none`; use `--reasoning-effort low` only
+for a complete preregistered comparison, never to cherry-pick one response.
+Each paid run writes a private JSON audit record, per-call CSV, per-case CSV,
+and Markdown summary. Use `--full-package` only for the final winning model's
+production smoke test. DeepSeek V4 candidates use `--provider DeepSeek` with
+`deepseek-v4-flash` or `deepseek-v4-pro` and require a local
+`DEEPSEEK_API_KEY`. Invalid JSON, schema, empty content, or evidence is retried
+once with the same model, the invalid response, and the precise validation
+error; individual failures are recorded without aborting the batch.
+The
+grader receives only the task prompt and candidate response; official bands,
+case identifiers, source metadata, and examiner comments remain in the eval
+process and are never included in model messages.
+
+Compare locked runs without copying private essays into the report:
+
+```bash
+python scripts/compare_calibration.py --baseline PATH_TO_BASELINE_RUN_JSON --candidate PATH_TO_NONE_RUN_JSON --alternative PATH_TO_LOW_RUN_JSON --output .private/calibration/comparison.md
+```
+
+The comparison checks the accuracy and spread acceptance targets plus the
+reasoning-adoption gate. Run artifacts include model snapshot, reasoning,
+prompt/skill/schema versions, production file hashes, stage latency, Token
+usage, and cost under the supplied runtime price configuration.
+
+After development and holdout runs exist, choose only among models that pass
+both quality gates and do not worsen the low-band segment:
+
+```bash
+python scripts/select_scoring_model.py --baseline-development PATH_TO_BASELINE_RUN_JSON --candidate mini=PATH_TO_MINI_DEV,PATH_TO_MINI_HOLDOUT --candidate flash=PATH_TO_FLASH_DEV,PATH_TO_FLASH_HOLDOUT --output .private/calibration/model-selection.json
 ```
 
 ## License

@@ -6,12 +6,32 @@ import math
 import re
 import unicodedata
 import hashlib
+from copy import deepcopy
 from typing import Any
 
 
-SCHEMA_VERSION = "2.1"
-PROMPT_VERSION = "task2-structured-zh-expression-v2-2026-08-09"
-SKILL_VERSION = "ielts-writing-phase2-v1"
+SCHEMA_VERSION = "2.6"
+SCORING_PROMPT_VERSION = "task2-score-zh-official-claimed-audit-v10-2026-08-11"
+FEEDBACK_PROMPT_VERSION = "task2-feedback-closed-loop-v3-2026-08-11"
+REPORT_PROMPT_VERSION = f"{SCORING_PROMPT_VERSION}+{FEEDBACK_PROMPT_VERSION}"
+PROMPT_VERSION = SCORING_PROMPT_VERSION  # score-only compatibility API
+SCORING_SKILL_VERSION = "ielts-writing-task2-official-v4"
+FEEDBACK_SKILL_VERSION = "ielts-writing-feedback-closed-loop-v2"
+SKILL_VERSION = SCORING_SKILL_VERSION  # score-only compatibility API
+PRACTICE_BAND_INTERVAL_VERSION = "practice_band_interval_v1"
+OVERALL_CALIBRATION_VERSION = "practice_overall_offset_v1"
+OVERALL_CALIBRATION_OFFSET = 0.5
+COACHING_CRITERIA = ("TR", "CC", "LR", "GRA")
+COACHING_ACTION_TYPES = (
+    "clarify", "develop", "support", "reorganize", "replace", "repair",
+    "proofread_recurring",
+)
+COACHING_TO_SCORING_CRITERION = {
+    "TR": "Task Response",
+    "CC": "Coherence and Cohesion",
+    "LR": "Lexical Resource",
+    "GRA": "Grammatical Range and Accuracy",
+}
 CRITERIA = (
     "Task Response",
     "Coherence and Cohesion",
@@ -91,18 +111,18 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
                     },
                 },
             },
-            "priorities": {"type": "array", "minItems": 2, "maxItems": 3, "items": {"$ref": "#/$defs/coaching_item"}},
-            "problems": {"type": "array", "minItems": 2, "maxItems": 5, "items": {"$ref": "#/$defs/coaching_item"}},
+            "priorities": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/coaching_item"}},
+            "problems": {"type": "array", "minItems": 0, "maxItems": 5, "items": {"$ref": "#/$defs/coaching_item"}},
             "sentence_corrections": {
                 "type": "array",
-                "minItems": 3,
+                "minItems": 0,
                 "maxItems": 8,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["original", "problem", "improved"],
                     "properties": {
-                        "original": {"type": "string"},
+                        "original": {"type": "string", "minLength": 1, "maxLength": 240},
                         "problem": {"type": "string"},
                         "improved": {"type": "string"},
                     },
@@ -110,7 +130,7 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             },
             "paragraph_feedback": {
                 "type": "array",
-                "minItems": 1,
+                "minItems": 0,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
@@ -159,14 +179,14 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             },
             "sentence_training": {
                 "type": "array",
-                "minItems": 2,
+                "minItems": 0,
                 "maxItems": 4,
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["original", "goal", "reference"],
                     "properties": {
-                        "original": {"type": "string"},
+                        "original": {"type": "string", "minLength": 1, "maxLength": 240},
                         "goal": {"type": "string"},
                         "reference": {"type": "string"},
                     },
@@ -174,7 +194,7 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             },
             "logic_training": {
                 "type": "array",
-                "minItems": 1,
+                "minItems": 0,
                 "maxItems": 3,
                 "items": {
                     "type": "object",
@@ -182,7 +202,7 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
                     "required": ["problem", "original", "task", "requirements"],
                     "properties": {
                         "problem": {"type": "string"},
-                        "original": {"type": "string"},
+                        "original": {"type": "string", "minLength": 1, "maxLength": 240},
                         "task": {"type": "string"},
                         "requirements": {"type": "array", "minItems": 1, "items": {"type": "string"}},
                     },
@@ -194,12 +214,18 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             "coaching_item": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["title", "evidence", "why", "action"],
+                "required": [
+                    "title", "evidence", "why", "action", "criterion",
+                    "action_type", "success_check",
+                ],
                 "properties": {
                     "title": {"type": "string"},
-                    "evidence": {"type": "string"},
+                    "evidence": {"type": "string", "minLength": 1, "maxLength": 240},
                     "why": {"type": "string"},
                     "action": {"type": "string"},
+                    "criterion": {"type": "string", "enum": list(COACHING_CRITERIA)},
+                    "action_type": {"type": "string", "enum": list(COACHING_ACTION_TYPES)},
+                    "success_check": {"type": "string", "minLength": 1},
                 },
             }
         },
@@ -207,45 +233,412 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
 }
 
 
+SCORING_DECISION_JSON_SCHEMA: dict[str, Any] = {
+    "name": "essaypilot_task2_scoring_decision",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["criteria", "uncertainty"],
+        "properties": {
+            "criteria": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "criterion", "score", "reason", "positive_evidence",
+                        "limitation_evidence", "limitation_frequency",
+                        "readability_impact", "why_not_lower_band",
+                        "next_band_limit",
+                    ],
+                    "properties": {
+                        "criterion": {"type": "string", "enum": list(CRITERIA)},
+                        "score": {"type": "integer", "minimum": 0, "maximum": 9},
+                        "reason": {"type": "string"},
+                        "positive_evidence": {
+                            "type": "array", "minItems": 1, "maxItems": 3,
+                            "items": {"type": "string", "minLength": 1, "maxLength": 240},
+                        },
+                        "limitation_evidence": {
+                            "type": "array", "minItems": 0, "maxItems": 3,
+                            "items": {"type": "string", "minLength": 1, "maxLength": 240},
+                        },
+                        "limitation_frequency": {
+                            "type": "string",
+                            "enum": ["isolated", "occasional", "recurring", "pervasive"],
+                        },
+                        "readability_impact": {
+                            "type": "string",
+                            "enum": ["none", "minor", "intermittent", "severe"],
+                        },
+                        "why_not_lower_band": {"type": "string"},
+                        "next_band_limit": {"type": "string"},
+                    },
+                },
+            },
+            "uncertainty": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["level", "adjacent_band_direction", "reason"],
+                "properties": {
+                    "level": {"type": "string", "enum": ["low", "material"]},
+                    "adjacent_band_direction": {
+                        "type": "string",
+                        "enum": ["lower", "higher", "none"],
+                    },
+                    "reason": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
+TEACHING_FEEDBACK_JSON_SCHEMA: dict[str, Any] = deepcopy(EXAMINER_JSON_SCHEMA)
+TEACHING_FEEDBACK_JSON_SCHEMA["name"] = "essaypilot_task2_teaching_feedback"
+TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["required"].remove("criteria")
+del TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["properties"]["criteria"]
+
+
 class ExaminerResultError(ValueError):
     """Raised when a structured examiner response is incomplete or inconsistent."""
 
 
-def calculate_overall(criteria: list[dict[str, Any]]) -> float:
-    """Calculate the IELTS half-band result from four whole-band criteria."""
-    scores = [int(item["score"]) for item in criteria]
-    if len(scores) != 4 or any(score < 0 or score > 9 for score in scores):
+def calculate_descriptor_overall(criteria: list[dict[str, Any]]) -> float:
+    """Calculate the uncalibrated IELTS half-band from four whole-band criteria."""
+    raw_scores = [item.get("score") for item in criteria]
+    if (
+        len(raw_scores) != 4
+        or any(not isinstance(score, int) or isinstance(score, bool) for score in raw_scores)
+        or any(score < 0 or score > 9 for score in raw_scores)
+    ):
         raise ExaminerResultError("Exactly four whole-band criterion scores are required.")
+    scores = [int(score) for score in raw_scores]
     average = sum(scores) / 4
     return math.floor(average * 2 + 0.5) / 2
 
 
-def _quote_is_present(quote: str, essay: str) -> bool:
-    def normalize(value: str) -> str:
-        value = unicodedata.normalize("NFKC", value).casefold()
-        value = value.replace("’", "'").replace("‘", "'")
-        return " ".join(value.strip().strip('“”\"').split())
+def calculate_overall(criteria: list[dict[str, Any]]) -> float:
+    """Apply the versioned practice calibration to the descriptor-derived Overall."""
+    raw = calculate_descriptor_overall(criteria)
+    return min(9.0, raw + OVERALL_CALIBRATION_OFFSET)
 
-    clean_quote = normalize(quote)
-    clean_essay = normalize(essay)
-    if len(clean_quote) >= 3 and clean_quote in clean_essay:
-        return True
-    fragments = [normalize(part) for part in re.split(r"\.{3,}|…+", quote)]
-    if any(len(fragment.split()) >= 4 and fragment in clean_essay for fragment in fragments):
-        return True
-    quoted_terms = [normalize(part) for part in re.findall(r'["“]([^"”]+)["”]', quote)]
-    if any(len(term) >= 3 and term in clean_essay for term in quoted_terms):
-        return True
-    list_terms = [normalize(part).strip(" .:()[]") for part in re.split(r"[,;/]", clean_quote)]
-    if any(
-        1 <= len(term.split()) <= 6
-        and len(term) >= 4
-        and re.search(rf"(?<!\w){re.escape(term)}(?!\w)", clean_essay)
-        for term in list_terms
-    ):
-        return True
-    words = clean_quote.split()
-    return any(" ".join(words[index : index + 6]) in clean_essay for index in range(max(0, len(words) - 5)))
+
+def _normalize_evidence_text(value: str) -> str:
+    """Normalize typography and whitespace without reordering or dropping words."""
+    translation = str.maketrans(
+        {
+            "’": "'", "‘": "'", "“": '"', "”": '"',
+            "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-",
+        }
+    )
+    normalized = unicodedata.normalize("NFKC", value).translate(translation).casefold()
+    return " ".join(normalized.strip().strip('“”\"\'').split())
+
+
+def _quote_is_present(quote: str, essay: str) -> bool:
+    """Require every teaching quotation to be one contiguous submitted substring."""
+    clean_quote = _normalize_evidence_text(quote)
+    return len(clean_quote) >= 3 and clean_quote in _normalize_evidence_text(essay)
+
+
+def _exact_quote_is_present(quote: str, essay: str) -> bool:
+    """Require the complete normalized quotation, not merely one matching fragment."""
+    clean_quote = _normalize_evidence_text(quote)
+    return len(clean_quote) >= 3 and clean_quote in _normalize_evidence_text(essay)
+
+
+def validate_scoring_decision(data: dict[str, Any], essay: str) -> dict[str, Any]:
+    """Validate and freeze the score-only model response."""
+    if not isinstance(data, dict):
+        raise ExaminerResultError("The scoring response is not a JSON object.")
+    if "overall_band" in data:
+        raise ExaminerResultError("Overall Band is calculated by EssayPilot, not the model.")
+    criteria = data.get("criteria")
+    if not isinstance(criteria, list):
+        raise ExaminerResultError("The scoring response is missing criterion scores.")
+    labels = [item.get("criterion") for item in criteria if isinstance(item, dict)]
+    if sorted(labels) != sorted(CRITERIA):
+        raise ExaminerResultError("The examiner must return each IELTS criterion exactly once.")
+    external_criteria: list[dict[str, Any]] = []
+    invalid_evidence_items: list[tuple[str, str, str]] = []
+    decision_errors: list[str] = []
+    for item in criteria:
+        score = item.get("score")
+        if not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 9:
+            raise ExaminerResultError("Criterion scores must be whole numbers from 0 to 9.")
+        positive = item.get("positive_evidence")
+        limitations = item.get("limitation_evidence")
+        if not isinstance(positive, list) or not positive:
+            raise ExaminerResultError(f"{item['criterion']} has no positive essay evidence.")
+        if not isinstance(limitations, list) or (score < 9 and not limitations):
+            raise ExaminerResultError(f"{item['criterion']} has no limitation essay evidence.")
+        frequency = item.get("limitation_frequency")
+        impact = item.get("readability_impact")
+        if frequency not in {"isolated", "occasional", "recurring", "pervasive"}:
+            raise ExaminerResultError(f"{item['criterion']} has an invalid limitation frequency.")
+        if impact not in {"none", "minor", "intermittent", "severe"}:
+            raise ExaminerResultError(f"{item['criterion']} has an invalid readability impact.")
+        if frequency in {"recurring", "pervasive"} and len(limitations) < 2:
+            decision_errors.append(
+                f"{item['criterion']} claims recurring limitations without multiple exact examples."
+            )
+        if (
+            item["criterion"] == "Grammatical Range and Accuracy"
+            and score <= 6
+            and frequency in {"isolated", "occasional"}
+            and impact in {"none", "minor"}
+        ):
+            decision_errors.append(
+                "A GRA score of 6 or below is inconsistent with only isolated/occasional "
+                "minor limitations; reconsider the descriptor boundary without auto-adjusting."
+            )
+        evidence = [*positive, *limitations]
+        invalid_evidence = [
+            (field, str(quote))
+            for field, values in (
+                ("positive_evidence", positive),
+                ("limitation_evidence", limitations),
+            )
+            for quote in values
+            if not _exact_quote_is_present(str(quote), essay)
+        ]
+        if invalid_evidence:
+            invalid_evidence_items.extend(
+                (str(item["criterion"]), field, quote)
+                for field, quote in invalid_evidence
+            )
+        if not str(item.get("why_not_lower_band", "")).strip():
+            raise ExaminerResultError(
+                f"{item['criterion']} does not explain why the demonstrated performance "
+                "exceeds the adjacent lower band."
+            )
+        if not str(item.get("reason", "")).strip() or not str(item.get("next_band_limit", "")).strip():
+            raise ExaminerResultError(f"{item['criterion']} lacks a complete descriptor explanation.")
+        combined_evidence = list(dict.fromkeys(str(quote) for quote in evidence))
+        external_criteria.append(
+            {
+                "criterion": item["criterion"],
+                "score": score,
+                "reason": item["reason"],
+                "evidence": combined_evidence,
+                # These remain internal score-lock metadata.  The established
+                # evidence field is retained for every existing UI/storage caller.
+                "positive_evidence": [str(quote) for quote in positive],
+                "limitation_evidence": [str(quote) for quote in limitations],
+                "limitation_frequency": frequency,
+                "readability_impact": impact,
+                "why_not_lower_band": item["why_not_lower_band"],
+                "next_band_limit": item["next_band_limit"],
+            }
+        )
+    if invalid_evidence_items:
+        details = "; ".join(
+            f"{criterion}.{field}={quote!r}"
+            for criterion, field, quote in invalid_evidence_items
+        )
+        decision_errors.append(
+            "Every evidence item must be present in the essay. Replace all invalid exact "
+            "quotes by copying separate contiguous substrings verbatim from the submitted "
+            f"essay: {details}"
+        )
+    if decision_errors:
+        raise ExaminerResultError(" | ".join(decision_errors))
+    uncertainty = data.get("uncertainty")
+    if not isinstance(uncertainty, dict):
+        raise ExaminerResultError("The scoring response is missing uncertainty metadata.")
+    level = uncertainty.get("level")
+    direction = uncertainty.get("adjacent_band_direction")
+    if level not in {"low", "material"} or direction not in {"lower", "higher", "none"}:
+        raise ExaminerResultError("The scoring uncertainty metadata is invalid.")
+    if level == "low" and direction != "none":
+        raise ExaminerResultError("Low uncertainty must not claim an adjacent-band direction.")
+    if level == "material" and direction == "none":
+        raise ExaminerResultError("Material uncertainty must identify an adjacent-band direction.")
+    normalized = deepcopy(data)
+    normalized["criteria"] = external_criteria
+    normalized["raw_overall_band"] = calculate_descriptor_overall(external_criteria)
+    normalized["overall_band"] = calculate_overall(external_criteria)
+    normalized["overall_calibration_version"] = OVERALL_CALIBRATION_VERSION
+    normalized["overall_calibration_offset"] = OVERALL_CALIBRATION_OFFSET
+    return normalized
+
+
+def restore_score_evidence_roles(scoring: dict[str, Any]) -> dict[str, Any]:
+    """Enrich older v10 score locks whose exact evidence was stored as one combined list."""
+    normalized = deepcopy(scoring)
+    for item in normalized.get("criteria", []):
+        if not isinstance(item, dict):
+            continue
+        evidence = item.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            continue
+        item.setdefault("positive_evidence", [str(evidence[0])])
+        if "limitation_evidence" not in item:
+            item["limitation_evidence"] = [str(value) for value in evidence[1:]]
+    criteria = normalized.get("criteria")
+    if isinstance(criteria, list):
+        normalized["raw_overall_band"] = calculate_descriptor_overall(criteria)
+        normalized["overall_band"] = calculate_overall(criteria)
+        normalized["overall_calibration_version"] = OVERALL_CALIBRATION_VERSION
+        normalized["overall_calibration_offset"] = OVERALL_CALIBRATION_OFFSET
+    return normalized
+
+
+def estimated_band_range(scoring: dict[str, Any]) -> tuple[float, float]:
+    """Return the versioned conservative practice interval shown to learners."""
+    value = scoring.get("overall_band")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ExaminerResultError("A numeric internal Overall Band is required.")
+    overall = float(value)
+    if not 0.0 <= overall <= 9.0 or overall * 2 != round(overall * 2):
+        raise ExaminerResultError("The internal Overall Band must use half-band steps from 0 to 9.")
+    if overall <= 4.5:
+        lower, upper = overall - 0.5, overall + 0.5
+    elif overall <= 6.0:
+        lower, upper = overall - 1.0, overall + 1.0
+    elif overall == 6.5:
+        lower, upper = overall - 0.5, overall + 1.0
+    else:
+        lower, upper = overall - 0.5, overall + 1.5
+    return max(0.0, lower), min(9.0, upper)
+
+
+def format_practice_band_interval(overall: float | int | None) -> str:
+    """Format the learner-safe range without exposing the internal point estimate."""
+    if overall is None:
+        return "等待评分"
+    lower, upper = estimated_band_range({"overall_band": overall})
+    return f"{lower:.1f}–{upper:.1f}"
+
+
+def learner_safe_report_markdown(markdown: str, overall: float | int | None) -> str:
+    """Replace legacy point-Overall lines when a report is shown or downloaded."""
+    if overall is None:
+        return markdown
+    interval = format_practice_band_interval(overall)
+    point_line = re.compile(
+        r"(?im)^\s*(?:\*\*)?(?:最可能分数|Likely Score|Overall Band Score|Overall Band|总分)"
+        r"\s*[:：][^\r\n]*(?:\*\*)?\s*$"
+    )
+    replacement = f"**预估分数区间：{interval}**"
+    if point_line.search(markdown):
+        return point_line.sub(replacement, markdown)
+    return markdown
+
+
+_PSEUDO_SCORING_RULES = (
+    re.compile(r"(?:IELTS|雅思).{0,18}(?:要求|规定|必须).{0,25}(?:字|词|段|模板|连接词|句式)", re.I),
+    re.compile(r"(?:必须|务必|固定).{0,20}(?:\d+\s*(?:words?|字|词|段)|模板|连接词数量|指定句式)", re.I),
+)
+
+
+def pseudo_scoring_rule_hits(data: dict[str, Any]) -> list[str]:
+    """Return feedback strings that falsely present coaching preferences as IELTS rules."""
+    hits: list[str] = []
+    fields: list[str] = [str(data.get("summary", ""))]
+    for collection in ("priorities", "problems"):
+        for item in data.get(collection, []):
+            if isinstance(item, dict):
+                fields.extend(str(item.get(key, "")) for key in ("why", "action", "success_check"))
+    next_practice = data.get("next_practice")
+    if isinstance(next_practice, dict):
+        fields.extend(str(value) for value in next_practice.values())
+    for value in fields:
+        if any(pattern.search(value) for pattern in _PSEUDO_SCORING_RULES):
+            hits.append(value)
+    return hits
+
+
+def feedback_quality_flags(
+    data: dict[str, Any], essay: str, locked_scoring: dict[str, Any]
+) -> dict[str, Any]:
+    """Compute deterministic feedback-contract metrics without model judgement."""
+    priorities = [item for item in data.get("priorities", []) if isinstance(item, dict)]
+    evidence_items = [
+        str(item.get(field, ""))
+        for collection, field in (
+            ("priorities", "evidence"), ("problems", "evidence"),
+            ("sentence_corrections", "original"), ("sentence_training", "original"),
+            ("logic_training", "original"),
+        )
+        for item in data.get(collection, [])
+        if isinstance(item, dict)
+    ]
+    evidence_valid = bool(evidence_items) and all(
+        _exact_quote_is_present(value, essay) for value in evidence_items
+    )
+    scoring_by_criterion = {
+        str(item.get("criterion")): item
+        for item in locked_scoring.get("criteria", [])
+        if isinstance(item, dict)
+    }
+    primary_aligned = False
+    if priorities and priorities[0].get("criterion") in COACHING_TO_SCORING_CRITERION:
+        criterion = COACHING_TO_SCORING_CRITERION[str(priorities[0]["criterion"])]
+        limitations = scoring_by_criterion.get(criterion, {}).get("limitation_evidence") or []
+        primary_aligned = _normalize_evidence_text(str(priorities[0].get("evidence", ""))) in {
+            _normalize_evidence_text(str(value)) for value in limitations
+        }
+    training_originals = {
+        _normalize_evidence_text(str(item.get("original", "")))
+        for collection in ("sentence_training", "logic_training")
+        for item in data.get(collection, [])
+        if isinstance(item, dict)
+    }
+    closed_priorities = sum(
+        _normalize_evidence_text(str(item.get("evidence", ""))) in training_originals
+        for item in priorities
+    )
+    actionable_priorities = sum(
+        item.get("criterion") in COACHING_CRITERIA
+        and item.get("action_type") in COACHING_ACTION_TYPES
+        and bool(str(item.get("action", "")).strip())
+        and bool(str(item.get("success_check", "")).strip())
+        for item in priorities
+    )
+    return {
+        "structure_valid": len(priorities) == 2,
+        "evidence_valid": evidence_valid,
+        "primary_limitation_aligned": primary_aligned,
+        "feedback_training_closed_loop": len(priorities) == 2 and closed_priorities == 2,
+        "action_success_complete": len(priorities) == 2 and actionable_priorities == 2,
+        "closed_priority_count": closed_priorities,
+        "actionable_priority_count": actionable_priorities,
+        "pseudo_scoring_rule_count": len(pseudo_scoring_rule_hits(data)),
+    }
+
+
+def drop_unverified_optional_teaching_items(
+    data: dict[str, Any], essay: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Drop unsupported optional coaching items after a strict retry, never inventing replacements."""
+    normalized = deepcopy(data)
+    removed: list[str] = []
+    evidence_fields = {
+        "priorities": "evidence",
+        "problems": "evidence",
+        "sentence_corrections": "original",
+        "sentence_training": "original",
+        "logic_training": "original",
+    }
+    for collection, field in evidence_fields.items():
+        items = normalized.get(collection)
+        if not isinstance(items, list):
+            continue
+        kept = [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and _exact_quote_is_present(str(item.get(field, "")), essay)
+        ]
+        if len(kept) != len(items):
+            removed.append(collection)
+            normalized[collection] = kept
+    return normalized, removed
 
 
 def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]:
@@ -273,19 +666,88 @@ def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]
         evidence = item.get("evidence")
         if not isinstance(evidence, list) or not evidence:
             raise ExaminerResultError(f"{item['criterion']} has no essay evidence.")
-        if not any(_quote_is_present(str(quote), essay) for quote in evidence):
-            raise ExaminerResultError(f"{item['criterion']} evidence is not present in the essay.")
+        if not all(_exact_quote_is_present(str(quote), essay) for quote in evidence):
+            raise ExaminerResultError(f"Every {item['criterion']} evidence item must be present in the essay.")
+    priorities = data.get("priorities")
+    if not isinstance(priorities, list) or len(priorities) != 2:
+        raise ExaminerResultError("The feedback must contain exactly two core priorities.")
+    for collection in ("priorities", "problems"):
+        items = data.get(collection, [])
+        if not isinstance(items, list):
+            raise ExaminerResultError(f"The {collection} field must be a list.")
+        for coaching_item in items:
+            if not isinstance(coaching_item, dict):
+                raise ExaminerResultError(f"A {collection} item is not an object.")
+            if not _exact_quote_is_present(str(coaching_item.get("evidence", "")), essay):
+                raise ExaminerResultError(f"A {collection} item does not quote the submitted essay.")
+            if coaching_item.get("criterion") not in COACHING_CRITERIA:
+                raise ExaminerResultError(f"A {collection} item has an invalid criterion.")
+            if coaching_item.get("action_type") not in COACHING_ACTION_TYPES:
+                raise ExaminerResultError(f"A {collection} item has an invalid action type.")
+            if not str(coaching_item.get("action", "")).strip():
+                raise ExaminerResultError(f"A {collection} item has no concrete action.")
+            if not str(coaching_item.get("success_check", "")).strip():
+                raise ExaminerResultError(f"A {collection} item has no success check.")
     for correction in data.get("sentence_corrections", []):
-        if not _quote_is_present(str(correction.get("original", "")), essay):
+        if not _exact_quote_is_present(str(correction.get("original", "")), essay):
             raise ExaminerResultError("A sentence correction does not quote the submitted essay.")
     for task in data.get("sentence_training", []):
-        if not _quote_is_present(str(task.get("original", "")), essay):
+        if not _exact_quote_is_present(str(task.get("original", "")), essay):
             raise ExaminerResultError("A sentence training task does not quote the submitted essay.")
+    for task in data.get("logic_training", []):
+        if not _exact_quote_is_present(str(task.get("original", "")), essay):
+            raise ExaminerResultError("A logic training task does not quote the submitted essay.")
+    scoring_by_criterion = {
+        str(item.get("criterion")): item for item in criteria if isinstance(item, dict)
+    }
+    primary = priorities[0]
+    scoring_criterion = COACHING_TO_SCORING_CRITERION[str(primary["criterion"])]
+    scoring_item = scoring_by_criterion.get(scoring_criterion, {})
+    limitations = scoring_item.get("limitation_evidence")
+    if not isinstance(limitations, list) or not limitations:
+        raise ExaminerResultError(
+            "The locked scoring decision has no limitation evidence for the first priority."
+        )
+    primary_evidence = _normalize_evidence_text(str(primary["evidence"]))
+    if primary_evidence not in {
+        _normalize_evidence_text(str(evidence)) for evidence in limitations
+    }:
+        allowed = ", ".join(repr(str(evidence)) for evidence in limitations)
+        raise ExaminerResultError(
+            "The first priority evidence must equal limitation evidence from its "
+            f"locked {primary['criterion']} criterion. Copy exactly one of these allowed "
+            f"strings without editing it: {allowed}"
+        )
+    training_originals = {
+        _normalize_evidence_text(str(task.get("original", "")))
+        for collection in ("sentence_training", "logic_training")
+        for task in data.get(collection, [])
+        if isinstance(task, dict)
+    }
+    for priority in priorities:
+        evidence = _normalize_evidence_text(str(priority["evidence"]))
+        if evidence not in training_originals:
+            raise ExaminerResultError(
+                "Every priority must link to sentence or logic training using the same original evidence."
+            )
+    pseudo_rules = pseudo_scoring_rule_hits(data)
+    if pseudo_rules:
+        raise ExaminerResultError(
+            "Feedback must not present word counts, paragraph counts, templates, linking-word "
+            "counts, or prescribed constructions as IELTS requirements."
+        )
     normalized = dict(data)
+    normalized["raw_overall_band"] = calculate_descriptor_overall(criteria)
     normalized["overall_band"] = calculate_overall(criteria)
+    normalized["overall_calibration_version"] = OVERALL_CALIBRATION_VERSION
+    normalized["overall_calibration_offset"] = OVERALL_CALIBRATION_OFFSET
     normalized["schema_version"] = SCHEMA_VERSION
-    normalized["prompt_version"] = PROMPT_VERSION
-    normalized["skill_version"] = SKILL_VERSION
+    normalized["prompt_version"] = REPORT_PROMPT_VERSION
+    normalized["scoring_prompt_version"] = SCORING_PROMPT_VERSION
+    normalized["feedback_prompt_version"] = FEEDBACK_PROMPT_VERSION
+    normalized["skill_version"] = SCORING_SKILL_VERSION
+    normalized["feedback_skill_version"] = FEEDBACK_SKILL_VERSION
+    normalized["practice_band_interval_version"] = PRACTICE_BAND_INTERVAL_VERSION
     return normalized
 
 
@@ -298,113 +760,3 @@ def score_snapshot(data: dict[str, Any]) -> dict[str, float | None]:
         "Lexical Resource": mapping.get("Lexical Resource"),
         "Grammar Range & Accuracy": mapping.get("Grammatical Range and Accuracy"),
     }
-
-
-def examiner_result_to_markdown(data: dict[str, Any]) -> str:
-    """Render the strict result in the legacy report shape used by the UI and exports."""
-    overall = float(data["overall_band"])
-    lower = max(0.0, overall - 0.5)
-    criteria_rows = []
-    for item in data["criteria"]:
-        evidence = "; ".join(f'“{quote.strip().strip(chr(34))}”' for quote in item["evidence"][:2])
-        reason = f"{item['reason']} Evidence: {evidence} Next-band limit: {item['next_band_limit']}"
-        criteria_rows.append(f"| {item['criterion']} | {item['score']} | {item['score']} | {reason} |")
-
-    def coaching(items: list[dict[str, Any]]) -> str:
-        blocks = []
-        for index, item in enumerate(items, 1):
-            blocks.append(
-                f"{index}. **{item['title']}**\n"
-                f"   - **Original evidence:** “{item['evidence']}”\n"
-                f"   - **Why it matters:** {item['why']}\n"
-                f"   - **Action:** {item['action']}"
-            )
-        return "\n\n".join(blocks)
-
-    corrections = "\n".join(
-        f"| {item['original'].replace('|', '/')} | {item['problem'].replace('|', '/')} | {item['improved'].replace('|', '/')} |"
-        for item in data["sentence_corrections"]
-    )
-    paragraphs = "\n\n".join(
-        f"### Paragraph {item['paragraph']}\n**What works:** {item['strength']}\n\n"
-        f"**What weakens the band score:** {item['limitation']}\n\n"
-        f"**One concrete improvement:** {item['improvement']}"
-        for item in data["paragraph_feedback"]
-    )
-    expressions = "\n".join(
-        f"| {item['expression'].replace('|', '/')} | {item['meaning'].replace('|', '/')} | {item['example'].replace('|', '/')} |"
-        for item in data["useful_expressions"]
-    )
-    sentence_training = "\n".join(
-        f'{index}. "{item["original"]}"\n   - 目标：{item["goal"]}\n   - 参考：{item["reference"]}'
-        for index, item in enumerate(data["sentence_training"], 1)
-    )
-    logic_training = "\n\n".join(
-        f"### 任务 {index}\n问题：{item['problem']}\n\n任务：{item['task']}\n\n"
-        f'原文：“{item["original"]}”\n\n要求：\n' + "\n".join(f"- {rule}" for rule in item["requirements"])
-        for index, item in enumerate(data["logic_training"], 1)
-    )
-    next_practice = data["next_practice"]
-    return f"""# IELTS Writing Examiner Report
-
-## 1. Overall Band Score
-
-**Estimated band range: {lower:.1f}-{overall:.1f}**
-
-**Likely score: {overall:.1f}**
-
-{data['summary']}
-
-## 2. Four Criteria Scores
-
-| Criterion | Band Range | Likely Score | Why |
-|---|---:|---:|---|
-{chr(10).join(criteria_rows)}
-
-## 3. Top 3 Score-Boosting Priorities
-
-{coaching(data['priorities'])}
-
-## 4. Main Problems
-
-{coaching(data['problems'])}
-
-## 5. Sentence-level Corrections
-
-| Original | Problem | Improved version |
-|---|---|---|
-{corrections}
-
-## 6. Paragraph-level Feedback
-
-{paragraphs}
-
-## 7. Band 7.5 Rewrite
-
-{data['band_75_rewrite']}
-
-## 8. Useful Expressions
-
-| Expression | Meaning | Example |
-|---|---|---|
-{expressions}
-
-## 9. Next Practice Task
-
-**Task:** {next_practice['task']}
-
-- **One sentence pattern to practise:** {next_practice['sentence_pattern']}
-- **One warning about what to avoid next time:** {next_practice['warning']}
-
-## 11. 单句提分训练
-
-【练习任务】请先独立改写，再查看参考并提交点评。
-
-{sentence_training}
-
-## 12. 写作提升验证
-
-【提升练习】围绕本轮最低评分项完成段落级重写。
-
-{logic_training}
-""".strip()

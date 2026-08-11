@@ -37,6 +37,20 @@ class CloudStoreTests(unittest.TestCase):
         self.assertEqual(params["essays.content_hash"], "eq.content-hash")
         self.assertEqual(params["prompt_version"], "eq.task2-structured-zh-2026-08-09")
 
+    @patch("src.cloud_store.requests.request")
+    def test_locked_scoring_cache_is_independent_of_feedback_version(self, request):
+        response = Mock(status_code=200, content=b"[]")
+        response.json.return_value = []
+        request.return_value = response
+        user = CloudUser("user-a", "a@example.com", "user-access-token")
+
+        self.store.find_cached_scoring(user, "content-hash", "score-v10")
+
+        params = request.call_args.kwargs["params"]
+        self.assertEqual(params["essays.content_hash"], "eq.content-hash")
+        self.assertEqual(params["report_json->>scoring_prompt_version"], "eq.score-v10")
+        self.assertNotIn("feedback_prompt_version", str(params))
+
     def test_schema_enables_rls_for_every_private_table(self):
         schema = (Path(__file__).parents[1] / "supabase" / "schema.sql").read_text(encoding="utf-8")
         for table in ("essays", "grading_runs", "practice_attempts", "draft_revisions", "learning_items", "expression_attempts"):

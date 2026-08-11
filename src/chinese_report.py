@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.expression_catalog import FUNCTION_LABELS
+from src.report_schema import estimated_band_range
 
 CRITERION_DISPLAY_NAMES = {
     "Task Response": "任务回应（TR）",
@@ -14,16 +15,21 @@ CRITERION_DISPLAY_NAMES = {
 }
 
 
-def examiner_result_to_markdown(data: dict[str, Any]) -> str:
+def examiner_result_to_markdown(
+    data: dict[str, Any],
+    *,
+    estimated_range: tuple[float, float] | None = None,
+) -> str:
     """把结构化评分结果转换为可下载、可兼容旧工具的中文 Markdown。"""
     overall = float(data["overall_band"])
-    lower = max(0.0, overall - 0.5)
+    lower, upper = estimated_range or estimated_band_range({"overall_band": overall})
     criteria_rows: list[str] = []
     for item in data["criteria"]:
         evidence = "；".join(f'“{str(quote).strip().strip(chr(34))}”' for quote in item["evidence"][:2])
         explanation = (
-            f"{item['reason']} 原文依据：{evidence} "
-            f"下一档限制：{item['next_band_limit']}"
+            f"**当前表现：** {item['reason']} "
+            f"**原文依据：** {evidence} "
+            f"**为什么还没到下一档：** {item['next_band_limit']}"
         )
         label = CRITERION_DISPLAY_NAMES.get(item["criterion"], item["criterion"])
         criteria_rows.append(f"| {label} | {item['score']} | {explanation} |")
@@ -33,7 +39,8 @@ def examiner_result_to_markdown(data: dict[str, Any]) -> str:
             f"{index}. **{item['title']}**\n"
             f"   - **原文依据：** “{item['evidence']}”\n"
             f"   - **为什么重要：** {item['why']}\n"
-            f"   - **具体行动：** {item['action']}"
+            f"   - **具体行动：** {item['action']}\n"
+            f"   - **完成检查：** {item.get('success_check', '')}"
             for index, item in enumerate(items, 1)
         )
 
@@ -64,13 +71,13 @@ def examiner_result_to_markdown(data: dict[str, Any]) -> str:
         for index, item in enumerate(data["logic_training"], 1)
     )
     next_practice = data["next_practice"]
-    return f"""# 雅思写作批改报告
+    return f"""# 雅思写作练习估分与反馈
+
+> 本报告提供 estimated practice band（练习估分），不是 IELTS 官方成绩。
 
 ## 1. 总分
 
-**预估分数区间：{lower:.1f}–{overall:.1f}**
-
-**最可能分数：{overall:.1f}**
+**预估分数区间：{lower:.1f}–{upper:.1f}**
 
 {data['summary']}
 
@@ -80,7 +87,7 @@ def examiner_result_to_markdown(data: dict[str, Any]) -> str:
 |---|---:|---|
 {chr(10).join(criteria_rows)}
 
-## 3. 核心提分方向
+## 3. 下一步训练行动
 
 {coaching(data['priorities'])}
 

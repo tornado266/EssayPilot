@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any
+
+from src.report_schema import format_practice_band_interval
 
 
 CRITERIA_LABELS = {
@@ -38,7 +41,7 @@ def _extract_json_object(text: str) -> str:
 
 def parse_band(value: Any) -> float | None:
     """Return a valid IELTS band score, or None when parsing is not possible."""
-    if value is None:
+    if value is None or isinstance(value, bool):
         return None
 
     try:
@@ -49,8 +52,8 @@ def parse_band(value: Any) -> float | None:
             return None
         score = float(match.group(0))
 
-    if 0 <= score <= 9:
-        return round(score * 2) / 2
+    if math.isfinite(score) and 0 <= score <= 9 and score * 2 == int(score * 2):
+        return score
     return None
 
 
@@ -98,7 +101,9 @@ def structured_report_to_markdown(parsed: dict[str, Any]) -> str:
     data = parsed.get("data", {})
     lines = ["# 雅思写作批改报告", ""]
     overall = data.get("overall_band")
-    lines.extend(["## 分数概览", "", f"总分：{overall}", ""])
+    lines.extend(
+        ["## 分数概览", "", f"预估分数区间：{format_practice_band_interval(overall)}", ""]
+    )
 
     lines.extend(["## 四项评分", ""])
     criteria = data.get("criteria_scores", {})

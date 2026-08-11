@@ -29,6 +29,8 @@ class ChineseLocalizationTests(unittest.TestCase):
             overall_band=6.5,
         )
         self.assertIn("- 词数: 250", record)
+        self.assertIn("- 预估分数区间: 6.0–7.5", record)
+        self.assertNotIn("最可能分数", record)
         self.assertIn("## 学生原稿", record)
         self.assertTrue(markdown_to_pdf(record).startswith(b"%PDF"))
 

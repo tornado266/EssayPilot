@@ -1,0 +1,287 @@
+{
+  "split_version": "examiner-claimed-group-stratified-v1",
+  "provenance_tier": "examiner_claimed",
+  "splits": {
+    "development": {
+      "count": 42,
+      "score_distribution": {
+        "5": 5,
+        "6": 16,
+        "7": 12,
+        "8": 9
+      },
+      "records": [
+        {
+          "case_id": "kaggle_08c349b3f2632515",
+          "content_sha256": "06b1a46fdd214655b84572950f4bcaa7218038abf67eba7d94e1100e932c4393"
+        },
+        {
+          "case_id": "kaggle_0b3dc10f042ed190",
+          "content_sha256": "30cc33576872b2e3a4bb8a8b3ab8709ad123e8d7a3d4acfdeabed59a58e64afa"
+        },
+        {
+          "case_id": "kaggle_0eb6b3d3a52ce2b6",
+          "content_sha256": "2668247056dd04c7b04d200335b9f5f4a6b5fcf54536e72cac064bd146f3456c"
+        },
+        {
+          "case_id": "kaggle_0fa52a63fc3a9739",
+          "content_sha256": "8ebac5cee1d96c8097a1d32099418f241464dd6312b7089c7044eb0131f78228"
+        },
+        {
+          "case_id": "kaggle_186e742ca4dcc318",
+          "content_sha256": "4364929f7d0a0b9168a953caed3183e4f2e87db541d3e91ea26a12c53b59158a"
+        },
+        {
+          "case_id": "kaggle_255e0fbb8f2fa10c",
+          "content_sha256": "f156c4a1f6ff3be2cbdc6a86070a089de5a1ba7d6fd3b3c0c9c47c3c88c0b6e1"
+        },
+        {
+          "case_id": "kaggle_3c324081d7e44386",
+          "content_sha256": "ff7207f6813582246eb75fd1f546c8a9cb9865d627c7c7d38c29f62349ccb820"
+        },
+        {
+          "case_id": "kaggle_4649276743b0c224",
+          "content_sha256": "15cf963c081e614941dcff1a117531c8050138a03ce5b022344b395793daac5b"
+        },
+        {
+          "case_id": "kaggle_48f72a4f7311bba9",
+          "content_sha256": "2975ec63f3154e01c27203629b889e28c209005f653725f783cec37f3bcb294a"
+        },
+        {
+          "case_id": "kaggle_4c206ca6701f79ad",
+          "content_sha256": "ff40b76e31e42349f7bad83ce15d87b6ffa91318229202f521ebc1da680b785a"
+        },
+        {
+          "case_id": "kaggle_4e84963e3b72d31b",
+          "content_sha256": "7c9b93105b36653a7ff5ac05c8aa1ab8e78cba6a3e3d7a328432657faf72d96b"
+        },
+        {
+          "case_id": "kaggle_58eaa03c6f3ee660",
+          "content_sha256": "2fdf578ccf087b4e1821c7ea934004ac8995dbdca83cbbee50e5e02fd1b84f41"
+        },
+        {
+          "case_id": "kaggle_61f2a5fd00b9a0f6",
+          "content_sha256": "c14587bfe1eb3520e4b8cf224c18a8c5523bd97a0aba54cb4d9b7975492af00d"
+        },
+        {
+          "case_id": "kaggle_6d586acc5c00ac13",
+          "content_sha256": "a92d15c630349a6eaf47b6ac3ad76fa723ed332c1e621b763ddbad5230c5d7df"
+        },
+        {
+          "case_id": "kaggle_6f35b2b3f2fb7fe7",
+          "content_sha256": "253d143c17fa6bc01bc22e80810cf8fbc293185ceb610de0dbcfe3a49190e3b9"
+        },
+        {
+          "case_id": "kaggle_6f4abd85f3d652fc",
+          "content_sha256": "6ecdf6d7fbdf99005b8cce22c8198d5cb4e1f2e83b2ceaca85b7d3b6b0c0bf59"
+        },
+        {
+          "case_id": "kaggle_733f7efb51c4f71a",
+          "content_sha256": "2d0a45d84d2850aa62bd9b15393bbb9555761ceaae311da40aa206b907046299"
+        },
+        {
+          "case_id": "kaggle_82de62e2040febc0",
+          "content_sha256": "551a06ad3ede3bb2e84094c10d196a32996a299dae3d3fd2e71246385b7887a2"
+        },
+        {
+          "case_id": "kaggle_894b4ffc6282f0a0",
+          "content_sha256": "3f24a9b351255e8bc850fe91ba332b60c4a4184b325f53786e30c3c150d20846"
+        },
+        {
+          "case_id": "kaggle_89b59f0696d69da8",
+          "content_sha256": "9bf44c5a122288277d111be3fb44450ffb2ffa9c6c33ff5cab99ab2400a3cc13"
+        },
+        {
+          "case_id": "kaggle_8bd3527644fbc50b",
+          "content_sha256": "e8bb6c89781751856a68a7825f8fd1227c5fe53427398cb697280e636508fbe4"
+        },
+        {
+          "case_id": "kaggle_911ffb02aafb4c1f",
+          "content_sha256": "96d4b938af3ce6b9f7a0d3d45f3d6611b8974989a40513225ea25bf5362c6e01"
+        },
+        {
+          "case_id": "kaggle_95ca95fb9bdaa6e0",
+          "content_sha256": "3a793d88d1defb6099398c1221d0e6b14f75ef6e2acacd3b652baf8b3db44aa4"
+        },
+        {
+          "case_id": "kaggle_9d0ca8260db4862f",
+          "content_sha256": "7a5b43799fb5c8918f8dbf10dd508a485b5e0a2f71151e161c60304b63b16d89"
+        },
+        {
+          "case_id": "kaggle_a0dc12c77fbb7cde",
+          "content_sha256": "1b44ef1a3019ab1f3492ee685cf7345203ae4911527c5debc8707286062bc311"
+        },
+        {
+          "case_id": "kaggle_bfe931a732bc60f7",
+          "content_sha256": "d4185f4bc08ea8dfafbaa2f3b164444532c1bc124b879a847aaf32ae2d698579"
+        },
+        {
+          "case_id": "kaggle_cd408c082f4f5631",
+          "content_sha256": "87e2940df21f3912f55326eaffe805accfceb76058c711e2ab9c8419e07045cc"
+        },
+        {
+          "case_id": "kaggle_cf9de4fac02316d0",
+          "content_sha256": "405d1d387b50bf5a30f362693800c58883aac80f776b4eace6a7dcf85b6633cc"
+        },
+        {
+          "case_id": "kaggle_d1a5efdd046c18a2",
+          "content_sha256": "a7bf72fe6f3404fed02dca8423022cfadffd2aa2af74634fcc0b583c8dcf2498"
+        },
+        {
+          "case_id": "kaggle_d2a0b7c1dffeeea9",
+          "content_sha256": "2cc230c6f0f0efed374eca31a06fc1931ceabec67e73512a47296351a13059c1"
+        },
+        {
+          "case_id": "kaggle_d3a3008571284fad",
+          "content_sha256": "c2741220a2d97fa62f10fe162faa2623526fff4282a6d0ea3c9fa39732ec12e9"
+        },
+        {
+          "case_id": "kaggle_d710971b75f96011",
+          "content_sha256": "6e283846c77af85ff3bc89ed586476e8d08d1996396247ac55fecd5904d5a478"
+        },
+        {
+          "case_id": "kaggle_daf108f716b186a8",
+          "content_sha256": "47b2244ab97d8a9f1685401fa5ddd0111314a9490ac31f306f2053860b5eaaff"
+        },
+        {
+          "case_id": "kaggle_e16f30179c1383b2",
+          "content_sha256": "aa1e6be63900bef4e36908980cc62f37a6ab4d2a662cef619af77c2fc48f378e"
+        },
+        {
+          "case_id": "kaggle_e97a0aff70e2eb56",
+          "content_sha256": "8997d34f2a4d1442fbe2cdf1f9d1da5dc2da9c500b6bfa1bb811dcfd1e11e014"
+        },
+        {
+          "case_id": "kaggle_ec9ac1d59fc401a9",
+          "content_sha256": "9a41cfef76c4c82495aa55774336fd061676a9bd713ce7720f699cb9854b4447"
+        },
+        {
+          "case_id": "kaggle_ee6ed6d88615dfa7",
+          "content_sha256": "d4e5e92fedf985391668c092d750fbd7369ca59e9699d07dde974eec2d078164"
+        },
+        {
+          "case_id": "kaggle_eecd48c7de0466b3",
+          "content_sha256": "b65bdde5fe1bc65ce7c83b4af60ca0b200781e4fb7beb4060a0325ebbbbce6e6"
+        },
+        {
+          "case_id": "kaggle_f63117a81f2bb41b",
+          "content_sha256": "465e05608d1e96089a47901f0608d6405c57bbbda120a156b54232626b9ac181"
+        },
+        {
+          "case_id": "kaggle_f6968a20670eadc9",
+          "content_sha256": "1324ba795034c46e0b407937b85d43b22e21fb0ef759a39e231497d9c46397bf"
+        },
+        {
+          "case_id": "kaggle_f75a76df15f6dc40",
+          "content_sha256": "7b64e10643136736a0342fcb32fb0f16d50d92164ea65b47b7cd600b6f389e1a"
+        },
+        {
+          "case_id": "kaggle_f75c405a5f7126b5",
+          "content_sha256": "710ec071d95d5b2c7dc300ff48b31907aba0211017476bd1df1510cc6b477103"
+        }
+      ]
+    },
+    "validation": {
+      "count": 8,
+      "score_distribution": {
+        "5": 1,
+        "6": 3,
+        "7": 2,
+        "8": 2
+      },
+      "records": [
+        {
+          "case_id": "kaggle_2c5f90a636dbdf58",
+          "content_sha256": "cabe21bd33a010728e7baff52b80fe9bbc52c0185eb7235b66717840d24dec70"
+        },
+        {
+          "case_id": "kaggle_3b2bed9f93309485",
+          "content_sha256": "0aced72527a8eb01b2b09668cddbf84e7e6c6d77dec40a7436c9396a6fb43abd"
+        },
+        {
+          "case_id": "kaggle_3b7b9b1051fe869b",
+          "content_sha256": "916dff789d650c03dfdb05c5457b9aecdfc362350c80bda40459a58d4ecb31f9"
+        },
+        {
+          "case_id": "kaggle_4edb18819cd81f6c",
+          "content_sha256": "956ac94a45ad2c83683a41365878fd705a54bc8bbb1f5c816f13df18dcae95cd"
+        },
+        {
+          "case_id": "kaggle_50d0a1e29dbe3e68",
+          "content_sha256": "227c333c5f38f0dcec7c1d3a0a18e9ea2b5a173a8d7eee214228d91aeae1e83f"
+        },
+        {
+          "case_id": "kaggle_703e7c2435ea860f",
+          "content_sha256": "d890c7fef90f07875b528b93d222db8742970fc3684e3e7059a9195c4a752ada"
+        },
+        {
+          "case_id": "kaggle_cb7e1efafa21d7e7",
+          "content_sha256": "e3bf008675cdaf0d6829a0773f61a3627d9a7fe53294bfc8e70af6229366d997"
+        },
+        {
+          "case_id": "kaggle_eb888e3d69081782",
+          "content_sha256": "3d7a99e41ee03c2f3c4c3449de161e32b72dc858eb92da7b66dbad7b030a70ee"
+        }
+      ]
+    },
+    "holdout": {
+      "count": 12,
+      "score_distribution": {
+        "5": 2,
+        "6": 5,
+        "7": 3,
+        "8": 2
+      },
+      "records": [
+        {
+          "case_id": "kaggle_18ca5d0ea3db816b",
+          "content_sha256": "9020c35a311f4ef87a03b033782ea94dae70db7b3425c15ad375bb864b7f0843"
+        },
+        {
+          "case_id": "kaggle_1f2fbf3b56e06c2b",
+          "content_sha256": "e1a630b4a453dbfda6a179292ac9dcaa51691ef37770c69291ccfa11f76d2835"
+        },
+        {
+          "case_id": "kaggle_2678e1b75ea757e1",
+          "content_sha256": "46981a97f80693d047214b3293a5b049896788bf85ab58cc85fde6b38e27bc25"
+        },
+        {
+          "case_id": "kaggle_79494fe1d0b33975",
+          "content_sha256": "e8a7c0969cbdda9052970ebcf18de70763adc1375b4cb07780a5a56da2dae38d"
+        },
+        {
+          "case_id": "kaggle_907114da57ecd0d8",
+          "content_sha256": "1b8ee721575a2af5883f2f3b2d65e65ec29013b90fdc89df7ea8ad9fb99685fa"
+        },
+        {
+          "case_id": "kaggle_908017cc3de451cf",
+          "content_sha256": "50a17dce681a62b95d1d8684ee185993c51d97bcc97ecc1a0d70ef7a461bbf6c"
+        },
+        {
+          "case_id": "kaggle_a8649a2084b7018c",
+          "content_sha256": "e23ac4694c479241d4cdff668902040de1847b795ed4c7f900b5d100ee670109"
+        },
+        {
+          "case_id": "kaggle_ae8b9b931a382fda",
+          "content_sha256": "32c3c7a7b5aa09ec2ac2a772e313c3a0fe254f4398a9143f2f95095b6bb76f9f"
+        },
+        {
+          "case_id": "kaggle_b9f08cad9cf11c99",
+          "content_sha256": "70447d6acbee9e12d60bb6e26c457f4f7e969e12808f91006e65e5fa6de76cfd"
+        },
+        {
+          "case_id": "kaggle_cb1a27901b93affd",
+          "content_sha256": "902b48ef139f4390822cfa84c5bbb1aec5d538e676dc1db29ff7bc610b42ab50"
+        },
+        {
+          "case_id": "kaggle_e5e81340eaf22cd1",
+          "content_sha256": "c83f64963dc8c78a8933dde10e42215a94bba5ee083e0e87109799077632c7ec"
+        },
+        {
+          "case_id": "kaggle_edc14e25178218e0",
+          "content_sha256": "5c96d45ddaa6b9d733d568ca79b133bbe669b28478f72ada3970bb4455c4356f"
+        }
+      ]
+    }
+  }
+}
