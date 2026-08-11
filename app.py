@@ -1,4 +1,4 @@
-﻿"""Streamlit app entry point for the IELTS Writing Correction Skill."""
+"""Streamlit app entry point for the IELTS Writing Correction Skill."""
 
 import base64
 import hashlib
@@ -50,12 +50,19 @@ from src.report_schema import (
     submission_hash,
 )
 from src.text_utils import count_words, word_count_warning
+from ui.alpine import (
+    inject_alpine_theme,
+    render_feature_bento,
+    render_hero as render_alpine_hero,
+    render_scoring_loader,
+    render_text_diff,
+    render_training_stepper,
+)
 
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).parent
-BACKGROUND_IMAGE = BASE_DIR / "assets" / "hawaii-background.png"
 DEMO_REPORT_PATH = BASE_DIR / "data" / "demo_report.md"
 SCORE_PATTERN = re.compile(r"(?:最可能分数|Likely Score|Overall Band Score|Overall Band|likely score)[^\d]*(\d(?:\.\d)?)")
 CRITERION_DISPLAY_NAMES = {
@@ -77,6 +84,7 @@ SCORE_DISPLAY_NAMES = {
     "Lexical Resource": "词汇资源（LR）",
     "Grammar Range & Accuracy": "语法多样性与准确性（GRA）",
 }
+ALPINE_CHART_COLORS = ["#0E3B5F", "#1769AA", "#4D8DBD", "#79AFCF"]
 SAMPLE_POPOVER_TITLE = "试用作文"
 SAMPLE_TOPIC = (
     "Some people believe university students should only study their main subjects, "
@@ -135,16 +143,7 @@ def session_cloud_user() -> CloudUser | None:
 
 def render_login_page(store: SupabaseStore) -> None:
     """Render passwordless email-code authentication without exposing provider details."""
-    st.markdown(
-        """
-        <section class="hero-shell">
-            <div class="eyebrow">ESSAYPILOT 学习档案</div>
-            <h1>让每一次修改，都留在你的成长档案里</h1>
-            <p>使用邮箱验证码登录，跨设备保存作文、训练进度和第二稿对比。</p>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
+    render_alpine_hero(variant="login")
     email = st.text_input("邮箱", key="login_email", placeholder="name@example.com")
     send_col, demo_col = st.columns(2)
     with send_col:
@@ -229,579 +228,11 @@ def render_bookmark_rail(items: list[tuple[str, str]]) -> None:
     )
     active_rules = "".join(
         f'body:has(#{anchor}:target) .bookmark-rail a[href="#{anchor}"]'
-        "{background:rgba(255,255,255,.88);color:#0f6270;box-shadow:0 8px 18px rgba(8,51,68,.10);}"
+        "{background:var(--ep-surface);color:var(--ep-primary-hover);box-shadow:var(--ep-shadow-sm);}"
         for _, anchor in items
     )
     st.markdown(
         f'<style>{active_rules}</style><nav class="bookmark-rail"><span>快速索引</span>{links}</nav>',
-        unsafe_allow_html=True,
-    )
-
-
-def image_to_base64(path: Path) -> str:
-    """Convert a local image to base64 so Streamlit can use it in CSS."""
-    return base64.b64encode(path.read_bytes()).decode("utf-8")
-
-
-def inject_page_style() -> None:
-    """Add a calm ChatGPT/Claude/Notion-inspired visual style."""
-    background = image_to_base64(BACKGROUND_IMAGE)
-    st.markdown(
-        f"""
-        <style>
-        [data-testid="stAppViewContainer"] {{
-            background:
-                linear-gradient(120deg, rgba(255, 255, 255, 0.42), rgba(244, 247, 246, 0.32)),
-                url("data:image/png;base64,{background}");
-            background-size: cover;
-            background-position: center;
-            background-attachment: fixed;
-        }}
-
-        [data-testid="stHeader"] {{
-            background: transparent;
-        }}
-
-        [data-testid="stSidebar"] > div:first-child {{
-            background:
-                linear-gradient(
-                    180deg,
-                    rgba(255, 255, 255, 0.86),
-                    rgba(223, 250, 255, 0.78)
-                );
-            backdrop-filter: blur(18px);
-            border-right: 1px solid rgba(255, 255, 255, 0.55);
-        }}
-
-        [data-testid="stSidebar"] * {{
-            color: #12343b;
-        }}
-
-        .block-container {{
-            max-width: 1240px;
-            padding-top: 2.2rem;
-            padding-bottom: 3rem;
-            background: rgba(255, 255, 255, 0.68);
-            border: 1px solid rgba(255, 255, 255, 0.72);
-            border-radius: 28px;
-            backdrop-filter: blur(18px) saturate(125%);
-            box-shadow: 0 28px 80px rgba(19, 67, 78, 0.12);
-        }}
-
-        h1 {{
-            color: #16323a;
-            font-weight: 800;
-            letter-spacing: 0;
-        }}
-
-        h2, h3 {{
-            color: #1d3f46;
-            letter-spacing: 0;
-        }}
-
-        .stCaption, p, label, span, li {{
-            color: #26474f;
-        }}
-
-        [data-baseweb="select"] > div {{
-            background: rgba(255, 255, 255, 0.92);
-            border: 1px solid rgba(14, 116, 144, 0.24);
-            border-radius: 8px;
-            color: #12343b;
-            box-shadow: 0 12px 24px rgba(8, 51, 68, 0.08);
-        }}
-
-        [data-baseweb="select"] svg {{
-            color: #0e7490;
-        }}
-
-        [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] {{
-            gap: 1rem;
-        }}
-
-        div[data-testid="stTextArea"] textarea,
-        div[data-testid="stTextInput"] input {{
-            background: rgba(255, 255, 255, 0.9);
-            border: 1px solid rgba(14, 116, 144, 0.22);
-            border-radius: 16px;
-            color: #12343b;
-            box-shadow: 0 14px 30px rgba(8, 51, 68, 0.08);
-        }}
-
-        div[data-testid="stTextArea"] textarea::placeholder,
-        div[data-testid="stTextInput"] input::placeholder {{
-            color: #6b8790;
-            opacity: 1;
-        }}
-
-        div[data-testid="stTextArea"] textarea:focus,
-        div[data-testid="stTextInput"] input:focus {{
-            border-color: #0e9f9a;
-            box-shadow: 0 0 0 1px #0e9f9a, 0 16px 34px rgba(8, 51, 68, 0.1);
-        }}
-
-        div.stButton > button:first-child,
-        div.stDownloadButton > button:first-child {{
-            background: #eaf7ff;
-            color: #17465f;
-            border: 1px solid #b8ddf2;
-            border-radius: 14px;
-            min-height: 3rem;
-            font-weight: 700;
-            box-shadow: 0 12px 24px rgba(72, 155, 196, 0.16);
-        }}
-
-        div.stButton > button:first-child *,
-        div.stDownloadButton > button:first-child * {{
-            color: #17465f;
-        }}
-
-        div.stButton > button:first-child:hover,
-        div.stDownloadButton > button:first-child:hover {{
-            background: #d9f0fc;
-            color: #123f57;
-            border-color: #8fc9e7;
-            transform: translateY(-1px);
-            box-shadow: 0 16px 28px rgba(72, 155, 196, 0.22);
-        }}
-
-        div.stButton > button:first-child:active,
-        div.stDownloadButton > button:first-child:active {{
-            background: #c8e8f8;
-            transform: translateY(0);
-        }}
-
-        .score-card {{
-            padding: 1.15rem 1.2rem;
-            border: 1px solid rgba(31, 111, 120, 0.16);
-            border-radius: 18px;
-            background: linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(235, 249, 250, 0.84));
-            box-shadow: 0 16px 38px rgba(8, 51, 68, 0.09);
-            transition: transform 180ms ease, box-shadow 180ms ease;
-        }}
-
-        .score-card:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 20px 44px rgba(8, 51, 68, 0.13);
-        }}
-
-        .score-label {{
-            color: #5f7378;
-            font-size: 0.82rem;
-            margin-bottom: 0.2rem;
-        }}
-
-        .score-value {{
-            color: #16323a;
-            font-size: 1.75rem;
-            font-weight: 800;
-        }}
-
-        .dashboard-stat-grid {{
-            display: grid;
-            grid-template-columns: repeat(var(--stat-columns, 3), minmax(0, 1fr));
-            gap: 0.8rem;
-            margin: 0.55rem 0 1rem;
-        }}
-
-        .dashboard-stat-card {{
-            min-width: 0;
-            padding: 1rem 1.05rem;
-            border: 1px solid rgba(31, 111, 120, 0.15);
-            border-radius: 18px;
-            background: linear-gradient(145deg, rgba(255, 255, 255, 0.93), rgba(235, 249, 250, 0.8));
-            box-shadow: 0 14px 32px rgba(8, 51, 68, 0.075);
-        }}
-
-        .dashboard-stat-label {{
-            color: #5f7378;
-            font-size: 0.82rem;
-            font-weight: 680;
-            line-height: 1.35;
-        }}
-
-        .dashboard-stat-value {{
-            margin-top: 0.28rem;
-            color: #16323a;
-            font-size: clamp(1.2rem, 2.1vw, 1.75rem);
-            font-weight: 820;
-            line-height: 1.22;
-            overflow-wrap: anywhere;
-        }}
-
-        .dashboard-stat-note {{
-            min-height: 1.2em;
-            margin-top: 0.32rem;
-            color: #71878d;
-            font-size: 0.74rem;
-            line-height: 1.4;
-            overflow-wrap: anywhere;
-        }}
-
-        .workspace-note {{
-            padding: 1.15rem 1.25rem;
-            border: 1px solid rgba(31, 111, 120, 0.14);
-            border-radius: 18px;
-            background: rgba(255, 255, 255, 0.74);
-        }}
-
-        .issue-map {{
-            padding: 1.35rem 1.45rem;
-            border: 1px solid rgba(44, 105, 116, 0.16);
-            border-radius: 22px;
-            background: rgba(255, 255, 255, 0.82);
-            color: #253f47;
-            font-size: 1rem;
-            line-height: 1.95;
-            margin: 0.75rem 0 1.2rem;
-            box-shadow: 0 18px 38px rgba(34, 78, 88, 0.08);
-        }}
-
-        .issue-mark {{
-            background: linear-gradient(transparent 48%, rgba(244, 177, 140, 0.48) 48%);
-            color: inherit;
-            padding: 0 0.08rem;
-        }}
-
-        .issue-mark sup {{
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 1.15rem;
-            height: 1.15rem;
-            margin-left: 0.18rem;
-            border-radius: 999px;
-            background: #d9772d;
-            color: white;
-            font: 700 0.68rem/1 Arial, sans-serif;
-        }}
-
-        [data-testid="stSidebar"] {{
-            background: linear-gradient(180deg, rgba(242, 251, 252, 0.98), rgba(255, 253, 247, 0.98));
-            border-right: 1px solid rgba(44, 105, 116, 0.12);
-        }}
-
-        [data-testid="stSidebar"] [data-testid="stButton"] button {{
-            justify-content: flex-start;
-            border-color: transparent;
-            background: transparent;
-            box-shadow: none;
-        }}
-
-        [data-testid="stSidebar"] [data-testid="stButton"] button:hover {{
-            background: rgba(194, 233, 237, 0.45);
-            border-color: rgba(44, 105, 116, 0.12);
-        }}
-
-        .hero-shell {{
-            position: relative;
-            overflow: hidden;
-            padding: 2rem 2.1rem;
-            margin-bottom: 0.75rem;
-            border: 1px solid rgba(255, 255, 255, 0.78);
-            border-radius: 24px;
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(220, 247, 250, 0.78));
-            box-shadow: 0 22px 58px rgba(20, 91, 102, 0.11);
-        }}
-
-        .hero-shell::after {{
-            content: "";
-            position: absolute;
-            width: 230px;
-            height: 230px;
-            right: -70px;
-            top: -110px;
-            border-radius: 50%;
-            background: radial-gradient(circle, rgba(94, 212, 203, 0.25), rgba(94, 212, 203, 0));
-        }}
-
-        .eyebrow {{
-            display: inline-flex;
-            padding: 0.36rem 0.68rem;
-            margin-bottom: 0.65rem;
-            border: 1px solid rgba(14, 116, 144, 0.18);
-            border-radius: 999px;
-            background: rgba(232, 249, 252, 0.86);
-            color: #177184;
-            font-size: 0.74rem;
-            font-weight: 800;
-            letter-spacing: 0.12em;
-        }}
-
-        .hero-shell h1 {{
-            margin: 0;
-            max-width: 760px;
-            font-size: clamp(2.15rem, 4vw, 3.65rem);
-            line-height: 1.04;
-            letter-spacing: -0.045em;
-        }}
-
-        .hero-shell p {{
-            max-width: 720px;
-            margin: 0.85rem 0 0;
-            color: #486870;
-            font-size: 1.02rem;
-            line-height: 1.75;
-        }}
-
-        .feature-strip {{
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 0.75rem;
-            margin: 0.65rem 0 1.3rem;
-        }}
-
-        .feature-chip {{
-            padding: 0.85rem 1rem;
-            border: 1px solid rgba(31, 111, 120, 0.12);
-            border-radius: 16px;
-            background: rgba(255, 255, 255, 0.72);
-            color: #385c64;
-            font-size: 0.88rem;
-            box-shadow: 0 10px 24px rgba(8, 51, 68, 0.06);
-        }}
-
-        .feature-chip strong {{
-            display: block;
-            color: #173c45;
-            font-size: 0.98rem;
-            margin-bottom: 0.18rem;
-        }}
-
-        [data-testid="stElementContainer"]:has(.bookmark-rail) {{
-            position: sticky !important;
-            top: 1rem;
-            z-index: 999;
-            height: 0;
-            overflow: visible;
-            pointer-events: none;
-        }}
-
-        .bookmark-rail {{
-            position: absolute;
-            right: -80px;
-            top: 120px;
-            z-index: 999;
-            display: flex;
-            flex-direction: column;
-            gap: 0.38rem;
-            width: 116px;
-            max-height: calc(100vh - 160px);
-            padding: 0.65rem;
-            border: 1px solid rgba(255, 255, 255, 0.74);
-            border-radius: 18px;
-            background: rgba(245, 253, 253, 0.82);
-            backdrop-filter: blur(16px);
-            box-shadow: 0 16px 40px rgba(15, 76, 88, 0.13);
-            overflow-y: auto;
-            pointer-events: auto;
-        }}
-
-        .bookmark-rail span {{
-            padding: 0.1rem 0.35rem 0.28rem;
-            color: #719097;
-            font-size: 0.58rem;
-            font-weight: 900;
-            letter-spacing: 0.13em;
-        }}
-
-        .bookmark-rail a {{
-            padding: 0.48rem 0.58rem;
-            border-radius: 11px;
-            color: #24515b !important;
-            font-size: 0.76rem;
-            font-weight: 750;
-            text-decoration: none;
-            transition: background 160ms ease, transform 160ms ease;
-        }}
-
-        .bookmark-rail a:hover {{
-            background: #dff4f7;
-            transform: translateX(-2px);
-        }}
-
-        .scroll-anchor {{
-            scroll-margin-top: 5.5rem;
-        }}
-
-        .section-kicker {{
-            margin-bottom: -0.45rem;
-            color: #278493;
-            font-size: 0.72rem;
-            font-weight: 850;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-        }}
-
-        .demo-step {{
-            display: inline-flex;
-            align-items: center;
-            gap: 0.45rem;
-            margin: 0 0 0.7rem;
-            padding: 0.38rem 0.68rem;
-            border-radius: 999px;
-            background: #e6f7f8;
-            color: #176b78;
-            font-size: 0.72rem;
-            font-weight: 850;
-            letter-spacing: 0.06em;
-        }}
-
-        [data-testid="stExpander"] {{
-            border: 1px solid rgba(31, 111, 120, 0.12);
-            border-radius: 16px;
-            background: rgba(255, 255, 255, 0.68);
-            box-shadow: 0 10px 26px rgba(8, 51, 68, 0.05);
-            overflow: hidden;
-        }}
-
-        [data-testid="stMarkdownContainer"] table {{
-            background: rgba(255, 255, 255, 0.88);
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 16px 30px rgba(8, 51, 68, 0.08);
-        }}
-
-        [data-testid="stMarkdownContainer"]:has(table) {{
-            max-width: 100%;
-            overflow-x: auto;
-            overscroll-behavior-inline: contain;
-        }}
-
-        [data-testid="stAlert"] {{
-            border-radius: 16px;
-        }}
-
-        .mobile-product-nav {{
-            display: none;
-        }}
-
-        @media (max-width: 980px) {{
-            .dashboard-stat-grid {{
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }}
-
-            .dashboard-stat-card:last-child:nth-child(odd) {{
-                grid-column: 1 / -1;
-            }}
-
-            [data-testid="stElementContainer"]:has(.bookmark-rail) {{
-                position: sticky !important;
-                top: 0.5rem;
-                z-index: 999;
-                height: 52px;
-                margin-bottom: 0.5rem;
-                pointer-events: auto;
-            }}
-
-            .bookmark-rail {{
-                position: relative;
-                top: 0;
-                bottom: auto;
-                left: 0;
-                right: 0;
-                width: auto;
-                margin: 0;
-                padding: 0.45rem;
-                flex-direction: row;
-                justify-content: flex-start;
-                overflow-x: auto;
-                max-width: 100%;
-                overscroll-behavior-inline: contain;
-                scrollbar-width: thin;
-                border-radius: 14px;
-                z-index: 999;
-            }}
-
-            .bookmark-rail span {{
-                display: none;
-            }}
-
-            .bookmark-rail a {{
-                flex: 0 0 auto;
-                white-space: nowrap;
-                padding: 0.52rem 0.72rem;
-            }}
-
-            .feature-strip {{
-                grid-template-columns: 1fr;
-            }}
-
-            .block-container {{
-                border-radius: 20px;
-                padding-top: 1.2rem;
-                padding-bottom: 5.5rem;
-            }}
-
-            .hero-shell {{
-                padding: 1.4rem;
-                border-radius: 20px;
-            }}
-
-            [data-testid="stMarkdownContainer"] table {{
-                min-width: 680px;
-            }}
-
-            [data-testid="stTextArea"] textarea,
-            [data-testid="stTextInput"] input,
-            [data-testid="stButton"] button {{
-                max-width: 100%;
-            }}
-        }}
-
-        @media (max-width: 640px) {{
-            .dashboard-stat-card {{
-                padding: 0.85rem 0.9rem;
-                border-radius: 15px;
-            }}
-
-            .dashboard-stat-value {{
-                font-size: 1.16rem;
-            }}
-
-            .block-container {{
-                border-radius: 0;
-            }}
-
-            [data-testid="stElementContainer"]:has(.mobile-product-nav) {{
-                position: sticky !important;
-                top: 0.35rem;
-                z-index: 1000;
-                margin: -0.4rem 0 0.8rem;
-            }}
-
-            .mobile-product-nav {{
-                display: flex;
-                gap: 0.35rem;
-                max-width: 100%;
-                padding: 0.38rem;
-                overflow-x: auto;
-                border: 1px solid rgba(255, 255, 255, 0.78);
-                border-radius: 14px;
-                background: rgba(242, 252, 253, 0.92);
-                box-shadow: 0 12px 28px rgba(8, 51, 68, 0.12);
-                backdrop-filter: blur(16px);
-                scrollbar-width: none;
-            }}
-
-            .mobile-product-nav a {{
-                flex: 0 0 auto;
-                padding: 0.5rem 0.66rem;
-                border-radius: 10px;
-                color: #24515b !important;
-                font-size: 0.78rem;
-                font-weight: 780;
-                text-decoration: none;
-                white-space: nowrap;
-            }}
-
-            .mobile-product-nav a.active {{
-                background: #dff4f7;
-                color: #0f6270 !important;
-            }}
-        }}
-        </style>
-        """,
         unsafe_allow_html=True,
     )
 
@@ -819,7 +250,7 @@ if "page_mode" not in st.session_state:
 
 user_id = st.session_state.user_id
 
-inject_page_style()
+inject_alpine_theme()
 
 if is_admin_request():
     render_admin_dashboard()
@@ -851,12 +282,15 @@ def show_markdown_file(path: Path) -> None:
 
 def render_score_card(label: str, value: str, note: str = "") -> None:
     """Render a compact portfolio-style score card."""
+    safe_label = html.escape(str(label))
+    safe_value = html.escape(str(value))
+    safe_note = html.escape(str(note))
     st.markdown(
         f"""
         <div class="score-card">
-            <div class="score-label">{label}</div>
-            <div class="score-value">{value}</div>
-            <div class="score-label">{note}</div>
+            <div class="score-label">{safe_label}</div>
+            <div class="score-value">{safe_value}</div>
+            <div class="score-label">{safe_note}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -889,17 +323,6 @@ def extract_overall_score(markdown: str) -> float | None:
         return None
 
     return float(match.group(1))
-
-
-def get_band_color(score: float | None) -> tuple[str, str]:
-    """Return display colors for the overall IELTS band score."""
-    if score is None:
-        return ("#607d8b", "#eef5f7")
-    if score < 6:
-        return ("#b42318", "#fff1f0")
-    if score < 7:
-        return ("#b54708", "#fff7ed")
-    return ("#027a48", "#ecfdf3")
 
 
 def extract_report_section(markdown: str, number: int) -> str:
@@ -1095,6 +518,7 @@ def render_draft_2_training(
             st.warning("第二稿与第一稿完全相同，请根据反馈完成修改后再提交。")
         else:
             with st.spinner("正在评分第二稿并生成两稿对比报告..."):
+                render_scoring_loader()
                 try:
                     draft_2_package = grade_essay_package(
                         task_type=task_type,
@@ -1165,6 +589,7 @@ def render_draft_2_training(
                         "report": draft_2_report,
                         "progress_report": progress_report,
                         "path": training_path,
+                        "text": draft_2_text,
                     }
                 except AIGraderError as exc:
                     st.error("第二稿评分失败。完整诊断信息如下。")
@@ -1177,7 +602,13 @@ def render_draft_2_training(
     if isinstance(result, dict):
         st.divider()
         st.header("两稿对比进步报告")
+        render_training_stepper(active=5)
         render_score_change(draft_1["scores"], result["scores"])
+        revised_text = str(result.get("text") or "")
+        if revised_text:
+            st.subheader("真实文本变化")
+            st.caption("删除内容以柔和红色标记，新增内容以青绿色标记；文本仍可直接复制。")
+            render_text_diff(str(draft_1["text"]), revised_text)
         st.markdown(result["progress_report"])
         with st.expander("查看第二稿完整评分", expanded=False):
             st.markdown(result["report"])
@@ -1312,28 +743,13 @@ def extract_paragraph_strengths(markdown: str) -> list[str]:
 
 def render_overall_band(score: float | None) -> None:
     """Render the learner-safe practice interval without the internal point score."""
-    color, background = get_band_color(score)
-    score_text = format_practice_band_interval(score)
+    score_text = html.escape(format_practice_band_interval(score))
     st.markdown(
         f"""
-        <div style="
-            text-align:center;
-            padding:1.6rem 1rem;
-            border-radius:8px;
-            background:{background};
-            border:1px solid {color}33;
-            box-shadow:0 18px 34px rgba(8,51,68,0.08);
-            margin-bottom:1rem;
-        ">
-            <div style="font-size:0.95rem;font-weight:700;color:#31545c;">
-                雅思写作练习估分区间
-            </div>
-            <div style="font-size:4rem;line-height:1;font-weight:900;color:{color};">
-                {score_text}
-            </div>
-            <div style="font-size:0.9rem;color:#5f7378;margin-top:0.35rem;">
-                精确 Overall 仅用于内部一致性；四项整数分仍可查看
-            </div>
+        <div class="ep-overall-card">
+            <div class="ep-overall-card__label">雅思写作练习估分区间</div>
+            <div class="ep-overall-card__value">{score_text}</div>
+            <div class="ep-overall-card__note">精确 Overall 仅用于内部一致性；四项整数分仍可查看</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2038,7 +1454,11 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
             .encode(
                 x=alt.X("练习日期:N", title="练习日期"),
                 y=alt.Y("分数:Q", scale=alt.Scale(domain=[3, 9]), title="分数"),
-                color=alt.Color("能力维度:N", title="能力维度"),
+                color=alt.Color(
+                    "能力维度:N",
+                    title="能力维度",
+                    scale=alt.Scale(range=ALPINE_CHART_COLORS),
+                ),
                 tooltip=["练习日期", "能力维度", "分数"],
             )
             .properties(height=280)
@@ -2060,25 +1480,8 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
 
 
 def render_product_hero(is_demo: bool = False) -> None:
-    """Render the shared editorial-style product hero."""
-    eyebrow = "零 TOKEN 完整示范" if is_demo else "雅思写作 · 聚焦训练"
-    title = "看懂一篇作文，如何一步步提分" if is_demo else "从一篇作文，到清楚的下一步"
-    description = (
-        "用一份已经生成的 gpt-5.4-mini 报告，完整展示输入、评分、诊断、改写、训练与第二稿。"
-        "浏览本页不会再次调用模型，也不消耗 Token。"
-        if is_demo
-        else "保留熟悉的清新海岛感，把评分、证据、改写与下一次训练整理成一条更容易跟随的学习路径。"
-    )
-    st.markdown(
-        f"""
-        <section class="hero-shell">
-            <div class="eyebrow">{eyebrow}</div>
-            <h1>{title}</h1>
-            <p>{description}</p>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
+    """Render the shared Alpine photographic hero."""
+    render_alpine_hero(variant="demo" if is_demo else "home")
 
 
 def render_demo_page() -> None:
@@ -2439,16 +1842,7 @@ def render_home_page(store: SupabaseStore, user: CloudUser | None) -> None:
         st.button("开始一篇新作文", type="primary", use_container_width=True, on_click=navigate, args=("write",))
     with action_demo:
         st.button("查看零 Token 范文", use_container_width=True, on_click=show_demo)
-    st.markdown(
-        """
-        <div class="feature-strip">
-            <div class="feature-chip"><strong>01 · 定位</strong>用四项分数和原文证据找到真正弱项</div>
-            <div class="feature-chip"><strong>02 · 训练</strong>把问题直接变成单句与逻辑练习</div>
-            <div class="feature-chip"><strong>03 · 验证</strong>提交第二稿，看见真实改善</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    render_feature_bento()
     if user is not None:
         render_learning_dashboard(store, user)
 
@@ -2600,44 +1994,66 @@ def grade_submission(
 def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
     st.markdown('<div class="section-kicker">写作批改</div>', unsafe_allow_html=True)
     st.title("提交 IELTS Writing Task 2 作文")
+    render_training_stepper(active=1)
     st.caption(f"评分固定使用 {PRODUCTION_MODEL}；失败后保留题目和正文，不切换模型。")
     if st.session_state.pop("cloud_cache_warning", False):
         st.warning("云端历史暂时无法读取，本次仍可继续批改。")
     if st.session_state.pop("cloud_save_warning", False):
         st.warning("报告已保存在当前设备，但云端同步暂时失败；请稍后重试。")
-    topic = st.text_area("英文作文题目", height=120, placeholder="请粘贴完整的 Task 2 英文题目。", key="topic_input")
-    essay = st.text_area("你的英文作文", height=420, placeholder="请粘贴完整英文作文。", key="essay_input")
-    word_count = count_words(essay)
-    col_words, col_model = st.columns(2)
-    with col_words:
-        render_score_card("当前词数", str(word_count), "Task 2 建议 250 词以上")
-    with col_model:
-        render_score_card("固定模型", PRODUCTION_MODEL, "评分标准保持一致")
-    warning = word_count_warning("Task 2", word_count) if essay.strip() else ""
-    if warning:
-        st.warning(warning)
-    label = f"使用 {PRODUCTION_MODEL} 重新评分" if st.session_state.get("grading_failed") else "开始批改作文"
-    if st.button(label, type="primary", use_container_width=True):
-        if not topic.strip() or not essay.strip():
-            st.error("请同时填写英文作文题目和作文正文。")
-            return
-        with st.spinner("正在评分、核对原文证据并生成训练任务……"):
-            try:
-                grade_submission(store, user, topic=topic, essay=essay)
-                st.rerun()
-            except AIGraderError as exc:
-                st.session_state.grading_failed = True
-                st.error("评分服务暂时不可用。题目和作文已经保留，可以直接重试。")
-                with st.expander("查看技术诊断"):
-                    st.code(str(exc), language="text")
-            except CloudStoreError as exc:
-                st.session_state.grading_failed = True
-                st.error(f"云端保存失败，题目和作文未清空：{exc}")
-            except Exception as exc:
-                st.session_state.grading_failed = True
-                st.error("评分没有完成，没有产生半份记录。请稍后重试。")
-                with st.expander("查看技术诊断"):
-                    st.code(f"{type(exc).__name__}: {exc}", language="text")
+    with st.container(key="essay_editor"):
+        st.markdown(
+            '<div class="ep-editor-note"><span>Task 2 · 题目与正文保持原始段落</span>'
+            '<span>唯一主操作：开始批改</span></div>',
+            unsafe_allow_html=True,
+        )
+        topic = st.text_area(
+            "英文作文题目",
+            height=120,
+            placeholder="请粘贴完整的 Task 2 英文题目。",
+            key="topic_input",
+        )
+        essay = st.text_area(
+            "你的英文作文",
+            height=420,
+            placeholder="请粘贴完整英文作文。",
+            key="essay_input",
+        )
+        word_count = count_words(essay)
+        col_words, col_model = st.columns(2)
+        with col_words:
+            render_score_card("当前词数", str(word_count), "Task 2 建议 250 词以上")
+        with col_model:
+            render_score_card("固定模型", PRODUCTION_MODEL, "评分标准保持一致")
+        warning = word_count_warning("Task 2", word_count) if essay.strip() else ""
+        if warning:
+            st.warning(warning)
+        label = (
+            f"使用 {PRODUCTION_MODEL} 重新评分"
+            if st.session_state.get("grading_failed")
+            else "开始批改作文"
+        )
+        if st.button(label, type="primary", use_container_width=True):
+            if not topic.strip() or not essay.strip():
+                st.error("请同时填写英文作文题目和作文正文。")
+                return
+            with st.spinner("正在评分、核对原文证据并生成训练任务……"):
+                render_scoring_loader()
+                try:
+                    grade_submission(store, user, topic=topic, essay=essay)
+                    st.rerun()
+                except AIGraderError as exc:
+                    st.session_state.grading_failed = True
+                    st.error("评分服务暂时不可用。题目和作文已经保留，可以直接重试。")
+                    with st.expander("查看技术诊断"):
+                        st.code(str(exc), language="text")
+                except CloudStoreError as exc:
+                    st.session_state.grading_failed = True
+                    st.error(f"云端保存失败，题目和作文未清空：{exc}")
+                except Exception as exc:
+                    st.session_state.grading_failed = True
+                    st.error("评分没有完成，没有产生半份记录。请稍后重试。")
+                    with st.expander("查看技术诊断"):
+                        st.code(f"{type(exc).__name__}: {exc}", language="text")
 
 
 def _essay_with_issue_marks(essay: str, corrections: list[dict[str, object]]) -> str:
@@ -2700,11 +2116,20 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
     ensure_learning_assets(store, user)
     st.markdown('<div class="section-kicker">批改报告</div>', unsafe_allow_html=True)
     st.title("先看最影响提分的问题")
+    render_training_stepper(active=2)
     if st.session_state.pop("reused_result_notice", False):
         st.info("已复用相同作文的当前中文版评分结果，本次未消耗 Token。")
+    priorities = [item for item in structured.get("priorities", []) if isinstance(item, dict)]
     render_overall_band(float(structured.get("overall_band") or 0))
+    if priorities:
+        summary = str(priorities[0].get("title") or priorities[0].get("why") or "")
+        if summary:
+            st.markdown(
+                f'<div class="ep-result-summary"><strong>本轮最重要：</strong> '
+                f'{html.escape(summary)}</div>',
+                unsafe_allow_html=True,
+            )
     render_structured_criteria_overview(structured)
-    priorities = structured.get("priorities") or []
     if priorities:
         st.subheader("本轮只优先解决这两项")
         cols = st.columns(min(2, len(priorities)))
@@ -2762,6 +2187,7 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
         return
     st.markdown('<div class="section-kicker">专项训练</div>', unsafe_allow_html=True)
     st.title("把本轮问题真正练会")
+    render_training_stepper(active=3)
     run_id = str(st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
     if user is not None:
         try:
@@ -3070,7 +2496,11 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
         st.altair_chart(
             alt.Chart(pd.DataFrame(rows)).mark_line(point=True).encode(
                 x=alt.X("日期:N", title="练习日期"), y=alt.Y("分数:Q", scale=alt.Scale(domain=[3, 9])),
-                color=alt.Color("能力:N"), tooltip=["日期", "能力", "分数"],
+                color=alt.Color(
+                    "能力:N",
+                    scale=alt.Scale(range=ALPINE_CHART_COLORS),
+                ),
+                tooltip=["日期", "能力", "分数"],
             ).properties(height=300),
             use_container_width=True,
         )

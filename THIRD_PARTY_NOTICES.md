@@ -34,3 +34,18 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 Only general ideas were considered, including uncertainty-aware estimates, evidence-led feedback, and separating concise skill instructions from reference material. No wording, tables, or source code was copied.
 
 This notice does not grant a licence for EssayPilot itself. The project owner must choose and publish any repository-level code licence separately.
+
+## Alpine UI photography
+
+- **Snow-covered mountains under a clear, bright sky** — photograph by Tim Arnold, captured in Crans-Montana, Switzerland. Source: https://unsplash.com/photos/cNb7hPlkItg
+- Used as the local EssayPilot Alpine / Summit Hero image under the Unsplash License: https://unsplash.com/license
+
+The repository includes optimized JPEG and WebP derivatives for application use. It does not use the photograph as a standalone resale item or as part of a competing image library.
+
+## UI design references
+
+The Alpine UI uses independently written HTML and CSS. Its restrained loader, Bento layout, stepper, and entrance transitions were informed at a pattern level by Uiverse, Aceternity UI, and React Bits. No React package, remote script, copied component implementation, or third-party runtime dependency is included.
+
+- Uiverse: https://uiverse.io/
+- Aceternity UI: https://ui.aceternity.com/components
+- React Bits: https://reactbits.dev/
