@@ -178,6 +178,13 @@ def logout_cloud_user() -> None:
     st.query_params.clear()
 
 
+def open_cloud_login() -> None:
+    """Leave a guest-only route so the normal authentication gate can render."""
+    st.session_state.page_mode = "home"
+    st.session_state.pop("login_code_sent", None)
+    st.query_params.clear()
+
+
 def sync_learning_item_status(
     store: SupabaseStore,
     user: CloudUser,
@@ -1795,7 +1802,7 @@ def ensure_learning_assets(store: SupabaseStore, user: CloudUser | None) -> None
         st.session_state.learning_assets_ready = False
 
 
-def render_app_navigation(user: CloudUser | None) -> None:
+def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> None:
     """Render the persistent product-level navigation instead of a long-page index."""
     with st.sidebar:
         st.markdown("## EssayPilot")
@@ -1815,6 +1822,26 @@ def render_app_navigation(user: CloudUser | None) -> None:
         if user is not None:
             st.caption(f"已登录：{user.email}")
             st.button("退出登录", on_click=logout_cloud_user, use_container_width=True)
+        else:
+            st.caption("本地开发模式")
+    with st.container(key="mobile_account_bar", border=True):
+        if user is not None:
+            st.caption(f"已登录：{user.email}")
+            st.button(
+                "退出登录",
+                key="mobile_logout",
+                on_click=logout_cloud_user,
+                use_container_width=True,
+            )
+        elif cloud_enabled:
+            st.caption("当前为访客浏览；登录后可跨设备同步批改、训练和成长记录。")
+            st.button(
+                "登录并同步进度",
+                key="mobile_login",
+                type="primary",
+                on_click=open_cloud_login,
+                use_container_width=True,
+            )
         else:
             st.caption("本地开发模式")
     active = str(st.session_state.get("page_mode", "home"))
@@ -2567,7 +2594,7 @@ def render_product_route(store: SupabaseStore, user: CloudUser | None) -> None:
     if route == "workspace":
         route = "home"
         st.session_state.page_mode = route
-    render_app_navigation(user)
+    render_app_navigation(user, cloud_enabled=store.enabled)
     if route == "home":
         render_home_page(store, user)
     elif route == "write":

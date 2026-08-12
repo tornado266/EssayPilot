@@ -22,6 +22,25 @@ class AlpineUiTests(unittest.TestCase):
         ):
             self.assertIn(token, css)
 
+    def test_mobile_account_entry_is_present_and_responsive(self):
+        project_root = Path(__file__).resolve().parents[1]
+        app_source = (project_root / "app.py").read_text(encoding="utf-8")
+        css = Path(CSS_PATH).read_text(encoding="utf-8")
+
+        for token in (
+            "def open_cloud_login()",
+            'key="mobile_account_bar"',
+            'key="mobile_login"',
+            'key="mobile_logout"',
+            "登录并同步进度",
+            "跨设备同步批改、训练和成长记录",
+        ):
+            self.assertIn(token, app_source)
+
+        self.assertIn(".st-key-mobile_account_bar", css)
+        self.assertIn("@media (max-width: 768px)", css)
+        self.assertIn("margin: 0 0 0.75rem", css)
+
     def test_diff_is_real_and_escapes_user_text(self):
         captured = {}
 
