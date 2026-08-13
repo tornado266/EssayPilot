@@ -1,8 +1,10 @@
-# EssayPilot
+# EssayPilot｜雅思写作训练
 
-### AI-assisted IELTS Writing feedback, revision, and progress tracking
+### 从作文诊断到二稿提升
 
-[Open the live app](https://xbz4ydgw2t6cm2ytkh79vq.streamlit.app/) | [View the repository](https://github.com/tornado266/EssayPilot)
+[访问 EssayPilot 官网](https://essaypilot.cn/) | [进入雅思写作训练工具](https://xbz4ydgw2t6cm2ytkh79vq.streamlit.app/) | [查看代码仓库](https://github.com/tornado266/EssayPilot)
+
+`essaypilot.cn` 是 EssayPilot 的品牌官网与写作指南入口；Streamlit 地址是实际训练应用，用于作文诊断、专项练习、第二稿与学习档案。
 
 EssayPilot is a Streamlit learning workspace for IELTS Writing Task 2. It uses a fixed `gpt-5.4-mini` examiner, deterministic band calculation, evidence-based feedback, guided rewriting, second-draft comparison, and an optional cloud learning profile.
 
