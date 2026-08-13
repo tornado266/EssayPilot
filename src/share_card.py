@@ -43,6 +43,6 @@ def build_result_card_svg(
 <rect x="70" y="270" width="940" height="210" rx="38" fill="#fff8ef" stroke="#efd3b5" stroke-width="3"/><text x="110" y="340" class="label">IELTS Writing Task 2 · Overall</text><text x="110" y="445" class="band">{overall}</text>
 {''.join(score_cells)}
 <rect x="70" y="725" width="940" height="230" rx="38" fill="#ffffff" fill-opacity=".82"/><text x="110" y="790" class="small">本轮最重要的提分方向</text><text x="110" y="860" class="body">{safe_priority}</text>
-<rect x="70" y="1000" width="450" height="170" rx="34" fill="#dff4f5"/><text x="110" y="1060" class="small">已掌握训练</text><text x="110" y="1135" class="score-small">{mastered_count} 项</text>
+<rect x="70" y="1000" width="450" height="170" rx="34" fill="#dff4f5"/><text x="110" y="1060" class="small">已完成练习</text><text x="110" y="1135" class="score-small">{mastered_count} 项</text>
 <rect x="560" y="1000" width="450" height="170" rx="34" fill="#f6ead8"/><text x="600" y="1060" class="small">写作验证</text><text x="600" y="1135" class="body">{escape(gain)}</text>
 <text x="78" y="1345" class="label">不是只看一份报告，而是把问题练会。</text></svg>'''

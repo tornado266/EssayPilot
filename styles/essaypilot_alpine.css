@@ -414,6 +414,24 @@ button[kind="primary"]:hover {
   line-height: 1.65;
 }
 
+.ep-bento__action {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 0.9rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--ep-border);
+  border-radius: 10px;
+  color: var(--ep-primary) !important;
+  font-size: 0.82rem;
+  font-weight: 750;
+  text-decoration: none !important;
+}
+
+.ep-bento__action:hover {
+  border-color: var(--ep-primary);
+  background: var(--ep-primary-soft);
+}
+
 .score-card,
 .dashboard-stat-card {
   min-width: 0;

@@ -96,7 +96,7 @@ def render_feature_bento() -> None:
             <article class="ep-bento__card">
                 <span class="ep-bento__index">02 · FOCUSED PRACTICE</span>
                 <h3>针对训练</h3>
-                <p>把最重要的问题直接变成单句、逻辑与表达练习。</p>
+                <p>把最重要的问题直接变成单句、逻辑与造句练习。</p>
             </article>
             <article class="ep-bento__card">
                 <span class="ep-bento__index">03 · REVISION</span>
@@ -105,8 +105,9 @@ def render_feature_bento() -> None:
             </article>
             <article class="ep-bento__card ep-bento__card--wide">
                 <span class="ep-bento__index">04 · LEARNING RECORD</span>
-                <h3>进步档案</h3>
-                <p>积累错题、表达和历史训练记录，继续尚未完成的练习。</p>
+                <h3>错题与表达</h3>
+                <p>保存批改中的典型错误和可迁移表达，通过复习与造句把反馈带到下一篇作文。</p>
+                <a class="ep-bento__action" href="?page=growth&amp;mode=expressions">打开表达库</a>
             </article>
         </section>
         """,

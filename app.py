@@ -31,9 +31,15 @@ from src.draft_training import list_draft_training_history, save_draft_training_
 from src.error_book import append_error_book
 from src.learning_assets import (
     CATEGORY_LABELS,
+    EXPRESSION_VIEW_CURATED,
+    EXPRESSION_VIEW_PRACTICE,
+    EXPRESSION_VIEW_REPORT,
     build_learning_items,
     catalog_learning_item,
     criterion_for_problem,
+    expression_status_label,
+    report_expression_items,
+    resolve_expression_view,
 )
 from src.expression_catalog import FUNCTION_LABELS, TOPIC_LABELS, load_expression_catalog
 from src.share_card import build_result_card_svg
@@ -941,7 +947,7 @@ def render_grouped_examiner_report(markdown: str) -> None:
         ("核心提分方向", "report-priorities", (3, 4)),
         ("逐句与段落批改", "report-corrections", (5, 6)),
         ("Band 7.5 示范改写", "report-rewrite", (7,)),
-        ("表达积累与下一步", "report-next", (8, 9)),
+        ("本篇可迁移表达与下一步", "report-next", (8, 9)),
     ]
 
     rendered_any = False
@@ -1484,21 +1490,21 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
         navigate("training", str(latest.get("id", "")))
         st.rerun()
 
-    st.markdown("#### 个人素材库")
+    st.markdown("#### 表达库进度")
     render_dashboard_stats(
         [
-            ("已积累表达", len(expression_items), "来自批改与收藏"),
-            ("已掌握表达", len(mastered_expressions), "已通过表达练习"),
+            ("已收录表达", len(expression_items), "来自作文与题材精选"),
+            ("已完成表达练习", len(mastered_expressions), "已正确使用一次"),
             ("当前重点题材", focus_topic, "继续巩固高频表达"),
         ],
         columns=3,
     )
-    if expression_items and st.button("继续表达练习", use_container_width=True):
+    if expression_items and st.button("继续造句练习", use_container_width=True):
         pending_expression = next(
             (item for item in expression_items if item.get("status") != "mastered"), expression_items[0]
         )
         st.session_state.expression_practice_item = _normalise_expression(pending_expression)
-        st.session_state.expression_library_view = "表达练习"
+        st.session_state.expression_library_view = EXPRESSION_VIEW_PRACTICE
         navigate("growth")
         st.rerun()
 
@@ -1634,7 +1640,7 @@ def render_demo_page() -> None:
             st.markdown(extract_report_section(report, 7))
     with training_tab:
         st.subheader("从报告进入专项训练")
-        sentence_tab, logic_tab, expression_tab = st.tabs(["单句训练", "逻辑训练", "表达积累"])
+        sentence_tab, logic_tab, expression_tab = st.tabs(["单句训练", "逻辑训练", "本篇可迁移表达"])
         with sentence_tab:
             st.markdown(extract_report_section(report, 11))
         with logic_tab:
@@ -1721,7 +1727,7 @@ def render_demo_page() -> None:
     render_anchor("demo-practice")
     st.divider()
     st.markdown('<div class="demo-step">第 6 步 · 把反馈变成训练</div>', unsafe_allow_html=True)
-    st.subheader("表达积累与下一次训练")
+    st.subheader("本篇可迁移表达与下一次训练")
     st.markdown(extract_report_section(report, 8))
     st.markdown(extract_report_section(report, 9))
     practice_column, logic_column = st.columns(2, gap="large")
@@ -1799,7 +1805,7 @@ APP_ROUTES = {
     "write": "写作批改",
     "report": "批改报告",
     "training": "专项训练",
-    "growth": "错题本与成长",
+    "growth": "学习档案",
 }
 
 
@@ -1939,7 +1945,7 @@ def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> Non
         else:
             st.caption("本地开发模式")
     active = str(st.session_state.get("page_mode", "home"))
-    short_labels = {"home": "首页", "write": "写作", "report": "报告", "training": "训练", "growth": "成长"}
+    short_labels = {"home": "首页", "write": "写作", "report": "报告", "training": "训练", "growth": "档案"}
     run_id = str(st.session_state.get("active_run_id") or st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
     links: list[str] = []
     for route in APP_ROUTES:
@@ -2384,6 +2390,9 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                 record_lifecycle_event(store, "report_training_clicked", user=user)
                 open_cloud_login("training", "practice")
                 st.rerun()
+        if st.button("练习本篇表达", key="guest_report_expressions", use_container_width=True):
+            open_cloud_login("growth", "expressions-from-report")
+            st.rerun()
     else:
         with primary_col:
             if st.button("开始第二稿训练", type="primary", use_container_width=True):
@@ -2395,11 +2404,13 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                 record_lifecycle_event(store, "report_training_clicked", user=user)
                 navigate("training", run_id, "practice")
                 st.rerun()
-        auxiliary_col, growth_col = st.columns(2)
+        auxiliary_col, expression_col = st.columns(2)
         with auxiliary_col:
             st.caption("报告下载在“完整报告与下载”中")
-        with growth_col:
-            st.button("查看学习档案", use_container_width=True, on_click=navigate, args=("growth",))
+        with expression_col:
+            if st.button("练习本篇表达", key="report_expressions", use_container_width=True):
+                navigate("growth", run_id, "expressions-from-report")
+                st.rerun()
 
 
 def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
@@ -2472,10 +2483,6 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
         st.caption("训练已保存；错题掌握状态将在数据库升级后自动联动。")
 
 
-def _expression_status_label(status: object) -> str:
-    return {"new": "待学习", "practicing": "练习中", "mastered": "已掌握"}.get(str(status), "待学习")
-
-
 def _normalise_expression(item: dict[str, object]) -> dict[str, object]:
     """Give catalog and cloud expressions one display shape."""
     if item.get("catalog_id"):
@@ -2484,6 +2491,8 @@ def _normalise_expression(item: dict[str, object]) -> dict[str, object]:
     essay = run.get("essays") if isinstance(run.get("essays"), dict) else {}
     return {
         "learning_item_id": item.get("id"),
+        "grading_run_id": item.get("grading_run_id"),
+        "item_type": item.get("item_type") or "expression",
         "item_key": item.get("item_key"),
         "origin": item.get("origin") or "report",
         "topic_category": item.get("topic_category") or "society_family",
@@ -2515,7 +2524,7 @@ def _render_expression_card(
     function = FUNCTION_LABELS.get(str(expression.get("function_category")), "核心搭配")
     with st.container(border=True):
         st.markdown(f"### {expression.get('expression', '')}")
-        st.caption(f"{topic} · {function} · {_expression_status_label(expression.get('status'))}")
+        st.caption(f"{topic} · {function} · {expression_status_label(expression.get('status'))}")
         st.write(str(expression.get("meaning") or ""))
         if expression.get("usage_note"):
             st.info(str(expression.get("usage_note")))
@@ -2563,12 +2572,18 @@ def _render_expression_card(
 
 
 def render_expression_library(
-    store: SupabaseStore, user: CloudUser | None, personal_items: list[dict[str, object]] | None = None
+    store: SupabaseStore,
+    user: CloudUser | None,
+    personal_items: list[dict[str, object]] | None = None,
+    *,
+    mode: str = "",
 ) -> None:
     """Render the static catalog, personal assets, and opt-in AI practice."""
     catalog = load_expression_catalog()
     personal_items = personal_items or []
     personal = [_normalise_expression(item) for item in personal_items if item.get("item_type") == "expression"]
+    current_run_id = str(st.session_state.get("active_run_id") or "")
+    report_personal = report_expression_items(personal, grading_run_id=current_run_id)
     by_key = {str(item.get("item_key")): item for item in personal}
     for item in catalog:
         saved = by_key.get(f"catalog:{item['catalog_id']}")
@@ -2579,23 +2594,35 @@ def render_expression_library(
             })
 
     if st.session_state.pop("expression_open_practice", False):
-        st.session_state.expression_library_view = "表达练习"
-    view_options = ["题材表达库"] if user is None else ["题材表达库", "我的表达", "表达练习"]
-    if user is None:
-        st.session_state.expression_library_view = "题材表达库"
+        mode = "practice"
+    view_options = [EXPRESSION_VIEW_CURATED]
+    if user is not None:
+        view_options.extend([EXPRESSION_VIEW_REPORT, EXPRESSION_VIEW_PRACTICE])
+    st.session_state.expression_library_view = resolve_expression_view(
+        stored_view=st.session_state.get("expression_library_view"),
+        authenticated=user is not None,
+        has_report_expressions=bool(report_personal),
+        mode=mode,
+    )
+
+    with st.container(border=True):
+        st.markdown("#### 表达库怎么用？")
+        st.write("不要一次背很多。先从自己的作文或题材精选中选 1 个表达，用它写一个属于自己的英文句子；通过点评后，再尝试在下一篇作文中主动使用。")
+        st.caption("1. 选一个表达　　2. 用自己的意思造句　　3. 在下一篇作文中再次使用")
+
     view = st.radio(
         "表达库视图", view_options, horizontal=True,
         key="expression_library_view", label_visibility="collapsed",
     )
-    if view == "题材表达库":
-        st.caption("10 个 Task 2 高频题材，共 150 条人工整理表达；浏览、搜索和查看例句均为 0 Token。")
+    if view == EXPRESSION_VIEW_CURATED:
+        st.caption("10 个 Task 2 高频题材，共 150 条内置精选表达；浏览、搜索和查看例句均为 0 Token。")
         mastered_topics = Counter(
             str(item.get("topic_category")) for item in personal if item.get("status") == "mastered"
         )
         st.markdown(
             '<div class="feature-strip">' + "".join(
                 f'<div class="feature-chip"><strong>{html.escape(label)}</strong>'
-                f'{mastered_topics.get(key, 0)}/15 已掌握</div>'
+                f'{mastered_topics.get(key, 0)}/15 已练习</div>'
                 for key, label in TOPIC_LABELS.items()
             ) + "</div>",
             unsafe_allow_html=True,
@@ -2612,9 +2639,9 @@ def render_expression_library(
             personal_filters = st.columns(2)
             favorite_only = personal_filters[0].checkbox("只看收藏", key="catalog_favorite_only")
             status_label = personal_filters[1].selectbox(
-                "掌握状态", ["全部状态", "待学习", "练习中", "已掌握"], key="catalog_status"
+                "练习状态", ["全部状态", "未练习", "继续练习", "已正确使用一次"], key="catalog_status"
             )
-            status_key = {"待学习": "new", "练习中": "practicing", "已掌握": "mastered"}.get(status_label, "")
+            status_key = {"未练习": "new", "继续练习": "practicing", "已正确使用一次": "mastered"}.get(status_label, "")
             filtered = [item for item in filtered if not favorite_only or item.get("favorite")]
             filtered = [item for item in filtered if not status_key or item.get("status", "new") == status_key]
         if query.strip():
@@ -2628,20 +2655,20 @@ def render_expression_library(
             _render_expression_card(item, store=store, user=user, key=str(item["catalog_id"]))
         if len(filtered) > 45:
             st.info("结果较多，请选择题材或继续搜索以缩小范围。")
-    elif view == "我的表达":
+    elif view == EXPRESSION_VIEW_REPORT:
         if user is None:
-            st.info("登录后，收藏的题材表达和每次批改沉淀的 6–8 条个人表达会显示在这里。")
+            st.info("登录后，每次批改生成的 6–8 条可迁移表达会显示在这里。")
             return
-        if not personal:
-            st.info("收藏一条题材表达，或完成一次新版作文批改后，这里会形成你的个人表达库。")
+        if not report_personal:
+            st.info("完成一次作文批改后，这里会显示从你的作文中生成的可迁移表达。")
             return
         filters = st.columns(3)
         topic_label = filters[0].selectbox("题材筛选", ["全部题材", *TOPIC_LABELS.values()], key="mine_topic")
-        status_label = filters[1].selectbox("掌握状态", ["全部状态", "待学习", "练习中", "已掌握"])
+        status_label = filters[1].selectbox("练习状态", ["全部状态", "未练习", "继续练习", "已正确使用一次"])
         favorite_only = filters[2].checkbox("只看收藏")
         topic_key = next((key for key, label in TOPIC_LABELS.items() if label == topic_label), "")
-        status_key = {"待学习": "new", "练习中": "practicing", "已掌握": "mastered"}.get(status_label, "")
-        shown = [item for item in personal if not topic_key or item.get("topic_category") == topic_key]
+        status_key = {"未练习": "new", "继续练习": "practicing", "已正确使用一次": "mastered"}.get(status_label, "")
+        shown = [item for item in report_personal if not topic_key or item.get("topic_category") == topic_key]
         shown = [item for item in shown if not status_key or item.get("status") == status_key]
         shown = [item for item in shown if not favorite_only or item.get("favorite")]
         for index, item in enumerate(shown):
@@ -2652,7 +2679,7 @@ def render_expression_library(
     else:
         item = st.session_state.get("expression_practice_item")
         if not isinstance(item, dict) or not item:
-            st.info("请先在题材表达库或我的表达中选择“开始造句”。")
+            st.info("请先在题材精选或来自我的作文中选择“开始造句”。")
             return
         expression = _normalise_expression(item)
         st.markdown(f"### 使用 `{expression.get('expression', '')}` 写一个英文句子")
@@ -2693,19 +2720,22 @@ def render_expression_library(
         result = st.session_state.get("expression_practice_result")
         if isinstance(result, dict):
             if result.get("mastered"):
-                st.success("已掌握：表达使用准确、语法基本正确且语境自然。")
+                st.success("已正确使用一次：表达使用准确、语法基本正确且语境自然。")
             else:
-                st.warning("还未掌握：根据点评修改后再试一次。")
+                st.warning("还需要继续练习：根据点评修改后再试一次。")
             st.write(str(result.get("feedback_zh") or ""))
             st.info(f"优化句：{result.get('improved_sentence_en', '')}")
 
 
 def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
-    st.markdown('<div class="section-kicker">错题本与成长</div>', unsafe_allow_html=True)
-    st.title("把零散反馈变成可复习资产")
+    st.markdown('<div class="section-kicker">学习档案</div>', unsafe_allow_html=True)
+    st.title("在这里复习错题、练习表达、查看二稿记录")
+    growth_mode = str(st.query_params.get("mode", "") or "")
+    if growth_mode in {"expressions", "expressions-from-report", "practice"}:
+        st.query_params.pop("mode", None)
     if user is None:
-        st.info("题材表达库可直接浏览；登录后可收藏、练习并跨设备同步进度。")
-        render_expression_library(store, None, [])
+        st.info("题材精选可直接浏览；登录后可收藏、练习并跨设备同步进度。")
+        render_expression_library(store, None, [], mode=growth_mode)
         return
     try:
         runs = store.list_grading_runs(user)
@@ -2729,10 +2759,11 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
     mastered = [item for item in items if item.get("status") == "mastered"]
     errors = [item for item in items if item.get("item_type") == "error"]
     expressions = [item for item in items if item.get("item_type") == "expression"]
+    completed_expression_practice = [item for item in expressions if item.get("status") == "mastered"]
     metrics = st.columns(4)
     metrics[0].metric("累计批改", len(runs))
     metrics[1].metric("待复习错误", len([item for item in errors if item.get("status") != "mastered"]))
-    metrics[2].metric("已掌握", len(mastered))
+    metrics[2].metric("已完成表达练习", len(completed_expression_practice))
     metrics[3].metric("第二稿", len(revisions))
     if runs:
         rows: list[dict[str, object]] = []
@@ -2752,7 +2783,12 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
             ).properties(height=300),
             use_container_width=True,
         )
-    error_tab, expression_tab, draft_tab, share_tab = st.tabs(["个人错题本", "表达积累", "第二稿成长", "成果卡"])
+    default_section = "表达库" if growth_mode in {"expressions", "expressions-from-report", "practice"} else "错题本"
+    error_tab, expression_tab, draft_tab, share_tab = st.tabs(
+        ["错题本", "表达库", "二稿记录", "成果卡"],
+        default=default_section,
+        key="growth_sections",
+    )
     with error_tab:
         category_counts = Counter(str(item.get("category") or "grammar") for item in errors)
         if category_counts:
@@ -2772,7 +2808,7 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
                     else:
                         st.rerun()
     with expression_tab:
-        render_expression_library(store, user, expressions)
+        render_expression_library(store, user, expressions, mode=growth_mode)
     with draft_tab:
         if not revisions:
             st.info("完成第二稿训练后，这里会显示第一稿与第二稿的变化。")

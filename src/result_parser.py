@@ -129,7 +129,7 @@ def structured_report_to_markdown(parsed: dict[str, Any]) -> str:
     lines.append("")
 
     lines.extend(["## Band 7.5 示范改写", "", str(data.get("band_75_rewrite", "")), ""])
-    lines.extend(["## 表达积累", ""])
+    lines.extend(["## 本篇可迁移表达", ""])
     for item in data.get("useful_expressions", []) or []:
         if isinstance(item, dict):
             lines.append(

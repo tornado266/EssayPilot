@@ -9,6 +9,16 @@ from typing import Any
 from src.expression_catalog import FUNCTION_LABELS, TOPIC_LABELS
 
 
+EXPRESSION_VIEW_CURATED = "题材精选"
+EXPRESSION_VIEW_REPORT = "来自我的作文"
+EXPRESSION_VIEW_PRACTICE = "造句练习"
+EXPRESSION_VIEW_ALIASES = {
+    "题材表达库": EXPRESSION_VIEW_CURATED,
+    "我的表达": EXPRESSION_VIEW_REPORT,
+    "表达练习": EXPRESSION_VIEW_PRACTICE,
+}
+
+
 CATEGORY_LABELS = {
     "task_response": "任务回应",
     "coherence": "逻辑与衔接",
@@ -107,6 +117,52 @@ def catalog_learning_item(catalog_item: dict[str, Any], *, user_id: str) -> dict
         "favorite": False,
         "status": "new",
     }
+
+
+def expression_status_label(status: object) -> str:
+    """Map stored expression states to conservative learner-facing language."""
+    return {
+        "new": "未练习",
+        "practicing": "继续练习",
+        "mastered": "已正确使用一次",
+    }.get(str(status), "未练习")
+
+
+def report_expression_items(
+    items: list[dict[str, Any]], *, grading_run_id: str = ""
+) -> list[dict[str, Any]]:
+    """Return only report-derived expressions, prioritising one essay when requested."""
+    report_items = [
+        item
+        for item in items
+        if item.get("item_type") == "expression" and item.get("origin", "report") == "report"
+    ]
+    if not grading_run_id:
+        return report_items
+    return sorted(
+        report_items,
+        key=lambda item: str(item.get("grading_run_id") or "") != grading_run_id,
+    )
+
+
+def resolve_expression_view(
+    *, stored_view: object, authenticated: bool, has_report_expressions: bool, mode: str = ""
+) -> str:
+    """Choose a valid expression view without breaking sessions that hold old labels."""
+    if mode == "expressions-from-report" and authenticated and has_report_expressions:
+        return EXPRESSION_VIEW_REPORT
+    if mode == "expressions":
+        return EXPRESSION_VIEW_REPORT if authenticated and has_report_expressions else EXPRESSION_VIEW_CURATED
+    if mode == "practice" and authenticated:
+        return EXPRESSION_VIEW_PRACTICE
+
+    mapped = EXPRESSION_VIEW_ALIASES.get(str(stored_view), str(stored_view))
+    options = [EXPRESSION_VIEW_CURATED]
+    if authenticated:
+        options.extend([EXPRESSION_VIEW_REPORT, EXPRESSION_VIEW_PRACTICE])
+    if mapped in options:
+        return mapped
+    return EXPRESSION_VIEW_REPORT if authenticated and has_report_expressions else EXPRESSION_VIEW_CURATED
 
 
 def build_learning_items(

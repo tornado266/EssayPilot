@@ -33,6 +33,8 @@ class LearningAssetTests(unittest.TestCase):
         )
         self.assertIn("Overall", svg)
         self.assertIn(">6.5</text>", svg)
+        self.assertIn("已完成练习", svg)
+        self.assertNotIn("已掌握训练", svg)
         self.assertNotIn("估分区间", svg)
         self.assertIn("补充论证解释链", svg)
         self.assertNotIn("email", svg.casefold())
