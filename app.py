@@ -50,6 +50,7 @@ from src.report_schema import (
     submission_hash,
 )
 from src.text_utils import count_words, word_count_warning
+from src.visitor_identity import browser_visitor_id, visitor_hash
 from ui.alpine import (
     inject_alpine_theme,
     render_feature_bento,
@@ -141,6 +142,67 @@ def session_cloud_user() -> CloudUser | None:
     )
 
 
+def record_lifecycle_event(
+    store: SupabaseStore,
+    event_name: str,
+    *,
+    user: CloudUser | None = None,
+    flow_id: str = "",
+) -> None:
+    """Best-effort anonymous analytics that can never block learning."""
+    hashed = str(st.session_state.get("visitor_hash") or "")
+    event_flow = flow_id or str(st.session_state.get("flow_id") or "")
+    if not store.enabled or not hashed or not event_flow:
+        return
+    try:
+        store.record_product_event(event_name, hashed, event_flow, user=user)
+    except (CloudStoreError, AttributeError):
+        pass
+
+
+def claim_guest_result(store: SupabaseStore, user: CloudUser) -> bool:
+    """Attach the current guest result to a new login without another model call."""
+    pending = st.session_state.get("pending_guest_claim")
+    if not isinstance(pending, dict):
+        return True
+    try:
+        cloud_ids = store.save_grading_cycle(
+            user,
+            question=str(pending["topic"]),
+            essay=str(pending["essay"]),
+            word_count=int(pending["word_count"]),
+            package=dict(pending["package"]),
+            content_hash=str(pending["fingerprint"]),
+        )
+    except (CloudStoreError, KeyError, TypeError, ValueError):
+        st.session_state.guest_claim_failed = True
+        return False
+    st.session_state.latest_cloud_ids = cloud_ids
+    snapshot = st.session_state.get("draft_1_snapshot")
+    if isinstance(snapshot, dict):
+        snapshot["essay_id"] = cloud_ids.get("essay_id", "")
+        snapshot["grading_run_id"] = cloud_ids.get("grading_run_id", "")
+    cache = st.session_state.get("grading_cache")
+    if isinstance(cache, dict):
+        entry = cache.get(str(pending["fingerprint"]))
+        if isinstance(entry, dict):
+            entry["cloud_ids"] = cloud_ids
+    st.session_state.pop("pending_guest_claim", None)
+    st.session_state.pop("guest_claim_failed", None)
+    ensure_learning_assets(store, user)
+    return True
+
+
+def complete_login(store: SupabaseStore, user: CloudUser) -> None:
+    st.session_state.cloud_user = user.__dict__
+    st.session_state.user_id = user.id
+    claim_guest_result(store, user)
+    record_lifecycle_event(store, "login_completed", user=user)
+    route = str(st.session_state.pop("login_return_route", "home") or "home")
+    mode = str(st.session_state.pop("login_return_mode", "") or "")
+    navigate(route, str(st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", "")), mode)
+
+
 def render_login_page(store: SupabaseStore) -> None:
     """Render passwordless email-code authentication without exposing provider details."""
     render_alpine_hero(variant="login")
@@ -164,8 +226,7 @@ def render_login_page(store: SupabaseStore) -> None:
         if st.button("登录并进入学习档案", use_container_width=True):
             try:
                 user = store.verify_email_code(email.strip(), code.strip())
-                st.session_state.cloud_user = user.__dict__
-                st.session_state.user_id = user.id
+                complete_login(store, user)
                 st.rerun()
             except CloudStoreError as exc:
                 st.error(f"登录失败：{exc}")
@@ -178,11 +239,13 @@ def logout_cloud_user() -> None:
     st.query_params.clear()
 
 
-def open_cloud_login() -> None:
-    """Leave a guest-only route so the normal authentication gate can render."""
-    st.session_state.page_mode = "home"
+def open_cloud_login(return_route: str = "home", return_mode: str = "") -> None:
+    """Open soft login and remember the learning action that prompted it."""
+    st.session_state.page_mode = "login"
+    st.session_state.login_return_route = return_route
+    st.session_state.login_return_mode = return_mode
     st.session_state.pop("login_code_sent", None)
-    st.query_params.clear()
+    st.query_params["page"] = "login"
 
 
 def sync_learning_item_status(
@@ -253,7 +316,9 @@ st.set_page_config(
 if "user_id" not in st.session_state:
     st.session_state.user_id = str(uuid.uuid4())
 if "page_mode" not in st.session_state:
-    st.session_state.page_mode = "workspace"
+    st.session_state.page_mode = "home"
+if "flow_id" not in st.session_state:
+    st.session_state.flow_id = str(uuid.uuid4())
 
 user_id = st.session_state.user_id
 
@@ -598,6 +663,8 @@ def render_draft_2_training(
                         "path": training_path,
                         "text": draft_2_text,
                     }
+                    if cloud_store is not None and cloud_user is not None:
+                        record_lifecycle_event(cloud_store, "second_draft_completed", user=cloud_user)
                 except AIGraderError as exc:
                     st.error("第二稿评分失败。完整诊断信息如下。")
                     st.code(str(exc), language="text")
@@ -1321,7 +1388,7 @@ def render_history(user_id: str) -> None:
                 st.markdown(str(record.get("progress_report", "")))
 
 
-def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
+def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
     """Render cloud-backed continuity, priorities, and multidimensional progress."""
     try:
         runs = store.list_grading_runs(user)
@@ -1329,7 +1396,10 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
         revisions = store.list_draft_revisions(user)
     except CloudStoreError as exc:
         st.warning(f"云端学习档案暂时不可用：{exc}")
-        return
+        return False
+
+    if not runs:
+        return False
 
     render_anchor("learning-dashboard")
     st.markdown('<div class="section-kicker">学习档案</div>', unsafe_allow_html=True)
@@ -1342,26 +1412,6 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
     mastered_expressions = [item for item in expression_items if item.get("status") == "mastered"]
     topic_counts = Counter(str(item.get("topic_category") or "society_family") for item in expression_items)
     focus_topic = TOPIC_LABELS.get(topic_counts.most_common(1)[0][0], "尚未形成") if topic_counts else "尚未形成"
-    render_dashboard_stats(
-        [
-            ("已积累表达", len(expression_items), "来自批改与收藏"),
-            ("已掌握表达", len(mastered_expressions), "已通过表达练习"),
-            ("当前重点题材", focus_topic, "继续巩固高频表达"),
-        ],
-        columns=3,
-    )
-    if expression_items and st.button("继续表达练习", use_container_width=True):
-        pending_expression = next(
-            (item for item in expression_items if item.get("status") != "mastered"), expression_items[0]
-        )
-        st.session_state.expression_practice_item = _normalise_expression(pending_expression)
-        st.session_state.expression_library_view = "表达练习"
-        navigate("growth")
-        st.rerun()
-    if not runs:
-        st.info("你可以先浏览 150 条题材表达；完成第一篇 Task 2 批改后，这里还会出现分数、薄弱项和待完成训练。")
-        return
-
     latest = runs[0]
     previous = runs[1] if len(runs) > 1 else None
     latest_score = float(latest.get("overall_band") or 0)
@@ -1405,6 +1455,8 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
         ],
         columns=5,
     )
+    latest_structured = latest.get("report_json") if isinstance(latest.get("report_json"), dict) else {}
+    st.info(f"当前最高优先级：{_run_priority(latest_structured)}")
 
     essay_data = latest.get("essays") if isinstance(latest.get("essays"), dict) else {}
     latest_is_legacy = str(latest.get("prompt_version") or "") != REPORT_PROMPT_VERSION
@@ -1430,6 +1482,24 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
             "grading_run_id": str(latest.get("id", "")),
         }
         navigate("training", str(latest.get("id", "")))
+        st.rerun()
+
+    st.markdown("#### 个人素材库")
+    render_dashboard_stats(
+        [
+            ("已积累表达", len(expression_items), "来自批改与收藏"),
+            ("已掌握表达", len(mastered_expressions), "已通过表达练习"),
+            ("当前重点题材", focus_topic, "继续巩固高频表达"),
+        ],
+        columns=3,
+    )
+    if expression_items and st.button("继续表达练习", use_container_width=True):
+        pending_expression = next(
+            (item for item in expression_items if item.get("status") != "mastered"), expression_items[0]
+        )
+        st.session_state.expression_practice_item = _normalise_expression(pending_expression)
+        st.session_state.expression_library_view = "表达练习"
+        navigate("growth")
         st.rerun()
 
     if latest_is_legacy and st.button("将旧作文载入输入区，准备生成中文报告", use_container_width=True):
@@ -1484,6 +1554,7 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> None:
         common = " · ".join(f"{tag} × {count}" for tag, count in tag_counts.most_common(5))
         st.caption(f"近期常见问题：{common}")
     st.divider()
+    return True
 
 
 def render_product_hero(is_demo: bool = False) -> None:
@@ -1732,7 +1803,7 @@ APP_ROUTES = {
 }
 
 
-def navigate(route: str, run_id: str = "") -> None:
+def navigate(route: str, run_id: str = "", mode: str = "") -> None:
     """Switch the visible product page and preserve a shareable run context."""
     route = route if route in APP_ROUTES else "home"
     st.session_state.page_mode = route
@@ -1742,6 +1813,10 @@ def navigate(route: str, run_id: str = "") -> None:
         st.query_params["run_id"] = run_id
     elif route == "write":
         st.query_params.pop("run_id", None)
+    if mode:
+        st.query_params["mode"] = mode
+    else:
+        st.query_params.pop("mode", None)
 
 
 def hydrate_grading_run(run: dict[str, object]) -> None:
@@ -1821,9 +1896,28 @@ def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> Non
         st.caption(f"固定评分模型 · {PRODUCTION_MODEL}")
         if user is not None:
             st.caption(f"已登录：{user.email}")
+            st.button("我的学习档案", key="sidebar_profile", on_click=navigate, args=("growth",), use_container_width=True)
             st.button("退出登录", on_click=logout_cloud_user, use_container_width=True)
+        elif cloud_enabled:
+            st.caption("访客模式 · 可完成一次完整批改")
+            st.button("登录 / 保存学习档案", on_click=open_cloud_login, use_container_width=True)
         else:
             st.caption("本地开发模式")
+    with st.container(key="desktop_account_bar", border=True):
+        if user is not None:
+            account_col, profile_col = st.columns([4, 1])
+            account_col.caption(f"已登录：{user.email}")
+            profile_col.button("我的学习档案", key="desktop_profile", on_click=navigate, args=("growth",), use_container_width=True)
+        elif cloud_enabled:
+            account_col, login_col = st.columns([4, 1])
+            account_col.caption("可先完成一次完整批改；登录后保存报告、训练和第二稿。")
+            login_col.button("登录 / 保存档案", key="desktop_login", type="primary", on_click=open_cloud_login, use_container_width=True)
+    if user is not None and st.session_state.get("pending_guest_claim"):
+        st.warning("这次游客批改仍在当前页面中，尚未保存到学习档案。")
+        if st.button("重试保存这次批改", key="retry_guest_claim", use_container_width=True):
+            if claim_guest_result(SupabaseStore(), user):
+                st.success("已保存到学习档案。")
+                st.rerun()
     with st.container(key="mobile_account_bar", border=True):
         if user is not None:
             st.caption(f"已登录：{user.email}")
@@ -1863,15 +1957,23 @@ def _run_priority(structured: dict[str, object]) -> str:
 
 
 def render_home_page(store: SupabaseStore, user: CloudUser | None) -> None:
+    if user is not None and render_learning_dashboard(store, user):
+        render_feature_bento()
+        return
     render_product_hero()
     action_start, action_demo, _ = st.columns([1.2, 1.4, 3.2])
     with action_start:
-        st.button("开始一篇新作文", type="primary", use_container_width=True, on_click=navigate, args=("write",))
+        st.button("开始一次完整体验", type="primary", use_container_width=True, on_click=navigate, args=("write",))
     with action_demo:
         st.button("查看零 Token 范文", use_container_width=True, on_click=show_demo)
+    st.markdown("### 今天只做四步")
+    render_dashboard_stats([
+        ("1", "提交作文", "保留原始段落"),
+        ("2", "找到核心问题", "分数与原文证据"),
+        ("3", "针对修改", "单句与逻辑训练"),
+        ("4", "完成第二稿", "验证是否真正改善"),
+    ], columns=4)
     render_feature_bento()
-    if user is not None:
-        render_learning_dashboard(store, user)
 
 
 def grade_submission(
@@ -1963,26 +2065,23 @@ def grade_submission(
     report = str(package["report"])
     structured = dict(package["structured"])
     scores = score_snapshot(structured)
-    saved_path = save_markdown_record(
-        task_type="Task 2",
-        topic=topic,
-        essay=essay,
-        report=report,
-        word_count=word_count,
-        user_id=user.id if user is not None else st.session_state.user_id,
-        parsed_result={"ok": True, "data": {"overall_band": structured["overall_band"], "criteria_scores": {k: v for k, v in scores.items() if k != "Overall Band"}}, "raw": report, "error": ""},
-        examiner_data=structured,
-        grading_metadata={
-            "model": package["model"], "prompt_version": package["prompt_version"],
-            "skill_version": package["skill_version"], "schema_version": package["schema_version"],
-            "graded_at": package["graded_at"], "usage": package["usage"],
-        },
-        content_hash=fingerprint,
-    )
-    error_book_path = append_error_book(
-        task_type="Task 2", topic=topic, report=report,
-        user_id=user.id if user is not None else st.session_state.user_id,
-    )
+    saved_path = None
+    error_book_path = None
+    if user is not None:
+        saved_path = save_markdown_record(
+            task_type="Task 2", topic=topic, essay=essay, report=report,
+            word_count=word_count, user_id=user.id,
+            parsed_result={"ok": True, "data": {"overall_band": structured["overall_band"], "criteria_scores": {k: v for k, v in scores.items() if k != "Overall Band"}}, "raw": report, "error": ""},
+            examiner_data=structured,
+            grading_metadata={
+                "model": package["model"], "prompt_version": package["prompt_version"],
+                "skill_version": package["skill_version"], "schema_version": package["schema_version"],
+                "graded_at": package["graded_at"], "usage": package["usage"],
+            }, content_hash=fingerprint,
+        )
+        error_book_path = append_error_book(
+            task_type="Task 2", topic=topic, report=report, user_id=user.id,
+        )
     if user is not None and not cloud_ids:
         try:
             cloud_ids = store.save_grading_cycle(
@@ -2006,6 +2105,14 @@ def grade_submission(
     st.session_state.draft_2_active = False
     st.session_state.draft_2_result = None
     st.session_state.grading_failed = False
+    if user is None:
+        st.session_state.pending_guest_claim = {
+            "topic": topic,
+            "essay": essay,
+            "word_count": word_count,
+            "fingerprint": fingerprint,
+            "package": package,
+        }
     if reused_result:
         st.session_state.reused_result_notice = True
     record_grading_event(
@@ -2063,20 +2170,60 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
             if not topic.strip() or not essay.strip():
                 st.error("请同时填写英文作文题目和作文正文。")
                 return
+            guest_reserved = False
+            hashed = str(st.session_state.get("visitor_hash") or "")
+            flow_id = str(st.session_state.get("flow_id") or "")
+            if user is None:
+                if not hashed:
+                    st.info("正在准备访客体验，请稍后再点一次。")
+                    return
+                try:
+                    guest_reserved = store.reserve_guest_trial(hashed, flow_id)
+                except (CloudStoreError, AttributeError):
+                    st.error("暂时无法安全预留免费体验额度。登录后可继续批改。")
+                    st.button("登录后继续", on_click=open_cloud_login, args=("write",), use_container_width=True)
+                    return
+                if not guest_reserved:
+                    st.info("这台设备的一次完整体验已用完，登录后可继续批改并保存学习档案。")
+                    st.button("登录 / 保存学习档案", type="primary", on_click=open_cloud_login, args=("write",), use_container_width=True)
+                    return
+            record_lifecycle_event(store, "grading_started", user=user, flow_id=flow_id)
             with st.spinner("正在评分、核对原文证据并生成训练任务……"):
                 render_scoring_loader()
                 try:
                     grade_submission(store, user, topic=topic, essay=essay)
+                    if guest_reserved:
+                        try:
+                            store.complete_guest_trial(hashed, flow_id)
+                        except CloudStoreError:
+                            # The paid result already exists in this session. Never discard it or call the model again.
+                            st.session_state.guest_trial_completion_warning = True
+                    record_lifecycle_event(store, "grading_completed", user=user, flow_id=flow_id)
                     st.rerun()
                 except AIGraderError as exc:
+                    if guest_reserved:
+                        try:
+                            store.release_guest_trial(hashed, flow_id)
+                        except CloudStoreError:
+                            pass
                     st.session_state.grading_failed = True
                     st.error("评分服务暂时不可用。题目和作文已经保留，可以直接重试。")
                     with st.expander("查看技术诊断"):
                         st.code(str(exc), language="text")
                 except CloudStoreError as exc:
+                    if guest_reserved:
+                        try:
+                            store.release_guest_trial(hashed, flow_id)
+                        except CloudStoreError:
+                            pass
                     st.session_state.grading_failed = True
                     st.error(f"云端保存失败，题目和作文未清空：{exc}")
                 except Exception as exc:
+                    if guest_reserved:
+                        try:
+                            store.release_guest_trial(hashed, flow_id)
+                        except CloudStoreError:
+                            pass
                     st.session_state.grading_failed = True
                     st.error("评分没有完成，没有产生半份记录。请稍后重试。")
                     with st.expander("查看技术诊断"):
@@ -2141,11 +2288,14 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
         return
     report = learner_safe_report_markdown(report, structured.get("overall_band"))
     ensure_learning_assets(store, user)
+    record_lifecycle_event(store, "report_viewed", user=user)
     st.markdown('<div class="section-kicker">批改报告</div>', unsafe_allow_html=True)
     st.title("先看最影响提分的问题")
     render_training_stepper(active=2)
     if st.session_state.pop("reused_result_notice", False):
         st.info("已复用相同作文的当前中文版评分结果，本次未消耗 Token。")
+    if st.session_state.pop("guest_trial_completion_warning", False):
+        st.warning("报告已经完整保留。游客额度状态暂时无法同步；请登录保存本次结果，不会重新评分。")
     priorities = [item for item in structured.get("priorities", []) if isinstance(item, dict)]
     render_overall_band(float(structured.get("overall_band") or 0))
     if priorities:
@@ -2186,27 +2336,87 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                 st.error(str(correction.get("original", "")))
                 st.write(str(correction.get("problem", "")))
                 st.success(str(correction.get("improved", "")))
-                train_col, book_col = st.columns(2)
-                with train_col:
+                if user is None:
+                    st.caption("登录后可把这条问题加入单句训练或错题本。")
                     st.button(
-                        "加入单句训练", key=f"queue_correction_{index}", use_container_width=True,
-                        on_click=queue_correction_for_training, args=(correction, store, user),
+                        "登录并保存这条问题",
+                        key=f"login_correction_{index}",
+                        use_container_width=True,
+                        on_click=open_cloud_login,
+                        args=("report", ""),
                     )
-                with book_col:
-                    if st.button("收入错题本", key=f"save_correction_{index}", use_container_width=True):
-                        ensure_learning_assets(store, user)
-                        st.success("已收入错题本，不会产生模型请求。")
+                else:
+                    train_col, book_col = st.columns(2)
+                    with train_col:
+                        st.button(
+                            "加入单句训练", key=f"queue_correction_{index}", use_container_width=True,
+                            on_click=queue_correction_for_training, args=(correction, store, user),
+                        )
+                    with book_col:
+                        if st.button("收入错题本", key=f"save_correction_{index}", use_container_width=True):
+                            ensure_learning_assets(store, user)
+                            st.success("已收入错题本，不会产生模型请求。")
     with full_tab:
         render_grouped_examiner_report(report)
-        render_report_downloads(report)
-    next_col, growth_col = st.columns(2)
-    with next_col:
-        st.button("开始专项训练", type="primary", use_container_width=True, on_click=navigate, args=("training", str(st.session_state.get("active_run_id", ""))))
-    with growth_col:
-        st.button("查看错题本与成长", use_container_width=True, on_click=navigate, args=("growth",))
+        if user is not None:
+            render_report_downloads(report)
+        else:
+            st.info("登录后可下载报告，并把本次结果保存到个人学习档案。")
+            st.button(
+                "登录并保存报告",
+                key="login_report_download",
+                use_container_width=True,
+                on_click=open_cloud_login,
+                args=("report", ""),
+            )
+
+    run_id = str(st.session_state.get("active_run_id") or st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
+    st.markdown("### 下一步：用第二稿验证这次反馈")
+    primary_col, practice_col = st.columns([1.25, 1])
+    if user is None:
+        with primary_col:
+            if st.button("登录并开始第二稿训练", type="primary", use_container_width=True):
+                record_lifecycle_event(store, "report_training_clicked", user=user)
+                open_cloud_login("training", "draft")
+                st.rerun()
+        with practice_col:
+            if st.button("登录后先做专项训练", use_container_width=True):
+                record_lifecycle_event(store, "report_training_clicked", user=user)
+                open_cloud_login("training", "practice")
+                st.rerun()
+    else:
+        with primary_col:
+            if st.button("开始第二稿训练", type="primary", use_container_width=True):
+                record_lifecycle_event(store, "report_training_clicked", user=user)
+                navigate("training", run_id, "draft")
+                st.rerun()
+        with practice_col:
+            if st.button("先做专项训练", use_container_width=True):
+                record_lifecycle_event(store, "report_training_clicked", user=user)
+                navigate("training", run_id, "practice")
+                st.rerun()
+        auxiliary_col, growth_col = st.columns(2)
+        with auxiliary_col:
+            st.caption("报告下载在“完整报告与下载”中")
+        with growth_col:
+            st.button("查看学习档案", use_container_width=True, on_click=navigate, args=("growth",))
 
 
 def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
+    if user is None:
+        st.markdown('<div class="section-kicker">专项训练</div>', unsafe_allow_html=True)
+        st.title("登录后继续完成修改与第二稿")
+        st.info("游客批改报告仍保留在当前会话中。登录后会自动保存，不会重新评分。")
+        mode = str(st.query_params.get("mode", "practice") or "practice")
+        label = "登录并开始第二稿训练" if mode == "draft" else "登录并开始专项训练"
+        st.button(
+            label,
+            type="primary",
+            use_container_width=True,
+            on_click=open_cloud_login,
+            args=("training", mode),
+        )
+        return
     structured = st.session_state.get("latest_structured")
     if not isinstance(structured, dict) or not structured:
         st.info("请先完成一次作文批改，再开始专项训练。")
@@ -2231,7 +2441,13 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
         if queued["original"] not in sentences:
             sentences.insert(0, str(queued["original"]))
             references.insert(0, str(queued.get("reference") or ""))
-    sentence_tab, logic_tab, draft_tab = st.tabs(["单句训练", "逻辑训练", "第二稿验证"])
+    training_mode = str(st.query_params.get("mode", "practice") or "practice")
+    default_tab = "第二稿验证" if training_mode == "draft" else "单句训练"
+    sentence_tab, logic_tab, draft_tab = st.tabs(
+        ["单句训练", "逻辑训练", "第二稿验证"],
+        default=default_tab,
+        key="training_mode_tabs",
+    )
     with sentence_tab:
         render_sentence_practice(
             sentences, "OpenAI", PRODUCTION_MODEL, references=references,
@@ -2309,7 +2525,8 @@ def _render_expression_card(
             favorite = bool(expression.get("favorite"))
             if st.button("取消收藏" if favorite else "收藏", key=f"fav_{key}", use_container_width=True):
                 if user is None:
-                    st.warning("登录后即可收藏并跨设备同步。")
+                    open_cloud_login("growth", "")
+                    st.rerun()
                 else:
                     try:
                         if not expression.get("learning_item_id"):
@@ -2322,6 +2539,9 @@ def _render_expression_card(
                         st.warning(f"收藏暂时无法保存：{exc}")
         with practice_col:
             if st.button("开始造句", key=f"practice_{key}", type="primary", use_container_width=True):
+                if user is None:
+                    open_cloud_login("growth", "practice")
+                    st.rerun()
                 if user is not None and not expression.get("learning_item_id"):
                     try:
                         expression = _persist_catalog_expression(store, user, expression)
@@ -2360,8 +2580,11 @@ def render_expression_library(
 
     if st.session_state.pop("expression_open_practice", False):
         st.session_state.expression_library_view = "表达练习"
+    view_options = ["题材表达库"] if user is None else ["题材表达库", "我的表达", "表达练习"]
+    if user is None:
+        st.session_state.expression_library_view = "题材表达库"
     view = st.radio(
-        "表达库视图", ["题材表达库", "我的表达", "表达练习"], horizontal=True,
+        "表达库视图", view_options, horizontal=True,
         key="expression_library_view", label_visibility="collapsed",
     )
     if view == "题材表达库":
@@ -2483,8 +2706,6 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
     if user is None:
         st.info("题材表达库可直接浏览；登录后可收藏、练习并跨设备同步进度。")
         render_expression_library(store, None, [])
-        st.divider()
-        render_history(st.session_state.user_id)
         return
     try:
         runs = store.list_grading_runs(user)
@@ -2614,13 +2835,15 @@ if st.session_state.page_mode == "demo":
 cloud_store = SupabaseStore()
 cloud_user = session_cloud_user()
 requested_page = str(st.query_params.get("page", "") or "")
-visitor_catalog = requested_page == "growth"
-if cloud_store.enabled and cloud_user is None and not visitor_catalog:
+raw_visitor_id = browser_visitor_id()
+if raw_visitor_id:
+    st.session_state.visitor_hash = visitor_hash(raw_visitor_id)
+    if not st.session_state.get("visitor_opened_recorded"):
+        record_lifecycle_event(cloud_store, "visitor_opened", user=cloud_user)
+        st.session_state.visitor_opened_recorded = True
+
+if requested_page == "login" and cloud_user is None:
     render_login_page(cloud_store)
-    st.divider()
-    if st.button("无需登录，先浏览 150 条题材表达", use_container_width=True):
-        navigate("growth")
-        st.rerun()
     st.stop()
 if cloud_user is not None:
     user_id = cloud_user.id

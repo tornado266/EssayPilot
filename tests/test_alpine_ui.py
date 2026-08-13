@@ -28,16 +28,18 @@ class AlpineUiTests(unittest.TestCase):
         css = Path(CSS_PATH).read_text(encoding="utf-8")
 
         for token in (
-            "def open_cloud_login()",
+            "def open_cloud_login(return_route: str = \"home\", return_mode: str = \"\")",
+            'key="desktop_account_bar"',
             'key="mobile_account_bar"',
             'key="mobile_login"',
             'key="mobile_logout"',
+            "登录 / 保存学习档案",
             "登录并同步进度",
-            "跨设备同步批改、训练和成长记录",
         ):
             self.assertIn(token, app_source)
 
         self.assertIn(".st-key-mobile_account_bar", css)
+        self.assertIn(".st-key-desktop_account_bar", css)
         self.assertIn("@media (max-width: 768px)", css)
         self.assertIn("margin: 0 0 0.75rem", css)
 

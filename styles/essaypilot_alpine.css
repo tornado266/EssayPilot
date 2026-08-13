@@ -875,6 +875,17 @@ button[kind="primary"]:hover {
   display: none;
 }
 
+.st-key-desktop_account_bar {
+  margin-bottom: 0.8rem;
+  border-color: var(--ep-border);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: var(--ep-shadow-sm);
+}
+
+.st-key-desktop_account_bar [data-testid="stCaptionContainer"] p {
+  margin: 0.5rem 0 0;
+}
+
 [data-testid="stMarkdownContainer"]:has(table) {
   max-width: 100%;
   overflow-x: auto;
@@ -1030,6 +1041,10 @@ button[kind="primary"]:hover {
     border-color: var(--ep-border);
     background: rgba(255, 255, 255, 0.96);
     box-shadow: var(--ep-shadow-sm);
+  }
+
+  .st-key-desktop_account_bar {
+    display: none;
   }
 
   .st-key-mobile_account_bar [data-testid="stCaptionContainer"] p {

@@ -83,6 +83,44 @@ def render_admin_dashboard() -> None:
         st.error(f"暂时无法读取匿名漏斗：{exc}")
         return
 
+    try:
+        lifecycle = store.get_product_funnel()
+    except CloudStoreError as exc:
+        st.warning(f"用户生命周期统计暂时不可用：{exc}")
+        lifecycle = {}
+
+    if lifecycle:
+        def rate(numerator: int, denominator: int) -> float:
+            return numerator / denominator if denominator else 0.0
+
+        visitors = int(lifecycle.get("visitors") or 0)
+        logins = int(lifecycle.get("logins") or 0)
+        grading_started = int(lifecycle.get("grading_starts") or 0)
+        grading_completed = int(lifecycle.get("grading_completions") or 0)
+        reports = int(lifecycle.get("report_views") or 0)
+        training_clicks = int(lifecycle.get("training_clicks") or 0)
+        draft_2_completed = int(lifecycle.get("second_drafts") or 0)
+        st.subheader("用户生命周期")
+        lifecycle_cols = st.columns(4)
+        lifecycle_cols[0].metric(
+            "登录转化率", f"{rate(logins, visitors):.1%}", f"{logins} / {visitors} 台设备"
+        )
+        lifecycle_cols[1].metric(
+            "首次批改完成率",
+            f"{rate(grading_completed, grading_started):.1%}",
+            f"{grading_completed} / {grading_started} 个流程",
+        )
+        lifecycle_cols[2].metric(
+            "报告→训练率",
+            f"{rate(training_clicks, reports):.1%}",
+            f"{training_clicks} / {reports} 个流程",
+        )
+        lifecycle_cols[3].metric(
+            "第一稿→第二稿率",
+            f"{rate(draft_2_completed, grading_completed):.1%}",
+            f"{draft_2_completed} / {grading_completed} 个流程",
+        )
+
     first = int(funnel.get("first_grading_users") or 0)
     sentence = int(funnel.get("sentence_mastered_users") or 0)
     logic = int(funnel.get("logic_mastered_users") or 0)

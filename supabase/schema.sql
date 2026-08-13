@@ -274,3 +274,7 @@ $$;
 
 revoke all on function public.get_beta_funnel(timestamptz) from public, anon, authenticated;
 grant execute on function public.get_beta_funnel(timestamptz) to service_role;
+
+-- Guest trial and product-funnel objects are maintained in
+-- migrations/20260812_feedback_loop_funnel.sql so existing deployments can
+-- apply the change without recreating private learning tables.

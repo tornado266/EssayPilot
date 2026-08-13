@@ -115,6 +115,63 @@ class SupabaseStore:
         )
         return result if isinstance(result, dict) else {}
 
+    def get_product_funnel(self) -> dict[str, Any]:
+        """Return privacy-safe lifecycle conversion counts."""
+        if not self.funnel_enabled:
+            raise CloudStoreError(
+                "Product analytics require SUPABASE_SERVICE_ROLE_KEY and BETA_START_AT."
+            )
+        result = self._request(
+            "POST",
+            "/rest/v1/rpc/get_product_funnel",
+            access_token=self.service_role_key,
+            api_key=self.service_role_key,
+            payload={"p_since": self.beta_start_at},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def reserve_guest_trial(self, visitor_hash: str, flow_id: str) -> bool:
+        result = self._request(
+            "POST",
+            "/rest/v1/rpc/reserve_guest_trial",
+            payload={"p_visitor_hash": visitor_hash, "p_flow_id": flow_id},
+        )
+        return bool(isinstance(result, dict) and result.get("allowed"))
+
+    def complete_guest_trial(self, visitor_hash: str, flow_id: str) -> bool:
+        return bool(self._request(
+            "POST",
+            "/rest/v1/rpc/complete_guest_trial",
+            payload={"p_visitor_hash": visitor_hash, "p_flow_id": flow_id},
+        ))
+
+    def release_guest_trial(self, visitor_hash: str, flow_id: str) -> bool:
+        return bool(self._request(
+            "POST",
+            "/rest/v1/rpc/release_guest_trial",
+            payload={"p_visitor_hash": visitor_hash, "p_flow_id": flow_id},
+        ))
+
+    def record_product_event(
+        self,
+        event_name: str,
+        visitor_hash: str,
+        flow_id: str,
+        *,
+        user: CloudUser | None = None,
+    ) -> bool:
+        """Record a deduplicated event without essay, report, email, or raw device id."""
+        return bool(self._request(
+            "POST",
+            "/rest/v1/rpc/record_product_event",
+            access_token=user.access_token if user else "",
+            payload={
+                "p_event_name": event_name,
+                "p_visitor_hash": visitor_hash,
+                "p_flow_id": flow_id,
+            },
+        ))
+
     def send_email_code(self, email: str) -> None:
         self._request("POST", "/auth/v1/otp", payload={"email": email, "create_user": True})
 
