@@ -10,9 +10,9 @@ from copy import deepcopy
 from typing import Any
 
 
-SCHEMA_VERSION = "2.6"
+SCHEMA_VERSION = "2.7"
 SCORING_PROMPT_VERSION = "task2-score-zh-official-claimed-audit-v10-2026-08-11"
-FEEDBACK_PROMPT_VERSION = "task2-feedback-closed-loop-v3-2026-08-11"
+FEEDBACK_PROMPT_VERSION = "task2-feedback-precise-spans-v4-2026-08-16"
 REPORT_PROMPT_VERSION = f"{SCORING_PROMPT_VERSION}+{FEEDBACK_PROMPT_VERSION}"
 PROMPT_VERSION = SCORING_PROMPT_VERSION  # score-only compatibility API
 SCORING_SKILL_VERSION = "ielts-writing-task2-official-v4"
@@ -120,11 +120,16 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["original", "problem", "improved"],
+                    "required": ["original", "problem", "improved", "problem_spans"],
                     "properties": {
                         "original": {"type": "string", "minLength": 1, "maxLength": 240},
                         "problem": {"type": "string"},
                         "improved": {"type": "string"},
+                        "problem_spans": {
+                            "type": "array",
+                            "maxItems": 6,
+                            "items": {"type": "string", "minLength": 1, "maxLength": 120},
+                        },
                     },
                 },
             },
@@ -748,7 +753,16 @@ def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]
             "Feedback must not present word counts, paragraph counts, templates, linking-word "
             "counts, or prescribed constructions as IELTS requirements."
         )
-    normalized = dict(data)
+    normalized = deepcopy(data)
+    for correction in normalized.get("sentence_corrections", []):
+        if not isinstance(correction, dict):
+            continue
+        original = str(correction.get("original") or "")
+        spans = correction.get("problem_spans")
+        correction["problem_spans"] = list(dict.fromkeys(
+            span for span in spans or []
+            if isinstance(span, str) and span and span in original
+        )) if isinstance(spans, list) else []
     normalized["raw_overall_band"] = calculate_descriptor_overall(criteria)
     normalized["overall_band"] = calculate_overall(criteria)
     normalized["overall_calibration_version"] = OVERALL_CALIBRATION_VERSION

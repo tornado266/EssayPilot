@@ -27,6 +27,7 @@ from src.ai_grader import (
 from src.admin_dashboard import is_admin_request, render_admin_dashboard
 from src.analytics import record_grading_event
 from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
+from src.dictionary_provider import DictionaryProvider, get_default_dictionary_provider
 from src.draft_training import list_draft_training_history, save_draft_training_record
 from src.error_book import append_error_book
 from src.learning_assets import (
@@ -37,12 +38,14 @@ from src.learning_assets import (
     build_learning_items,
     catalog_learning_item,
     criterion_for_problem,
+    infer_category,
     expression_status_label,
     report_expression_items,
     resolve_expression_view,
 )
 from src.expression_catalog import FUNCTION_LABELS, TOPIC_LABELS, load_expression_catalog
 from src.share_card import build_result_card_svg
+from src.problem_spans import contextual_collocation, highlight_problem_text, lexical_replacement
 from src.storage import markdown_to_pdf, save_markdown_record
 from src.report_schema import (
     ExaminerResultError,
@@ -62,6 +65,7 @@ from ui.alpine import (
     render_feature_bento,
     render_hero as render_alpine_hero,
     render_scoring_loader,
+    paragraph_diff_html,
     render_text_diff,
     render_training_stepper,
 )
@@ -648,7 +652,20 @@ def render_draft_2_training(
                         essay_word_count=count_words(draft_2_text),
                         model_name=model,
                     )
+                    linked_ids: dict[str, object] = {}
                     if cloud_store and cloud_user and draft_1.get("essay_id") and draft_1.get("grading_run_id"):
+                        try:
+                            linked_ids = cloud_store.save_linked_grading_cycle(
+                                cloud_user,
+                                question=str(draft_1["topic"]),
+                                essay=draft_2_text,
+                                word_count=count_words(draft_2_text),
+                                package=draft_2_package,
+                                content_hash=submission_hash(str(draft_1["topic"]), draft_2_text),
+                                parent_run_id=str(draft_1["grading_run_id"]),
+                            )
+                        except CloudStoreError:
+                            linked_ids = {}
                         try:
                             cloud_store.save_draft_revision(
                                 cloud_user,
@@ -659,6 +676,7 @@ def render_draft_2_training(
                                 report_json=draft_2_structured,
                                 report_markdown=draft_2_report,
                                 progress_report=progress_report,
+                                revised_grading_run_id=str(linked_ids.get("grading_run_id") or ""),
                             )
                         except CloudStoreError as exc:
                             st.warning(f"第二稿已保存在本机，但云端同步失败：{exc}")
@@ -668,6 +686,7 @@ def render_draft_2_training(
                         "progress_report": progress_report,
                         "path": training_path,
                         "text": draft_2_text,
+                        "grading_run_id": str(linked_ids.get("grading_run_id") or ""),
                     }
                     if cloud_store is not None and cloud_user is not None:
                         record_lifecycle_event(cloud_store, "second_draft_completed", user=cloud_user)
@@ -687,8 +706,19 @@ def render_draft_2_training(
         revised_text = str(result.get("text") or "")
         if revised_text:
             st.subheader("真实文本变化")
-            st.caption("删除内容以柔和红色标记，新增内容以青绿色标记；文本仍可直接复制。")
-            render_text_diff(str(draft_1["text"]), revised_text)
+            st.caption("先对齐段落，再比较段内词语；复制按钮只复制干净第二稿。")
+            compare_tab, clean_tab, full_revision_tab = st.tabs(
+                ["逐段对照", "清爽阅读", "全文修订"], default="逐段对照"
+            )
+            with compare_tab:
+                st.markdown(
+                    paragraph_diff_html(str(draft_1["text"]), revised_text),
+                    unsafe_allow_html=True,
+                )
+            with clean_tab:
+                st.code(revised_text.replace("\r\n", "\n").replace("\r", "\n"), language=None, wrap_lines=True)
+            with full_revision_tab:
+                render_text_diff(str(draft_1["text"]), revised_text)
         st.markdown(result["progress_report"])
         with st.expander("查看第二稿完整评分", expanded=False):
             st.markdown(result["report"])
@@ -1900,6 +1930,11 @@ def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> Non
             )
         st.divider()
         st.caption(f"固定评分模型 · {PRODUCTION_MODEL}")
+        st.markdown(
+            '<small>词典释义：<a href="https://github.com/globalwordnet/english-wordnet" '
+            'target="_blank" rel="noopener noreferrer">Open English WordNet 2025</a> · CC BY 4.0</small>',
+            unsafe_allow_html=True,
+        )
         if user is not None:
             st.caption(f"已登录：{user.email}")
             st.button("我的学习档案", key="sidebar_profile", on_click=navigate, args=("growth",), use_container_width=True)
@@ -2237,23 +2272,58 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
 
 
 def _essay_with_issue_marks(essay: str, corrections: list[dict[str, object]]) -> str:
-    spans: list[tuple[int, int, int]] = []
+    spans: list[tuple[int, int, int, dict[str, object]]] = []
     for index, item in enumerate(corrections, start=1):
         original = str(item.get("original") or "").strip()
         if not original:
             continue
         match = re.search(re.escape(original), essay, flags=re.IGNORECASE)
-        if match and not any(match.start() < end and match.end() > start for start, end, _ in spans):
-            spans.append((match.start(), match.end(), index))
-    spans.sort()
+        if match and not any(match.start() < end and match.end() > start for start, end, _, _item in spans):
+            spans.append((match.start(), match.end(), index, item))
+    spans.sort(key=lambda value: value[0])
     parts: list[str] = []
     cursor = 0
-    for start, end, index in spans:
+    for start, end, index, item in spans:
         parts.append(html.escape(essay[cursor:start]))
-        parts.append(f'<mark class="issue-mark">{html.escape(essay[start:end])}<sup>{index}</sup></mark>')
+        parts.append(f'<mark class="issue-mark">{highlight_problem_text(item)}<sup>{index}</sup></mark>')
         cursor = end
     parts.append(html.escape(essay[cursor:]))
     return "".join(parts).replace("\n", "<br>")
+
+
+def render_correction_original(correction: dict[str, object]) -> None:
+    st.markdown(
+        f'<div class="correction-original">{highlight_problem_text(correction)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_dictionary_card(
+    correction: dict[str, object], provider: DictionaryProvider | None = None
+) -> None:
+    """Render OEWN enrichment only for a local LR word replacement."""
+    if infer_category(str(correction.get("problem") or "")) != "vocabulary":
+        return
+    replacement = lexical_replacement(correction)
+    if not replacement:
+        return
+    provider = provider or get_default_dictionary_provider()
+    entry = provider.lookup(replacement)
+    if entry is None:
+        return
+    improved = str(correction.get("improved") or "")
+    collocation = contextual_collocation(improved, replacement)
+    explanation = str(correction.get("problem") or "")
+    st.markdown(
+        '<aside class="dictionary-card">'
+        '<div class="dictionary-card__source">Open English WordNet 2025 · CC BY 4.0</div>'
+        f'<h4>{html.escape(entry.term)} <span>{html.escape(entry.part_of_speech)}</span></h4>'
+        f'<p><strong>英文释义：</strong>{html.escape(entry.definition)}</p>'
+        f'<p><strong>语境例句：</strong>{html.escape(improved)}</p>'
+        + (f'<p><strong>常见搭配：</strong>{html.escape(collocation)}</p>' if collocation else '')
+        + f'<p><strong>为什么更合适：</strong>{html.escape(explanation)}</p></aside>',
+        unsafe_allow_html=True,
+    )
 
 
 def queue_correction_for_training(
@@ -2339,9 +2409,10 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
         for index, correction in enumerate(corrections, start=1):
             with st.container(border=True):
                 st.markdown(f"### {index}. {criterion_for_problem(str(correction.get('problem', '')))}")
-                st.error(str(correction.get("original", "")))
+                render_correction_original(correction)
                 st.write(str(correction.get("problem", "")))
                 st.success(str(correction.get("improved", "")))
+                render_dictionary_card(correction)
                 if user is None:
                     st.caption("登录后可把这条问题加入单句训练或错题本。")
                     st.button(
@@ -2417,6 +2488,11 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
     if user is None:
         st.markdown('<div class="section-kicker">专项训练</div>', unsafe_allow_html=True)
         st.title("登录后继续完成修改与第二稿")
+        st.markdown(
+            '<a class="ep-site-entry" href="https://essaypilot.cn/" target="_blank" '
+            'rel="noopener noreferrer"><strong>访问 EssayPilot 官网</strong><small>内含新手教程</small></a>',
+            unsafe_allow_html=True,
+        )
         st.info("游客批改报告仍保留在当前会话中。登录后会自动保存，不会重新评分。")
         mode = str(st.query_params.get("mode", "practice") or "practice")
         label = "登录并开始第二稿训练" if mode == "draft" else "登录并开始专项训练"
@@ -2435,6 +2511,11 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
         return
     st.markdown('<div class="section-kicker">专项训练</div>', unsafe_allow_html=True)
     st.title("把本轮问题真正练会")
+    st.markdown(
+        '<a class="ep-site-entry" href="https://essaypilot.cn/" target="_blank" '
+        'rel="noopener noreferrer"><strong>访问 EssayPilot 官网</strong><small>内含新手教程</small></a>',
+        unsafe_allow_html=True,
+    )
     render_training_stepper(active=3)
     run_id = str(st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
     if user is not None:
@@ -2727,6 +2808,118 @@ def render_expression_library(
             st.info(f"优化句：{result.get('improved_sentence_en', '')}")
 
 
+def _criterion_history_scores(run: dict[str, object]) -> dict[str, str]:
+    scores = {"TR": "-", "CC": "-", "LR": "-", "GRA": "-"}
+    aliases = {
+        "Task Response": "TR", "Coherence and Cohesion": "CC",
+        "Lexical Resource": "LR", "Grammatical Range and Accuracy": "GRA",
+    }
+    for item in run.get("criteria") or []:
+        if isinstance(item, dict) and str(item.get("criterion")) in aliases:
+            scores[aliases[str(item["criterion"])]] = str(item.get("score", "-"))
+    return scores
+
+
+def _open_draft_comparison(
+    store: SupabaseStore,
+    user: CloudUser,
+    original_run_id: str,
+    revised_run: dict[str, object] | None,
+    revision: dict[str, object] | None,
+) -> None:
+    original = store.get_grading_run(user, original_run_id)
+    if not original:
+        return
+    hydrate_grading_run(original)
+    original_essay = original.get("essays") if isinstance(original.get("essays"), dict) else {}
+    revised_run = revised_run or {}
+    revised_essay = revised_run.get("essays") if isinstance(revised_run.get("essays"), dict) else {}
+    revision = revision or {}
+    revised_structured = revised_run.get("report_json") or revision.get("report_json") or {}
+    revised_report = revised_run.get("report_markdown") or revision.get("report_markdown") or ""
+    revised_text = revised_essay.get("content") or revision.get("content") or ""
+    revised_scores = score_snapshot(revised_structured) if isinstance(revised_structured, dict) and revised_structured.get("overall_band") is not None else revision.get("score_snapshot") or {}
+    st.session_state.draft_1_snapshot = {
+        "topic": str(original_essay.get("question") or ""),
+        "text": str(original_essay.get("content") or ""),
+        "feedback": str(original.get("report_markdown") or ""),
+        "scores": score_snapshot(dict(original.get("report_json") or {})),
+        "structured": dict(original.get("report_json") or {}),
+        "essay_id": str(original.get("essay_id") or ""),
+        "grading_run_id": original_run_id,
+    }
+    st.session_state.draft_2_result = {
+        "scores": revised_scores, "report": str(revised_report),
+        "progress_report": str(revision.get("progress_report") or ""),
+        "text": str(revised_text), "grading_run_id": str(revised_run.get("id") or ""),
+    }
+    navigate("training", original_run_id, "draft")
+
+
+def render_correction_history(
+    store: SupabaseStore,
+    user: CloudUser,
+    runs: list[dict[str, object]],
+    revisions: list[dict[str, object]],
+    *,
+    has_more: bool,
+) -> None:
+    """Render owner-scoped grading runs without copying stored reports."""
+    revision_by_original = {str(item.get("grading_run_id") or ""): item for item in revisions}
+    revision_by_revised = {str(item.get("revised_grading_run_id") or ""): item for item in revisions}
+    runs_by_id = {str(item.get("id") or ""): item for item in runs}
+    child_by_parent = {
+        str(item.get("parent_run_id") or ""): item
+        for item in runs if item.get("parent_run_id")
+    }
+    if not runs:
+        st.info("完成一次批改后，这里会保存批改记录。")
+        return
+    for run in runs:
+        run_id = str(run.get("id") or "")
+        essay = run.get("essays") if isinstance(run.get("essays"), dict) else {}
+        question = " ".join(str(essay.get("question") or "未记录题目").split())
+        content = str(essay.get("content") or "")
+        role = str(run.get("draft_role") or "ordinary")
+        if role == "second" or run.get("parent_run_id"):
+            role_label = "第二稿"
+        elif role == "first" or run_id in revision_by_original or run_id in child_by_parent:
+            role_label = "第一稿"
+        else:
+            role_label = "普通批改"
+        scores = _criterion_history_scores(run)
+        with st.container(border=True):
+            st.caption(f"{str(run.get('created_at') or '')[:16].replace('T', ' ')} · {role_label}")
+            st.markdown(f"**{question[:120]}{'…' if len(question) > 120 else ''}**")
+            st.write(
+                f"Overall {format_overall_band(run.get('overall_band'))}　"
+                f"TR {scores['TR']}　CC {scores['CC']}　LR {scores['LR']}　GRA {scores['GRA']}"
+            )
+            preview = " ".join(content.split())
+            st.caption(preview[:180] + ("…" if len(preview) > 180 else ""))
+            with st.expander("查看完整原文", expanded=False):
+                st.text(content)
+            report_col, diff_col = st.columns(2)
+            if report_col.button("打开完整批改报告", key=f"history_report_{run_id}", use_container_width=True):
+                hydrate_grading_run(run)
+                navigate("report", run_id)
+                st.rerun()
+            revision = revision_by_revised.get(run_id) or revision_by_original.get(run_id)
+            revised_run = run if run_id in revision_by_revised else child_by_parent.get(run_id)
+            original_id = str(run.get("parent_run_id") or run_id)
+            if revision or revised_run:
+                if diff_col.button("查看二稿变化", key=f"history_diff_{run_id}", use_container_width=True):
+                    try:
+                        _open_draft_comparison(store, user, original_id, revised_run, revision)
+                    except CloudStoreError as exc:
+                        st.warning(f"暂时无法打开二稿变化：{exc}")
+                    else:
+                        st.rerun()
+    if has_more and st.button("继续加载", key="load_more_corrections", use_container_width=True):
+        st.session_state.correction_history_limit = int(st.session_state.get("correction_history_limit", 10)) + 10
+        st.rerun()
+
+
 def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
     st.markdown('<div class="section-kicker">学习档案</div>', unsafe_allow_html=True)
     st.title("在这里复习错题、练习表达、查看二稿记录")
@@ -2737,12 +2930,15 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
         st.info("题材精选可直接浏览；登录后可收藏、练习并跨设备同步进度。")
         render_expression_library(store, None, [], mode=growth_mode)
         return
+    history_limit = int(st.session_state.get("correction_history_limit", 10))
     try:
-        runs = store.list_grading_runs(user)
+        loaded_runs = store.list_grading_runs(user, limit=history_limit + 1)
+        has_more_runs = len(loaded_runs) > history_limit
+        runs = loaded_runs[:history_limit]
         revisions = store.list_draft_revisions(user)
     except CloudStoreError as exc:
         st.warning(f"历史与成长记录暂时无法读取：{exc}")
-        runs, revisions = [], []
+        runs, revisions, has_more_runs = [], [], False
     try:
         items = store.list_learning_items(user)
     except (CloudStoreError, AttributeError):
@@ -2783,12 +2979,14 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
             ).properties(height=300),
             use_container_width=True,
         )
-    default_section = "表达库" if growth_mode in {"expressions", "expressions-from-report", "practice"} else "错题本"
-    error_tab, expression_tab, draft_tab, share_tab = st.tabs(
-        ["错题本", "表达库", "二稿记录", "成果卡"],
+    default_section = "表达库" if growth_mode in {"expressions", "expressions-from-report", "practice"} else "批改记录"
+    history_tab, error_tab, expression_tab, draft_tab, share_tab = st.tabs(
+        ["批改记录", "错题本", "表达库", "二稿记录", "成果卡"],
         default=default_section,
         key="growth_sections",
     )
+    with history_tab:
+        render_correction_history(store, user, runs, revisions, has_more=has_more_runs)
     with error_tab:
         category_counts = Counter(str(item.get("category") or "grammar") for item in errors)
         if category_counts:

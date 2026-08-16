@@ -42,6 +42,12 @@ This notice does not grant a licence for EssayPilot itself. The project owner mu
 
 The repository includes optimized JPEG and WebP derivatives for application use. It does not use the photograph as a standalone resale item or as part of a competing image library.
 
+## Open English WordNet 2025
+
+- Dictionary definitions are provided by Open English WordNet, ordinary-word release `oewn:2025`: https://github.com/globalwordnet/english-wordnet
+- Open English WordNet is licensed under Creative Commons Attribution 4.0 International (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
+- EssayPilot accesses the data through the `wn` Python package. Dictionary enrichment is optional and never blocks an essay report.
+
 ## UI design references
 
 The Alpine UI uses independently written HTML and CSS. Its restrained loader, Bento layout, stepper, and entrance transitions were informed at a pattern level by Uiverse, Aceternity UI, and React Bits. No React package, remote script, copied component implementation, or third-party runtime dependency is included.

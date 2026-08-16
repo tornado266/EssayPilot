@@ -320,17 +320,24 @@ class SupabaseStore:
                 return result[0]
         return None
 
-    def list_grading_runs(self, user: CloudUser, limit: int = 30) -> list[dict[str, Any]]:
-        result = self._request(
-            "GET",
-            "/rest/v1/grading_runs",
-            access_token=user.access_token,
-            params={
-                "select": "id,essay_id,overall_band,criteria,report_json,report_markdown,model,prompt_version,skill_version,created_at,essays(question,content,word_count)",
-                "order": "created_at.desc",
-                "limit": str(limit),
-            },
-        )
+    def list_grading_runs(
+        self, user: CloudUser, limit: int = 30, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        params = {
+            "select": "id,essay_id,overall_band,criteria,report_json,report_markdown,model,prompt_version,skill_version,draft_role,parent_run_id,created_at,essays(question,content,word_count)",
+            "order": "created_at.desc",
+            "limit": str(limit),
+            "offset": str(offset),
+        }
+        try:
+            result = self._request(
+                "GET", "/rest/v1/grading_runs", access_token=user.access_token, params=params
+            )
+        except CloudStoreError:
+            params["select"] = "id,essay_id,overall_band,criteria,report_json,report_markdown,model,prompt_version,skill_version,created_at,essays(question,content,word_count)"
+            result = self._request(
+                "GET", "/rest/v1/grading_runs", access_token=user.access_token, params=params
+            )
         return result if isinstance(result, list) else []
 
     def get_grading_run(self, user: CloudUser, grading_run_id: str) -> dict[str, Any] | None:
@@ -346,6 +353,34 @@ class SupabaseStore:
             },
         )
         return result[0] if isinstance(result, list) and result else None
+
+    def save_linked_grading_cycle(
+        self,
+        user: CloudUser,
+        *,
+        question: str,
+        essay: str,
+        word_count: int,
+        package: dict[str, Any],
+        content_hash: str,
+        parent_run_id: str,
+        draft_role: str = "second",
+    ) -> dict[str, Any]:
+        """Persist a linked draft as its own reusable run and report."""
+        structured = package["structured"]
+        result = self._request(
+            "POST", "/rest/v1/rpc/save_linked_grading_cycle",
+            access_token=user.access_token,
+            payload={
+                "p_question": question, "p_essay": essay, "p_word_count": word_count,
+                "p_content_hash": content_hash, "p_overall_band": structured["overall_band"],
+                "p_criteria": structured["criteria"], "p_report_json": structured,
+                "p_report_markdown": package["report"], "p_model": package["model"],
+                "p_prompt_version": package["prompt_version"], "p_skill_version": package["skill_version"],
+                "p_parent_run_id": parent_run_id, "p_draft_role": draft_role,
+            },
+        )
+        return result if isinstance(result, dict) else {}
 
     def upsert_learning_items(self, user: CloudUser, rows: list[dict[str, Any]]) -> None:
         """Persist derived learning assets without creating duplicates."""
@@ -521,16 +556,19 @@ class SupabaseStore:
         return result if isinstance(result, list) else []
 
     def list_draft_revisions(self, user: CloudUser, limit: int = 20) -> list[dict[str, Any]]:
-        result = self._request(
-            "GET",
-            "/rest/v1/draft_revisions",
-            access_token=user.access_token,
-            params={
-                "select": "id,essay_id,grading_run_id,draft_number,score_snapshot,progress_report,created_at,grading_runs(overall_band)",
-                "order": "created_at.desc",
-                "limit": str(limit),
-            },
-        )
+        params = {
+            "select": "id,essay_id,grading_run_id,revised_grading_run_id,draft_number,content,score_snapshot,report_json,report_markdown,progress_report,created_at,grading_runs!draft_revisions_grading_run_id_fkey(id,overall_band,report_json,report_markdown,essays(question,content)),revised_run:grading_runs!draft_revisions_revised_grading_run_id_fkey(id,overall_band,report_json,report_markdown,essays(question,content))",
+            "order": "created_at.desc", "limit": str(limit),
+        }
+        try:
+            result = self._request(
+                "GET", "/rest/v1/draft_revisions", access_token=user.access_token, params=params
+            )
+        except CloudStoreError:
+            params["select"] = "id,essay_id,grading_run_id,draft_number,content,score_snapshot,report_json,report_markdown,progress_report,created_at,grading_runs(overall_band,report_json,report_markdown,essays(question,content))"
+            result = self._request(
+                "GET", "/rest/v1/draft_revisions", access_token=user.access_token, params=params
+            )
         return result if isinstance(result, list) else []
 
     def save_draft_revision(
@@ -544,21 +582,33 @@ class SupabaseStore:
         report_json: dict[str, Any],
         report_markdown: str,
         progress_report: str,
+        revised_grading_run_id: str = "",
     ) -> None:
-        self._request(
-            "POST",
-            "/rest/v1/draft_revisions",
-            access_token=user.access_token,
-            prefer="return=minimal",
-            payload={
-                "user_id": user.id,
-                "essay_id": essay_id,
-                "grading_run_id": grading_run_id,
-                "draft_number": 2,
-                "content": content,
-                "score_snapshot": scores,
-                "report_json": report_json,
-                "report_markdown": report_markdown,
-                "progress_report": progress_report,
-            },
-        )
+        payload = {
+            "user_id": user.id,
+            "essay_id": essay_id,
+            "grading_run_id": grading_run_id,
+            "draft_number": 2,
+            "content": content,
+            "score_snapshot": scores,
+            "report_json": {} if revised_grading_run_id else report_json,
+            "report_markdown": "" if revised_grading_run_id else report_markdown,
+            "progress_report": progress_report,
+        }
+        if revised_grading_run_id:
+            payload["revised_grading_run_id"] = revised_grading_run_id
+        try:
+            self._request(
+                "POST", "/rest/v1/draft_revisions", access_token=user.access_token,
+                prefer="return=minimal", payload=payload,
+            )
+        except CloudStoreError:
+            if not revised_grading_run_id:
+                raise
+            payload.pop("revised_grading_run_id", None)
+            payload["report_json"] = report_json
+            payload["report_markdown"] = report_markdown
+            self._request(
+                "POST", "/rest/v1/draft_revisions", access_token=user.access_token,
+                prefer="return=minimal", payload=payload,
+            )

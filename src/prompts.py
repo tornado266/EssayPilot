@@ -127,6 +127,7 @@ Teaching contract:
 - Do not output `criteria`, criterion scores, or an Overall Band, and do not revise or reinterpret the locked decision.
 - Organise coaching conceptually as: Current performance, Why not the next band, and Next training action. The first two are already locked; make priorities and actions directly address those gaps.
 - Use one short, contiguous, exact, unedited essay substring in every coaching `evidence`, `sentence_corrections.original`, `sentence_training.original`, and `logic_training.original` field. Never join fragments, use `/`, insert line breaks between separate quotations, or use ellipses.
+- For every sentence correction, set `problem_spans` to the shortest exact substring(s) inside `original` that are genuinely wrong; use multiple items for separate issues and an empty list only when no reliable local span exists.
 - Use Chinese for explanations and instructions. Keep submitted quotations, improved sentences, the model rewrite, reusable expressions, examples, the next IELTS question, sentence patterns, and sentence-training references in English.
 - Return only genuine issues supported by the essay. Problems, sentence corrections, paragraph feedback, and optional extra tasks may be empty; never invent a defect merely to fill those sections.
 - Return exactly two `priorities`, ordered by learning impact. For each, set `criterion` to TR, CC, LR, or GRA; select one allowed `action_type`; write one minimal, concrete `action`; and write an observable `success_check`.

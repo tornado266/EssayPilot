@@ -2,7 +2,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ui.alpine import CSS_PATH, HERO_JPG_PATH, HERO_WEBP_PATH, render_text_diff
+from ui.alpine import (
+    CSS_PATH, HERO_JPG_PATH, HERO_WEBP_PATH, align_draft_paragraphs,
+    paragraph_diff_html, render_text_diff, split_draft_paragraphs,
+)
 
 
 class AlpineUiTests(unittest.TestCase):
@@ -58,6 +61,17 @@ class AlpineUiTests(unittest.TestCase):
         self.assertIn("<ins>clearer</ins>", body)
         self.assertNotIn("<script>", body)
         self.assertTrue(captured["kwargs"]["unsafe_allow_html"])
+
+    def test_paragraph_alignment_handles_crlf_single_lines_and_whole_add_delete(self):
+        self.assertEqual(split_draft_paragraphs("One\r\nTwo"), ["One", "Two"])
+        aligned = align_draft_paragraphs("Keep\n\nDelete me\n\nLast", "Keep\n\nAdded here\n\nLast")
+        self.assertEqual(aligned[0].before, "Keep")
+        self.assertEqual(aligned[-1].after, "Last")
+        body = paragraph_diff_html("Safe <tag>\n\nRemoved", "Safe text\n\nAdded")
+        self.assertIn("新增", body)
+        self.assertIn("删除", body)
+        self.assertIn("&lt;tag&gt;", body)
+        self.assertNotIn("<tag>", body)
 
 
 if __name__ == "__main__":

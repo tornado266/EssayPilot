@@ -40,7 +40,7 @@ def valid_result():
             {"title": "补足逻辑", "evidence": "Public transport reduces traffic.", "why": "关系没有解释。", "action": "补充中间推理。", "criterion": "CC", "action_type": "support", "success_check": "读者能顺着原因理解结论。"},
         ],
         "problems": [{"title": "支撑不足", "evidence": "Public transport reduces traffic.", "why": "观点没有继续展开。", "action": "补充一个例子。", "criterion": "TR", "action_type": "support", "success_check": "例子能直接证明观点。"}] * 2,
-        "sentence_corrections": [{"original": "Public transport reduces traffic.", "problem": "论证简略", "improved": "Reliable public transport can reduce urban congestion."}] * 3,
+        "sentence_corrections": [{"original": "Public transport reduces traffic.", "problem": "论证简略", "improved": "Reliable public transport can reduce urban congestion.", "problem_spans": ["Public transport", "traffic"]}] * 3,
         "paragraph_feedback": [{"paragraph": 1, "strength": "观点清楚", "limitation": "展开不足", "improvement": "增加因果解释"}],
         "band_75_rewrite": "Reliable public transport can reduce urban congestion.",
         "useful_expressions": [{
@@ -77,6 +77,17 @@ class ReportSchemaTests(unittest.TestCase):
         data["criteria"][0]["evidence"] = ["This quote was invented."]
         with self.assertRaises(ExaminerResultError):
             validate_examiner_result(data, ESSAY)
+
+    def test_problem_spans_keep_multiple_exact_substrings_and_drop_unsafe_values(self):
+        data = valid_result()
+        data["sentence_corrections"][0]["problem_spans"] = [
+            "Public transport", "traffic", "<script>", "traffic"
+        ]
+        result = validate_examiner_result(data, ESSAY)
+        self.assertEqual(
+            result["sentence_corrections"][0]["problem_spans"],
+            ["Public transport", "traffic"],
+        )
 
     def test_every_evidence_item_must_be_exact(self):
         data = valid_result()

@@ -9,6 +9,8 @@ from __future__ import annotations
 import base64
 import difflib
 import html
+import re
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -19,6 +21,98 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 CSS_PATH = BASE_DIR / "styles" / "essaypilot_alpine.css"
 HERO_WEBP_PATH = BASE_DIR / "assets" / "alpine" / "hero-mountain.webp"
 HERO_JPG_PATH = BASE_DIR / "assets" / "alpine" / "hero-mountain.jpg"
+
+
+@dataclass(frozen=True)
+class ParagraphChange:
+    before: str
+    after: str
+
+
+def split_draft_paragraphs(text: str) -> list[str]:
+    """Split CRLF, blank-line, and single-line drafts into stable paragraphs."""
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+    if not normalized:
+        return []
+    separator = r"\n[ \t]*\n+" if re.search(r"\n[ \t]*\n", normalized) else r"\n"
+    return [part.strip() for part in re.split(separator, normalized) if part.strip()]
+
+
+def align_draft_paragraphs(original: str, revised: str) -> list[ParagraphChange]:
+    """Align paragraphs before applying word-level diff inside each pair."""
+    before = split_draft_paragraphs(original)
+    after = split_draft_paragraphs(revised)
+    rows = len(before) + 1
+    cols = len(after) + 1
+    scores = [[0.0] * cols for _ in range(rows)]
+    moves = [[""] * cols for _ in range(rows)]
+    for i in range(1, rows):
+        scores[i][0], moves[i][0] = -float(i), "delete"
+    for j in range(1, cols):
+        scores[0][j], moves[0][j] = -float(j), "insert"
+    for i in range(1, rows):
+        for j in range(1, cols):
+            similarity = difflib.SequenceMatcher(None, before[i - 1], after[j - 1], autojunk=False).ratio()
+            choices = (
+                (scores[i - 1][j - 1] + (2 * similarity - 0.45), "pair"),
+                (scores[i - 1][j] - 1, "delete"),
+                (scores[i][j - 1] - 1, "insert"),
+            )
+            scores[i][j], moves[i][j] = max(choices, key=lambda item: item[0])
+    aligned: list[ParagraphChange] = []
+    i, j = len(before), len(after)
+    while i or j:
+        move = moves[i][j]
+        if move == "pair":
+            aligned.append(ParagraphChange(before[i - 1], after[j - 1]))
+            i -= 1
+            j -= 1
+        elif move == "delete":
+            aligned.append(ParagraphChange(before[i - 1], ""))
+            i -= 1
+        else:
+            aligned.append(ParagraphChange("", after[j - 1]))
+            j -= 1
+    return list(reversed(aligned))
+
+
+_DIFF_TOKEN = re.compile(r"\s+|[\w]+(?:['’-][\w]+)*|[^\w\s]", re.UNICODE)
+
+
+def word_diff_html(original: str, revised: str) -> tuple[str, int, int]:
+    """Return escaped inline diff plus non-whitespace added/deleted token counts."""
+    before = _DIFF_TOKEN.findall(original)
+    after = _DIFF_TOKEN.findall(revised)
+    matcher = difflib.SequenceMatcher(a=before, b=after, autojunk=False)
+    fragments: list[str] = []
+    added = deleted = 0
+    for opcode, i1, i2, j1, j2 in matcher.get_opcodes():
+        old_text = html.escape("".join(before[i1:i2]))
+        new_text = html.escape("".join(after[j1:j2]))
+        if opcode == "equal":
+            fragments.append(old_text)
+        else:
+            deleted += sum(not token.isspace() for token in before[i1:i2])
+            added += sum(not token.isspace() for token in after[j1:j2])
+            if old_text:
+                fragments.append(f"<del>{old_text}</del>")
+            if new_text:
+                fragments.append(f"<ins>{new_text}</ins>")
+    return "".join(fragments), added, deleted
+
+
+def paragraph_diff_html(original: str, revised: str) -> str:
+    cards: list[str] = []
+    for index, change in enumerate(align_draft_paragraphs(original, revised), start=1):
+        diff, added, deleted = word_diff_html(change.before, change.after)
+        revised_html = html.escape(change.after) if change.after else '<span class="ep-diff__empty">本段已删除</span>'
+        cards.append(
+            f'<article class="ep-paragraph-diff"><header>第 {index} 段'
+            f'<span>新增 {added} · 删除 {deleted}</span></header>'
+            f'<div class="ep-paragraph-diff__after">{revised_html}</div>'
+            f'<div class="ep-paragraph-diff__changes">{diff or "无变化"}</div></article>'
+        )
+    return '<section class="ep-paragraph-diffs">' + "".join(cards) + "</section>"
 
 
 @lru_cache(maxsize=4)
@@ -148,28 +242,14 @@ def render_scoring_loader() -> None:
 
 
 def render_text_diff(original: str, revised: str) -> None:
-    """Render a copyable word-level inline diff for two user-authored drafts."""
-    before = original.split()
-    after = revised.split()
-    matcher = difflib.SequenceMatcher(a=before, b=after, autojunk=False)
-    fragments: list[str] = []
-    for opcode, i1, i2, j1, j2 in matcher.get_opcodes():
-        old_text = html.escape(" ".join(before[i1:i2]))
-        new_text = html.escape(" ".join(after[j1:j2]))
-        if opcode == "equal":
-            fragments.append(old_text)
-        elif opcode == "delete":
-            fragments.append(f"<del>{old_text}</del>")
-        elif opcode == "insert":
-            fragments.append(f"<ins>{new_text}</ins>")
-        else:
-            fragments.append(f"<del>{old_text}</del><ins>{new_text}</ins>")
+    """Render the legacy full revision view, now aligned and split by paragraph."""
+    fragments = [word_diff_html(item.before, item.after)[0] for item in align_draft_paragraphs(original, revised)]
     st.markdown(
         """
         <section class="ep-diff" aria-label="第一稿与第二稿文本差异">
             <div class="ep-diff__legend"><span class="is-removed">删除</span><span class="is-added">新增</span></div>
             <div class="ep-diff__text">"""
-        + " ".join(fragments)
+        + "<br><br>".join(fragments)
         + "</div></section>",
         unsafe_allow_html=True,
     )
