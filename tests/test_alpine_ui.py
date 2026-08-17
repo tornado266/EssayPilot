@@ -77,6 +77,19 @@ class AlpineUiTests(unittest.TestCase):
         self.assertIn("left: 3.35rem", css)
         self.assertIn(".ep-global-site-entry strong span { display: none; }", css)
 
+    def test_trend_chart_uses_redundant_high_contrast_encoding(self):
+        project_root = Path(__file__).resolve().parents[1]
+        app_source = (project_root / "app.py").read_text(encoding="utf-8")
+
+        for color in ("#0B2545", "#00796B", "#C45100", "#A52464"):
+            self.assertIn(color, app_source)
+        self.assertIn("CHART_CRITERION_DOMAIN", app_source)
+        self.assertIn("ALPINE_CHART_DASHES", app_source)
+        self.assertIn("ALPINE_CHART_SHAPES", app_source)
+        self.assertEqual(app_source.count("strokeWidth=3.5"), 2)
+        self.assertEqual(app_source.count("labelLimit=180"), 2)
+        self.assertEqual(app_source.count("legend=None"), 4)
+
     def test_diff_is_real_and_escapes_user_text(self):
         captured = {}
 

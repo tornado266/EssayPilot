@@ -95,7 +95,10 @@ SCORE_DISPLAY_NAMES = {
     "Lexical Resource": "词汇资源（LR）",
     "Grammar Range & Accuracy": "语法多样性与准确性（GRA）",
 }
-ALPINE_CHART_COLORS = ["#0E3B5F", "#1769AA", "#4D8DBD", "#79AFCF"]
+CHART_CRITERION_DOMAIN = list(CRITERION_COMPACT_NAMES.values())
+ALPINE_CHART_COLORS = ["#0B2545", "#00796B", "#C45100", "#A52464"]
+ALPINE_CHART_DASHES = [[1, 0], [9, 4], [3, 3], [11, 3, 2, 3]]
+ALPINE_CHART_SHAPES = ["circle", "square", "diamond", "triangle-up"]
 SAMPLE_POPOVER_TITLE = "试用作文"
 SAMPLE_TOPIC = (
     "Some people believe university students should only study their main subjects, "
@@ -1554,7 +1557,7 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
             if isinstance(item, dict):
                 chart_rows.append({
                     "练习日期": created,
-                    "能力维度": CRITERION_DISPLAY_NAMES.get(str(item.get("criterion")), str(item.get("criterion"))),
+                    "能力维度": CRITERION_COMPACT_NAMES.get(str(item.get("criterion")), str(item.get("criterion"))),
                     "分数": item.get("score"),
                 })
         report_json = run.get("report_json") or {}
@@ -1563,18 +1566,40 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
     if chart_rows:
         chart = (
             alt.Chart(pd.DataFrame(chart_rows))
-            .mark_line(point=True)
+            .mark_line(
+                strokeWidth=3.5,
+                point=alt.OverlayMarkDef(filled=True, size=95, stroke="#FFFFFF", strokeWidth=1.5),
+            )
             .encode(
-                x=alt.X("练习日期:N", title="练习日期"),
+                x=alt.X("练习日期:N", title="练习日期", axis=alt.Axis(labelAngle=-35)),
                 y=alt.Y("分数:Q", scale=alt.Scale(domain=[3, 9]), title="分数"),
                 color=alt.Color(
                     "能力维度:N",
                     title="能力维度",
-                    scale=alt.Scale(range=ALPINE_CHART_COLORS),
+                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_COLORS),
+                    legend=alt.Legend(labelLimit=180),
+                ),
+                strokeDash=alt.StrokeDash(
+                    "能力维度:N",
+                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_DASHES),
+                    legend=None,
+                ),
+                shape=alt.Shape(
+                    "能力维度:N",
+                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_SHAPES),
+                    legend=None,
                 ),
                 tooltip=["练习日期", "能力维度", "分数"],
             )
             .properties(height=280)
+            .configure_axis(
+                labelColor="#31485A", titleColor="#172B3A", labelFontSize=13,
+                titleFontSize=14, gridColor="#CCD9E2", domainColor="#91A8B8",
+            )
+            .configure_legend(
+                labelColor="#263F52", titleColor="#172B3A", labelFontSize=14,
+                titleFontSize=15, symbolSize=170, padding=12,
+            )
         )
         st.altair_chart(chart, use_container_width=True)
 
@@ -2977,16 +3002,38 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
             date = str(run.get("created_at", ""))[:10]
             for criterion in run.get("criteria") or []:
                 if isinstance(criterion, dict):
-                    rows.append({"日期": date, "能力": CRITERION_DISPLAY_NAMES.get(str(criterion.get("criterion")), str(criterion.get("criterion"))), "分数": criterion.get("score")})
+                    rows.append({"日期": date, "能力": CRITERION_COMPACT_NAMES.get(str(criterion.get("criterion")), str(criterion.get("criterion"))), "分数": criterion.get("score")})
         st.altair_chart(
-            alt.Chart(pd.DataFrame(rows)).mark_line(point=True).encode(
-                x=alt.X("日期:N", title="练习日期"), y=alt.Y("分数:Q", scale=alt.Scale(domain=[3, 9])),
+            alt.Chart(pd.DataFrame(rows)).mark_line(
+                strokeWidth=3.5,
+                point=alt.OverlayMarkDef(filled=True, size=95, stroke="#FFFFFF", strokeWidth=1.5),
+            ).encode(
+                x=alt.X("日期:N", title="练习日期", axis=alt.Axis(labelAngle=-35)),
+                y=alt.Y("分数:Q", title="分数", scale=alt.Scale(domain=[3, 9])),
                 color=alt.Color(
                     "能力:N",
-                    scale=alt.Scale(range=ALPINE_CHART_COLORS),
+                    title="能力维度",
+                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_COLORS),
+                    legend=alt.Legend(labelLimit=180),
+                ),
+                strokeDash=alt.StrokeDash(
+                    "能力:N",
+                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_DASHES),
+                    legend=None,
+                ),
+                shape=alt.Shape(
+                    "能力:N",
+                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_SHAPES),
+                    legend=None,
                 ),
                 tooltip=["日期", "能力", "分数"],
-            ).properties(height=300),
+            ).properties(height=300).configure_axis(
+                labelColor="#31485A", titleColor="#172B3A", labelFontSize=13,
+                titleFontSize=14, gridColor="#CCD9E2", domainColor="#91A8B8",
+            ).configure_legend(
+                labelColor="#263F52", titleColor="#172B3A", labelFontSize=14,
+                titleFontSize=15, symbolSize=170, padding=12,
+            ),
             use_container_width=True,
         )
     default_section = "表达库" if growth_mode in {"expressions", "expressions-from-report", "practice"} else "批改记录"
