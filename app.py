@@ -2996,46 +2996,6 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
     metrics[1].metric("待复习错误", len([item for item in errors if item.get("status") != "mastered"]))
     metrics[2].metric("已完成表达练习", len(completed_expression_practice))
     metrics[3].metric("第二稿", len(revisions))
-    if runs:
-        rows: list[dict[str, object]] = []
-        for run in reversed(runs):
-            date = str(run.get("created_at", ""))[:10]
-            for criterion in run.get("criteria") or []:
-                if isinstance(criterion, dict):
-                    rows.append({"日期": date, "能力": CRITERION_COMPACT_NAMES.get(str(criterion.get("criterion")), str(criterion.get("criterion"))), "分数": criterion.get("score")})
-        st.altair_chart(
-            alt.Chart(pd.DataFrame(rows)).mark_line(
-                strokeWidth=3.5,
-                point=alt.OverlayMarkDef(filled=True, size=95, stroke="#FFFFFF", strokeWidth=1.5),
-            ).encode(
-                x=alt.X("日期:N", title="练习日期", axis=alt.Axis(labelAngle=-35)),
-                y=alt.Y("分数:Q", title="分数", scale=alt.Scale(domain=[3, 9])),
-                color=alt.Color(
-                    "能力:N",
-                    title="能力维度",
-                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_COLORS),
-                    legend=alt.Legend(labelLimit=180),
-                ),
-                strokeDash=alt.StrokeDash(
-                    "能力:N",
-                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_DASHES),
-                    legend=None,
-                ),
-                shape=alt.Shape(
-                    "能力:N",
-                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_SHAPES),
-                    legend=None,
-                ),
-                tooltip=["日期", "能力", "分数"],
-            ).properties(height=300).configure_axis(
-                labelColor="#31485A", titleColor="#172B3A", labelFontSize=13,
-                titleFontSize=14, gridColor="#CCD9E2", domainColor="#91A8B8",
-            ).configure_legend(
-                labelColor="#263F52", titleColor="#172B3A", labelFontSize=14,
-                titleFontSize=15, symbolSize=170, padding=12,
-            ),
-            use_container_width=True,
-        )
     default_section = "表达库" if growth_mode in {"expressions", "expressions-from-report", "practice"} else "批改记录"
     history_tab, error_tab, expression_tab, draft_tab, share_tab = st.tabs(
         ["批改记录", "错题本", "表达库", "二稿记录", "成果卡"],

@@ -86,9 +86,9 @@ class AlpineUiTests(unittest.TestCase):
         self.assertIn("CHART_CRITERION_DOMAIN", app_source)
         self.assertIn("ALPINE_CHART_DASHES", app_source)
         self.assertIn("ALPINE_CHART_SHAPES", app_source)
-        self.assertEqual(app_source.count("strokeWidth=3.5"), 2)
-        self.assertEqual(app_source.count("labelLimit=180"), 2)
-        self.assertEqual(app_source.count("legend=None"), 4)
+        self.assertEqual(app_source.count("strokeWidth=3.5"), 1)
+        self.assertEqual(app_source.count("labelLimit=180"), 1)
+        self.assertEqual(app_source.count("legend=None"), 2)
 
     def test_diff_is_real_and_escapes_user_text(self):
         captured = {}
