@@ -2888,15 +2888,35 @@ def render_correction_history(
         else:
             role_label = "普通批改"
         scores = _criterion_history_scores(run)
-        with st.container(border=True):
-            st.caption(f"{str(run.get('created_at') or '')[:16].replace('T', ' ')} · {role_label}")
-            st.markdown(f"**{question[:120]}{'…' if len(question) > 120 else ''}**")
-            st.write(
-                f"Overall {format_overall_band(run.get('overall_band'))}　"
-                f"TR {scores['TR']}　CC {scores['CC']}　LR {scores['LR']}　GRA {scores['GRA']}"
+        with st.container(border=True, key=f"correction_history_card_{run_id}"):
+            created_at = str(run.get("created_at") or "")[:16].replace("T", " ")
+            st.markdown(
+                '<div class="correction-history-meta">'
+                f'<span>{html.escape(created_at)}</span><strong>{html.escape(role_label)}</strong>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            question_summary = question[:120] + ("…" if len(question) > 120 else "")
+            st.markdown(
+                f'<div class="correction-history-question">{html.escape(question_summary)}</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div class="correction-history-scores">'
+                f'<strong>Overall {html.escape(format_overall_band(run.get("overall_band")))}</strong>'
+                f'<span>TR {html.escape(scores["TR"])}</span>'
+                f'<span>CC {html.escape(scores["CC"])}</span>'
+                f'<span>LR {html.escape(scores["LR"])}</span>'
+                f'<span>GRA {html.escape(scores["GRA"])}</span>'
+                "</div>",
+                unsafe_allow_html=True,
             )
             preview = " ".join(content.split())
-            st.caption(preview[:180] + ("…" if len(preview) > 180 else ""))
+            preview_text = preview[:180] + ("…" if len(preview) > 180 else "")
+            st.markdown(
+                f'<div class="correction-history-preview">{html.escape(preview_text)}</div>',
+                unsafe_allow_html=True,
+            )
             with st.expander("查看完整原文", expanded=False):
                 st.text(content)
             report_col, diff_col = st.columns(2)

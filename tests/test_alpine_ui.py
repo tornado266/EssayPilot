@@ -46,6 +46,23 @@ class AlpineUiTests(unittest.TestCase):
         self.assertIn("@media (max-width: 768px)", css)
         self.assertIn("margin: 0 0 0.75rem", css)
 
+    def test_correction_history_uses_high_contrast_semantic_styles(self):
+        project_root = Path(__file__).resolve().parents[1]
+        app_source = (project_root / "app.py").read_text(encoding="utf-8")
+        css = Path(CSS_PATH).read_text(encoding="utf-8")
+
+        for token in (
+            "correction_history_card_",
+            "correction-history-meta",
+            "correction-history-question",
+            "correction-history-scores",
+            "correction-history-preview",
+        ):
+            self.assertIn(token, app_source)
+            self.assertIn(token, css)
+        self.assertIn("background: #1769aa", css)
+        self.assertIn("color: #ffffff !important", css)
+
     def test_diff_is_real_and_escapes_user_text(self):
         captured = {}
 
