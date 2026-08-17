@@ -63,6 +63,20 @@ class AlpineUiTests(unittest.TestCase):
         self.assertIn("background: #1769aa", css)
         self.assertIn("color: #ffffff !important", css)
 
+    def test_official_site_entry_is_global_and_mobile_safe(self):
+        project_root = Path(__file__).resolve().parents[1]
+        app_source = (project_root / "app.py").read_text(encoding="utf-8")
+        alpine_source = (project_root / "ui" / "alpine.py").read_text(encoding="utf-8")
+        css = Path(CSS_PATH).read_text(encoding="utf-8")
+
+        self.assertIn('class="ep-global-site-entry"', alpine_source)
+        self.assertIn('href="https://essaypilot.cn/"', alpine_source)
+        self.assertIn("内含新手教程", alpine_source)
+        self.assertNotIn('class="ep-site-entry"', app_source)
+        self.assertIn("right: 22rem", css)
+        self.assertIn("left: 3.35rem", css)
+        self.assertIn(".ep-global-site-entry strong span { display: none; }", css)
+
     def test_diff_is_real_and_escapes_user_text(self):
         captured = {}
 

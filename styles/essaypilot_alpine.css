@@ -43,6 +43,50 @@ body,
   backdrop-filter: blur(10px);
 }
 
+.ep-global-site-entry {
+  position: fixed;
+  z-index: 1000001;
+  top: 0.34rem;
+  right: 22rem;
+  display: inline-flex;
+  min-height: 2.35rem;
+  align-items: center;
+  gap: 0.62rem;
+  box-sizing: border-box;
+  padding: 0.34rem 0.72rem;
+  border: 1px solid #9abbd3;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #10578f !important;
+  box-shadow: 0 3px 12px rgba(14, 59, 95, 0.1);
+  line-height: 1.05;
+  text-decoration: none !important;
+  backdrop-filter: blur(10px);
+}
+
+.ep-global-site-entry strong {
+  color: #10578f !important;
+  font-size: 0.82rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.ep-global-site-entry small {
+  padding-left: 0.62rem;
+  border-left: 1px solid #c4d5e1;
+  color: #4a6274;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ep-global-site-entry:hover {
+  border-color: var(--ep-primary);
+  background: #ffffff;
+  color: var(--ep-primary-hover) !important;
+  box-shadow: 0 5px 16px rgba(14, 59, 95, 0.14);
+}
+
 .block-container {
   width: min(100%, var(--ep-content-width));
   max-width: var(--ep-content-width);
@@ -926,22 +970,6 @@ div[class*="st-key-correction_history_card_"] [data-testid="stVerticalBlockBorde
 .ep-paragraph-diff__changes ins { background: rgba(36, 122, 114, 0.17); color: #155e57; text-decoration: none; }
 .ep-diff__empty { color: var(--ep-text-muted); font-style: italic; }
 
-.ep-site-entry {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.7rem;
-  max-width: 100%;
-  margin: 0 0 1rem;
-  padding: 0.58rem 0.85rem;
-  border: 1px solid rgba(23, 105, 170, 0.22);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  color: var(--ep-primary-hover) !important;
-  text-decoration: none !important;
-}
-
-.ep-site-entry small { color: var(--ep-text-muted); }
-
 .ep-diff del {
   background: rgba(200, 76, 85, 0.16);
   color: #8f3038;
@@ -1288,7 +1316,18 @@ div[class*="st-key-correction_history_card_"] [data-testid="stVerticalBlockBorde
     align-items: flex-start;
   }
 
-  .ep-site-entry { display: flex; width: 100%; box-sizing: border-box; justify-content: space-between; }
+  .ep-global-site-entry {
+    top: 0.38rem;
+    right: auto;
+    left: 3.35rem;
+    min-height: 2.2rem;
+    gap: 0.4rem;
+    padding: 0.3rem 0.58rem;
+    border-radius: 10px;
+  }
+
+  .ep-global-site-entry strong span { display: none; }
+  .ep-global-site-entry small { padding-left: 0.4rem; font-size: 0.62rem; }
   .dictionary-card { margin-left: 0; }
 
   div.stButton > button,

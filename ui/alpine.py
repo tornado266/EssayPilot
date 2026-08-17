@@ -124,8 +124,17 @@ def _image_data_uri(path_string: str) -> str:
 
 
 def inject_alpine_theme() -> None:
-    """Load the local Alpine stylesheet once per Streamlit script run."""
+    """Load the Alpine theme and persistent official-site entry."""
     st.html(CSS_PATH)
+    st.html(
+        """
+        <a class="ep-global-site-entry" href="https://essaypilot.cn/" target="_blank"
+           rel="noopener noreferrer" aria-label="访问 EssayPilot 官网，内含新手教程">
+            <strong><span>访问 EssayPilot </span>官网</strong>
+            <small>内含新手教程</small>
+        </a>
+        """
+    )
 
 
 def render_hero(*, variant: str = "home") -> None:

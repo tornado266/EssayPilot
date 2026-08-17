@@ -2488,11 +2488,6 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
     if user is None:
         st.markdown('<div class="section-kicker">专项训练</div>', unsafe_allow_html=True)
         st.title("登录后继续完成修改与第二稿")
-        st.markdown(
-            '<a class="ep-site-entry" href="https://essaypilot.cn/" target="_blank" '
-            'rel="noopener noreferrer"><strong>访问 EssayPilot 官网</strong><small>内含新手教程</small></a>',
-            unsafe_allow_html=True,
-        )
         st.info("游客批改报告仍保留在当前会话中。登录后会自动保存，不会重新评分。")
         mode = str(st.query_params.get("mode", "practice") or "practice")
         label = "登录并开始第二稿训练" if mode == "draft" else "登录并开始专项训练"
@@ -2511,11 +2506,6 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
         return
     st.markdown('<div class="section-kicker">专项训练</div>', unsafe_allow_html=True)
     st.title("把本轮问题真正练会")
-    st.markdown(
-        '<a class="ep-site-entry" href="https://essaypilot.cn/" target="_blank" '
-        'rel="noopener noreferrer"><strong>访问 EssayPilot 官网</strong><small>内含新手教程</small></a>',
-        unsafe_allow_html=True,
-    )
     render_training_stepper(active=3)
     run_id = str(st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
     if user is not None:
