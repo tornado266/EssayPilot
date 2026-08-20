@@ -54,7 +54,7 @@ def infer_category(text: str) -> str:
     value = text.casefold()
     rules = (
         ("grammar", r"语法|时态|主谓|从句|冠词|单复数|grammar|tense|clause|article"),
-        ("vocabulary", r"词汇|搭配|用词|重复|lexical|vocab|collocation|word choice"),
+        ("vocabulary", r"词汇|搭配|用词|重复|拼写|表达不自然|lexical|vocab|collocation|word choice|wording|spelling"),
         ("coherence", r"逻辑|衔接|段落|主题句|连贯|coherence|cohesion|logic|paragraph"),
         ("task_response", r"任务|回应|论证|观点|例子|展开|task response|position|develop"),
     )

@@ -10,13 +10,13 @@ from copy import deepcopy
 from typing import Any
 
 
-SCHEMA_VERSION = "2.7"
+SCHEMA_VERSION = "2.9"
 SCORING_PROMPT_VERSION = "task2-score-zh-official-claimed-audit-v10-2026-08-11"
-FEEDBACK_PROMPT_VERSION = "task2-feedback-precise-spans-v4-2026-08-16"
+FEEDBACK_PROMPT_VERSION = "task2-feedback-vocabulary-panel-v6-2026-08-20"
 REPORT_PROMPT_VERSION = f"{SCORING_PROMPT_VERSION}+{FEEDBACK_PROMPT_VERSION}"
 PROMPT_VERSION = SCORING_PROMPT_VERSION  # score-only compatibility API
 SCORING_SKILL_VERSION = "ielts-writing-task2-official-v4"
-FEEDBACK_SKILL_VERSION = "ielts-writing-feedback-closed-loop-v2"
+FEEDBACK_SKILL_VERSION = "ielts-writing-feedback-closed-loop-v4"
 SKILL_VERSION = SCORING_SKILL_VERSION  # score-only compatibility API
 PRACTICE_BAND_INTERVAL_VERSION = "practice_band_interval_v1"
 OVERALL_CALIBRATION_VERSION = "practice_overall_offset_v1"
@@ -76,6 +76,7 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             "priorities",
             "problems",
             "sentence_corrections",
+            "vocabulary_recommendations",
             "paragraph_feedback",
             "band_75_rewrite",
             "useful_expressions",
@@ -120,8 +121,13 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["original", "problem", "improved", "problem_spans"],
+                    "required": [
+                        "criterion", "issue_type", "original", "problem", "improved",
+                        "problem_spans", "learning_replacements",
+                    ],
                     "properties": {
+                        "criterion": {"type": "string", "enum": list(COACHING_CRITERIA)},
+                        "issue_type": {"type": "string", "minLength": 1, "maxLength": 60},
                         "original": {"type": "string", "minLength": 1, "maxLength": 240},
                         "problem": {"type": "string"},
                         "improved": {"type": "string"},
@@ -130,8 +136,19 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
                             "maxItems": 6,
                             "items": {"type": "string", "minLength": 1, "maxLength": 120},
                         },
+                        "learning_replacements": {
+                            "type": "array",
+                            "maxItems": 2,
+                            "items": {"$ref": "#/$defs/learning_replacement"},
+                        },
                     },
                 },
+            },
+            "vocabulary_recommendations": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 6,
+                "items": {"$ref": "#/$defs/vocabulary_recommendation"},
             },
             "paragraph_feedback": {
                 "type": "array",
@@ -216,6 +233,59 @@ EXAMINER_JSON_SCHEMA: dict[str, Any] = {
             "error_tags": {"type": "array", "items": {"type": "string"}},
         },
         "$defs": {
+            "vocabulary_recommendation": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "kind", "source", "target", "headword", "part_of_speech", "register",
+                    "meaning_zh", "simple_definition", "pattern", "collocations",
+                    "source_sentence", "reason_zh", "example_en", "example_zh",
+                ],
+                "properties": {
+                    "kind": {"type": "string", "enum": ["recommended", "upgrade"]},
+                    "source": {"type": "string", "minLength": 1, "maxLength": 100},
+                    "target": {"type": "string", "minLength": 1, "maxLength": 100},
+                    "headword": {"type": "string", "minLength": 1, "maxLength": 60},
+                    "part_of_speech": {"type": "string", "minLength": 1, "maxLength": 40},
+                    "register": {
+                        "type": "string",
+                        "enum": ["neutral", "formal", "academic", "informal", "technical"],
+                    },
+                    "meaning_zh": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "simple_definition": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "pattern": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "collocations": {
+                        "type": "array", "minItems": 1, "maxItems": 4,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 100},
+                    },
+                    "source_sentence": {"type": "string", "minLength": 1, "maxLength": 300},
+                    "reason_zh": {"type": "string", "minLength": 1, "maxLength": 280},
+                    "example_en": {"type": "string", "minLength": 1, "maxLength": 300},
+                    "example_zh": {"type": "string", "minLength": 1, "maxLength": 300},
+                },
+            },
+            "learning_replacement": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "source", "target", "headword", "part_of_speech", "meaning_zh",
+                    "simple_definition", "pattern", "collocations", "usage_note_zh",
+                ],
+                "properties": {
+                    "source": {"type": "string", "minLength": 1, "maxLength": 100},
+                    "target": {"type": "string", "minLength": 1, "maxLength": 100},
+                    "headword": {"type": "string", "minLength": 1, "maxLength": 60},
+                    "part_of_speech": {"type": "string", "minLength": 1, "maxLength": 40},
+                    "meaning_zh": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "simple_definition": {"type": "string", "minLength": 1, "maxLength": 240},
+                    "pattern": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "collocations": {
+                        "type": "array", "minItems": 1, "maxItems": 3,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 100},
+                    },
+                    "usage_note_zh": {"type": "string", "minLength": 1, "maxLength": 280},
+                },
+            },
             "coaching_item": {
                 "type": "object",
                 "additionalProperties": False,
@@ -354,6 +424,64 @@ def _exact_quote_is_present(quote: str, essay: str) -> bool:
     """Require the complete normalized quotation, not merely one matching fragment."""
     clean_quote = _normalize_evidence_text(quote)
     return len(clean_quote) >= 3 and clean_quote in _normalize_evidence_text(essay)
+
+
+def _learning_replacement_is_valid(
+    replacement: object, original: str, improved: str
+) -> bool:
+    """Validate an optional source-to-target learning item against its correction."""
+    if not isinstance(replacement, dict):
+        return False
+    source = str(replacement.get("source") or "")
+    target = str(replacement.get("target") or "")
+    headword = _normalize_evidence_text(str(replacement.get("headword") or ""))
+    collocations = replacement.get("collocations")
+    required_text = (
+        "part_of_speech", "meaning_zh", "simple_definition", "pattern", "usage_note_zh",
+    )
+    return (
+        _exact_quote_is_present(source, original)
+        and _exact_quote_is_present(target, improved)
+        and len(headword) >= 2
+        and headword in _normalize_evidence_text(target)
+        and all(str(replacement.get(field) or "").strip() for field in required_text)
+        and isinstance(collocations, list)
+        and 1 <= len(collocations) <= 3
+        and all(str(value).strip() for value in collocations)
+    )
+
+
+def _vocabulary_recommendation_is_valid(item: object, essay: str) -> bool:
+    """Validate a whole-essay vocabulary item and its learner-dictionary links."""
+    if not isinstance(item, dict):
+        return False
+    kind = str(item.get("kind") or "")
+    source = str(item.get("source") or "")
+    target = str(item.get("target") or "")
+    source_sentence = str(item.get("source_sentence") or "")
+    example_en = str(item.get("example_en") or "")
+    headword = _normalize_evidence_text(str(item.get("headword") or ""))
+    normal_source = _normalize_evidence_text(source)
+    normal_target = _normalize_evidence_text(target)
+    collocations = item.get("collocations")
+    required_text = (
+        "part_of_speech", "register", "meaning_zh", "simple_definition", "pattern",
+        "reason_zh", "example_zh",
+    )
+    return (
+        kind in {"recommended", "upgrade"}
+        and _exact_quote_is_present(source_sentence, essay)
+        and _exact_quote_is_present(source, source_sentence)
+        and len(normal_target) >= 2
+        and len(headword) >= 2
+        and _exact_quote_is_present(target, example_en)
+        and (kind != "recommended" or normal_source == normal_target)
+        and (kind != "upgrade" or normal_source != normal_target)
+        and all(str(item.get(field) or "").strip() for field in required_text)
+        and isinstance(collocations, list)
+        and 1 <= len(collocations) <= 4
+        and all(str(value).strip() for value in collocations)
+    )
 
 
 def validate_scoring_decision(data: dict[str, Any], essay: str) -> dict[str, Any]:
@@ -581,6 +709,7 @@ def feedback_quality_flags(
             ("priorities", "evidence"), ("problems", "evidence"),
             ("sentence_corrections", "original"), ("sentence_training", "original"),
             ("logic_training", "original"),
+            ("vocabulary_recommendations", "source_sentence"),
         )
         for item in data.get(collection, [])
         if isinstance(item, dict)
@@ -655,6 +784,30 @@ def drop_unverified_optional_teaching_items(
         if len(kept) != len(items):
             removed.append(collection)
             normalized[collection] = kept
+    for correction in normalized.get("sentence_corrections", []):
+        if not isinstance(correction, dict):
+            continue
+        replacements = correction.get("learning_replacements")
+        if not isinstance(replacements, list):
+            continue
+        original = str(correction.get("original") or "")
+        improved = str(correction.get("improved") or "")
+        kept_replacements = [
+            item for item in replacements
+            if _learning_replacement_is_valid(item, original, improved)
+        ]
+        if len(kept_replacements) != len(replacements):
+            removed.append("sentence_corrections.learning_replacements")
+            correction["learning_replacements"] = kept_replacements
+    vocabulary_items = normalized.get("vocabulary_recommendations")
+    if isinstance(vocabulary_items, list):
+        kept_vocabulary = [
+            item for item in vocabulary_items
+            if _vocabulary_recommendation_is_valid(item, essay)
+        ]
+        if len(kept_vocabulary) != len(vocabulary_items):
+            removed.append("vocabulary_recommendations")
+            normalized["vocabulary_recommendations"] = kept_vocabulary
     return normalized, removed
 
 
@@ -670,6 +823,14 @@ def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]
     expressions = data.get("useful_expressions")
     if not isinstance(expressions, list) or not 6 <= len(expressions) <= 8:
         raise ExaminerResultError("The examiner must return 6-8 useful expressions.")
+    vocabulary_items = data.get("vocabulary_recommendations")
+    if not isinstance(vocabulary_items, list):
+        raise ExaminerResultError("The vocabulary_recommendations field must be a list.")
+    if not all(_vocabulary_recommendation_is_valid(item, essay) for item in vocabulary_items):
+        raise ExaminerResultError(
+            "Every vocabulary recommendation must link exact essay evidence to a complete "
+            "learner-dictionary entry and bilingual example."
+        )
     criteria = data.get("criteria")
     if not isinstance(criteria, list):
         raise ExaminerResultError("The examiner response is missing criterion scores.")
@@ -705,9 +866,31 @@ def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]
                 raise ExaminerResultError(f"A {collection} item has no concrete action.")
             if not str(coaching_item.get("success_check", "")).strip():
                 raise ExaminerResultError(f"A {collection} item has no success check.")
-    for correction in data.get("sentence_corrections", []):
+    corrections = data.get("sentence_corrections")
+    if not isinstance(corrections, list):
+        raise ExaminerResultError("The sentence_corrections field must be a list.")
+    for correction in corrections:
+        if not isinstance(correction, dict):
+            raise ExaminerResultError("A sentence correction is not an object.")
         if not _exact_quote_is_present(str(correction.get("original", "")), essay):
             raise ExaminerResultError("A sentence correction does not quote the submitted essay.")
+        if correction.get("criterion") not in COACHING_CRITERIA:
+            raise ExaminerResultError("A sentence correction has an invalid criterion.")
+        if not str(correction.get("issue_type") or "").strip():
+            raise ExaminerResultError("A sentence correction has no issue type.")
+        replacements = correction.get("learning_replacements")
+        if not isinstance(replacements, list):
+            raise ExaminerResultError("A sentence correction has no learning replacement list.")
+        original = str(correction.get("original") or "")
+        improved = str(correction.get("improved") or "")
+        if not all(
+            _learning_replacement_is_valid(item, original, improved)
+            for item in replacements
+        ):
+            raise ExaminerResultError(
+                "Every learning replacement must link exact source and target text and include "
+                "a complete learner-dictionary explanation."
+            )
     for task in data.get("sentence_training", []):
         if not _exact_quote_is_present(str(task.get("original", "")), essay):
             raise ExaminerResultError("A sentence training task does not quote the submitted essay.")

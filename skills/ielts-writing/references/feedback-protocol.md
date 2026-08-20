@@ -26,6 +26,17 @@ This reference governs teaching feedback only. It cannot change a locked score.
 - Do not turn a preferred template, linker count, vocabulary count, paragraph count, or named construction into an IELTS requirement.
 - Training must return to the learner's original text; model rewrites and reusable expressions remain optional support.
 
+## Problem map and replacement learning
+
+- Label every sentence-level correction with one IELTS criterion (`TR`, `CC`, `LR`, or `GRA`) and one concise issue subtype. These labels organise the learner's problem map; they do not change the locked score.
+- Keep the chain auditable: criterion → issue subtype → exact original sentence → exact problem span → improved sentence.
+- When a correction directly replaces a reusable word or phrase, connect that map node to the exact source and target strings. Explain the target with a learner-dictionary structure: part of speech, concise Chinese meaning, a simple original English definition, a reusable pattern, common collocations, and the contextual difference from the source.
+- Do not manufacture a lexical item for punctuation, spelling-only fixes, articles by themselves, or bare inflection and agreement repairs. If there is no reliable source-to-target lexical upgrade, return no replacement item for that correction.
+- Learner-dictionary explanations must be newly written for the submitted context. Do not reproduce or claim to reproduce branded dictionary wording.
+- Add a separate whole-essay vocabulary panel below the original-text map. It must not depend on whether a sentence was corrected: include both precise reusable language already used well and exact ordinary/vague source language that has a natural upgrade.
+- Link every panel item to one exact source sentence and exact source word or phrase from the essay. Present one contextual learner-dictionary sense with part of speech, register, Chinese meaning, simple original English definition, pattern, collocations, selection/upgrade reason, and a newly written bilingual example.
+- Prefer natural, transferable academic vocabulary over ornamental or unnecessarily rare synonyms. Vocabulary recommendations are teaching assets and must not alter or retroactively justify the locked LR score.
+
 ## Provenance
 
 These rules abstract patterns consistent with official descriptors and verified official feedback. Repeated patterns from low-confidence examiner-claimed learner data may strengthen coverage only when they do not conflict with official material. No corpus essay, score, comment, filename, case ID, or recognizable phrase may be embedded as a teaching anchor.

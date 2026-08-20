@@ -6,6 +6,7 @@ from src.report_schema import (
     OVERALL_CALIBRATION_VERSION,
     calculate_descriptor_overall,
     calculate_overall,
+    drop_unverified_optional_teaching_items,
     estimated_band_range,
     feedback_quality_flags,
     format_overall_band,
@@ -15,6 +16,7 @@ from src.report_schema import (
     validate_scoring_decision,
 )
 from src.chinese_report import examiner_result_to_markdown
+from src.issue_map import learning_replacements
 
 
 ESSAY = "Public transport reduces traffic. Governments should improve bus services."
@@ -40,7 +42,59 @@ def valid_result():
             {"title": "补足逻辑", "evidence": "Public transport reduces traffic.", "why": "关系没有解释。", "action": "补充中间推理。", "criterion": "CC", "action_type": "support", "success_check": "读者能顺着原因理解结论。"},
         ],
         "problems": [{"title": "支撑不足", "evidence": "Public transport reduces traffic.", "why": "观点没有继续展开。", "action": "补充一个例子。", "criterion": "TR", "action_type": "support", "success_check": "例子能直接证明观点。"}] * 2,
-        "sentence_corrections": [{"original": "Public transport reduces traffic.", "problem": "论证简略", "improved": "Reliable public transport can reduce urban congestion.", "problem_spans": ["Public transport", "traffic"]}] * 3,
+        "sentence_corrections": [{
+            "criterion": "LR",
+            "issue_type": "用词不准确",
+            "original": "Public transport reduces traffic.",
+            "problem": "论证简略",
+            "improved": "Reliable public transport can reduce urban congestion.",
+            "problem_spans": ["Public transport", "traffic"],
+            "learning_replacements": [{
+                "source": "traffic",
+                "target": "urban congestion",
+                "headword": "congestion",
+                "part_of_speech": "noun",
+                "meaning_zh": "城市拥堵",
+                "simple_definition": "a situation in which roads are too crowded",
+                "pattern": "reduce + urban congestion",
+                "collocations": ["urban congestion", "severe congestion"],
+                "usage_note_zh": "congestion 比 traffic 更准确地表示道路拥堵状态。",
+            }],
+        }] * 3,
+        "vocabulary_recommendations": [
+            {
+                "kind": "recommended",
+                "source": "Public transport",
+                "target": "Public transport",
+                "headword": "transport",
+                "part_of_speech": "noun",
+                "register": "neutral",
+                "meaning_zh": "公共交通",
+                "simple_definition": "a system of buses, trains, and other shared travel",
+                "pattern": "public transport + verb",
+                "collocations": ["reliable public transport", "public transport system"],
+                "source_sentence": "Public transport reduces traffic.",
+                "reason_zh": "这是交通类话题中准确且可复用的核心表达。",
+                "example_en": "Public transport can reduce pressure on city roads.",
+                "example_zh": "公共交通可以减轻城市道路压力。",
+            },
+            {
+                "kind": "upgrade",
+                "source": "traffic",
+                "target": "urban congestion",
+                "headword": "congestion",
+                "part_of_speech": "noun",
+                "register": "formal",
+                "meaning_zh": "城市拥堵",
+                "simple_definition": "a situation in which city roads are too crowded",
+                "pattern": "reduce + urban congestion",
+                "collocations": ["severe congestion", "ease urban congestion"],
+                "source_sentence": "Public transport reduces traffic.",
+                "reason_zh": "urban congestion 比 traffic 更准确地表达道路拥堵状态。",
+                "example_en": "Better rail services can reduce urban congestion.",
+                "example_zh": "更好的铁路服务可以缓解城市拥堵。",
+            },
+        ] * 2,
         "paragraph_feedback": [{"paragraph": 1, "strength": "观点清楚", "limitation": "展开不足", "improvement": "增加因果解释"}],
         "band_75_rewrite": "Reliable public transport can reduce urban congestion.",
         "useful_expressions": [{
@@ -88,6 +142,27 @@ class ReportSchemaTests(unittest.TestCase):
             result["sentence_corrections"][0]["problem_spans"],
             ["Public transport", "traffic"],
         )
+
+    def test_learning_replacement_must_link_exact_source_and_target(self):
+        data = valid_result()
+        data["sentence_corrections"][0]["learning_replacements"][0]["target"] = "invented phrase"
+        with self.assertRaises(ExaminerResultError):
+            validate_examiner_result(data, ESSAY)
+
+    def test_sanitized_invalid_replacement_is_not_revived_by_the_issue_map(self):
+        data = valid_result()
+        data["sentence_corrections"][0]["learning_replacements"][0]["target"] = "invented phrase"
+        cleaned, removed = drop_unverified_optional_teaching_items(data, ESSAY)
+        correction = cleaned["sentence_corrections"][0]
+        self.assertIn("sentence_corrections.learning_replacements", removed)
+        self.assertEqual(correction["learning_replacements"], [])
+        self.assertEqual(learning_replacements(correction), [])
+
+    def test_vocabulary_recommendation_must_link_source_and_bilingual_example(self):
+        data = valid_result()
+        data["vocabulary_recommendations"][0]["source"] = "invented source"
+        with self.assertRaises(ExaminerResultError):
+            validate_examiner_result(data, ESSAY)
 
     def test_every_evidence_item_must_be_exact(self):
         data = valid_result()

@@ -37,15 +37,23 @@ from src.learning_assets import (
     EXPRESSION_VIEW_REPORT,
     build_learning_items,
     catalog_learning_item,
-    criterion_for_problem,
-    infer_category,
     expression_status_label,
     report_expression_items,
     resolve_expression_view,
 )
+from src.issue_map import (
+    CRITERION_LABELS as ISSUE_MAP_CRITERION_LABELS,
+    build_issue_map_html,
+    correction_issue_type,
+    grouped_corrections,
+    learning_replacements,
+    map_essay_issues,
+    report_essay_from_state,
+)
 from src.expression_catalog import FUNCTION_LABELS, TOPIC_LABELS, load_expression_catalog
 from src.share_card import build_result_card_svg
-from src.problem_spans import contextual_collocation, highlight_problem_text, lexical_replacement
+from src.problem_spans import contextual_collocation, highlight_problem_text
+from src.vocabulary_cards import build_vocabulary_cards_html, report_vocabulary_items
 from src.storage import markdown_to_pdf, save_markdown_record
 from src.report_schema import (
     ExaminerResultError,
@@ -1956,8 +1964,10 @@ def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> Non
         st.divider()
         st.caption(f"固定评分模型 · {PRODUCTION_MODEL}")
         st.markdown(
-            '<small>词典释义：<a href="https://github.com/globalwordnet/english-wordnet" '
-            'target="_blank" rel="noopener noreferrer">Open English WordNet 2025</a> · CC BY 4.0</small>',
+            '<small>学习词典卡：EssayPilot 按作文语境整理；旧报告可由 '
+            '<a href="https://github.com/globalwordnet/english-wordnet" '
+            'target="_blank" rel="noopener noreferrer">Open English WordNet 2025</a> · '
+            'CC BY 4.0 补充（非朗文原文）</small>',
             unsafe_allow_html=True,
         )
         if user is not None:
@@ -2296,26 +2306,6 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                         st.code(f"{type(exc).__name__}: {exc}", language="text")
 
 
-def _essay_with_issue_marks(essay: str, corrections: list[dict[str, object]]) -> str:
-    spans: list[tuple[int, int, int, dict[str, object]]] = []
-    for index, item in enumerate(corrections, start=1):
-        original = str(item.get("original") or "").strip()
-        if not original:
-            continue
-        match = re.search(re.escape(original), essay, flags=re.IGNORECASE)
-        if match and not any(match.start() < end and match.end() > start for start, end, _, _item in spans):
-            spans.append((match.start(), match.end(), index, item))
-    spans.sort(key=lambda value: value[0])
-    parts: list[str] = []
-    cursor = 0
-    for start, end, index, item in spans:
-        parts.append(html.escape(essay[cursor:start]))
-        parts.append(f'<mark class="issue-mark">{highlight_problem_text(item)}<sup>{index}</sup></mark>')
-        cursor = end
-    parts.append(html.escape(essay[cursor:]))
-    return "".join(parts).replace("\n", "<br>")
-
-
 def render_correction_original(correction: dict[str, object]) -> None:
     st.markdown(
         f'<div class="correction-original">{highlight_problem_text(correction)}</div>',
@@ -2325,30 +2315,73 @@ def render_correction_original(correction: dict[str, object]) -> None:
 
 def render_dictionary_card(
     correction: dict[str, object], provider: DictionaryProvider | None = None
-) -> None:
-    """Render OEWN enrichment only for a local LR word replacement."""
-    if infer_category(str(correction.get("problem") or "")) != "vocabulary":
-        return
-    replacement = lexical_replacement(correction)
-    if not replacement:
-        return
+) -> bool:
+    """Render replacement words as learner-dictionary cards linked to one map node."""
+    replacements = learning_replacements(correction)
+    if not replacements:
+        return False
     provider = provider or get_default_dictionary_provider()
-    entry = provider.lookup(replacement)
-    if entry is None:
-        return
     improved = str(correction.get("improved") or "")
-    collocation = contextual_collocation(improved, replacement)
-    explanation = str(correction.get("problem") or "")
-    st.markdown(
-        '<aside class="dictionary-card">'
-        '<div class="dictionary-card__source">Open English WordNet 2025 · CC BY 4.0</div>'
-        f'<h4>{html.escape(entry.term)} <span>{html.escape(entry.part_of_speech)}</span></h4>'
-        f'<p><strong>英文释义：</strong>{html.escape(entry.definition)}</p>'
-        f'<p><strong>语境例句：</strong>{html.escape(improved)}</p>'
-        + (f'<p><strong>常见搭配：</strong>{html.escape(collocation)}</p>' if collocation else '')
-        + f'<p><strong>为什么更合适：</strong>{html.escape(explanation)}</p></aside>',
-        unsafe_allow_html=True,
-    )
+    for replacement in replacements:
+        target = str(replacement.get("target") or "").strip()
+        headword = str(replacement.get("headword") or target).strip()
+        source = str(replacement.get("source") or "原表达").strip()
+        definition = str(replacement.get("simple_definition") or "").strip()
+        part_of_speech = str(replacement.get("part_of_speech") or "").strip()
+        legacy = bool(replacement.get("legacy"))
+        entry = None
+        if not definition or not part_of_speech:
+            entry = provider.lookup(headword or target)
+        if entry is not None:
+            definition = definition or entry.definition
+            part_of_speech = part_of_speech or entry.part_of_speech
+        meaning = str(replacement.get("meaning_zh") or "").strip()
+        pattern = str(replacement.get("pattern") or "").strip()
+        raw_collocations = replacement.get("collocations")
+        collocations = [
+            str(value).strip() for value in raw_collocations or [] if str(value).strip()
+        ] if isinstance(raw_collocations, list) else []
+        if not collocations:
+            contextual = contextual_collocation(improved, target)
+            collocations = [contextual] if contextual else []
+        usage_note = str(
+            replacement.get("usage_note_zh") or correction.get("problem") or ""
+        ).strip()
+        if legacy and entry is not None:
+            source_note = "Open English WordNet 2025 · CC BY 4.0 · 旧报告语境补充"
+        elif legacy:
+            source_note = "旧报告替换路径 · 重新生成报告可获得完整学习词典讲解"
+        else:
+            source_note = "学习词典式讲解 · EssayPilot 按本句语境整理（非朗文原文）"
+        fields = [
+            f'<div class="dictionary-card__route"><span>{html.escape(source)}</span>'
+            f'<b>→</b><strong>{html.escape(target)}</strong></div>',
+            f'<h4>{html.escape(headword or target)}'
+            + (f' <span>{html.escape(part_of_speech)}</span>' if part_of_speech else '')
+            + '</h4>',
+        ]
+        if meaning:
+            fields.append(f'<p><strong>本句义：</strong>{html.escape(meaning)}</p>')
+        if definition:
+            fields.append(f'<p><strong>简明英文释义：</strong>{html.escape(definition)}</p>')
+        if pattern:
+            fields.append(f'<p><strong>搭配 / 句型：</strong><code>{html.escape(pattern)}</code></p>')
+        if collocations:
+            fields.append(
+                f'<p><strong>常用搭配：</strong>{html.escape(" · ".join(collocations))}</p>'
+            )
+        if usage_note:
+            fields.append(f'<p><strong>用法区别：</strong>{html.escape(usage_note)}</p>')
+        if improved:
+            fields.append(f'<p><strong>本文例句：</strong>{html.escape(improved)}</p>')
+        st.markdown(
+            '<aside class="dictionary-card">'
+            f'<div class="dictionary-card__source">{html.escape(source_note)}</div>'
+            + "".join(fields)
+            + '</aside>',
+            unsafe_allow_html=True,
+        )
+    return True
 
 
 def queue_correction_for_training(
@@ -2421,43 +2454,133 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                     st.success(str(item.get("action", "")))
                     if item.get("success_check"):
                         st.caption(f"完成检查：{item['success_check']}")
-    corrections = [item for item in structured.get("sentence_corrections", []) if isinstance(item, dict)]
-    essay = str(st.session_state.get("essay_input") or "")
+    raw_corrections = structured.get("sentence_corrections")
+    corrections = (
+        [item for item in raw_corrections if isinstance(item, dict)]
+        if isinstance(raw_corrections, list) else []
+    )
+    essay = report_essay_from_state(st.session_state)
+    vocabulary_items = report_vocabulary_items(structured, essay)
     overview_tab, correction_tab, full_tab = st.tabs(["重点诊断", "原文问题地图", "完整报告与下载"])
     with overview_tab:
         render_problem_cards(report)
         render_suggestion_cards(report)
     with correction_tab:
-        st.caption("原文中的编号与下方修改卡一一对应。整理和跳转不会调用模型。")
+        st.caption("先看问题路径，再回到原文定位；地图和词典卡展开都不会额外调用模型。")
+        if corrections:
+            st.markdown("### 这篇文章的问题路径")
+            st.markdown(build_issue_map_html(corrections), unsafe_allow_html=True)
+        else:
+            st.info("本篇没有可精确定位的句子级问题，可继续查看重点诊断或进入逻辑训练。")
+
+        st.markdown("### 原文定位")
         if essay:
-            st.markdown(f'<div class="issue-map">{_essay_with_issue_marks(essay, corrections)}</div>', unsafe_allow_html=True)
-        for index, correction in enumerate(corrections, start=1):
-            with st.container(border=True):
-                st.markdown(f"### {index}. {criterion_for_problem(str(correction.get('problem', '')))}")
-                render_correction_original(correction)
-                st.write(str(correction.get("problem", "")))
-                st.success(str(correction.get("improved", "")))
-                render_dictionary_card(correction)
-                if user is None:
-                    st.caption("登录后可把这条问题加入单句训练或错题本。")
-                    st.button(
-                        "登录并保存这条问题",
-                        key=f"login_correction_{index}",
-                        use_container_width=True,
-                        on_click=open_cloud_login,
-                        args=("report", ""),
+            marked_essay, unmatched_nodes = map_essay_issues(essay, corrections)
+            st.markdown(
+                f'<div class="issue-map">{marked_essay}</div>',
+                unsafe_allow_html=True,
+            )
+            if unmatched_nodes:
+                st.caption(
+                    "以下节点未在原文中可靠定位，因此没有强行编号："
+                    + "、".join(f"#{index}" for index in unmatched_nodes)
+                )
+        else:
+            st.warning("暂时无法恢复这份报告的完整原文；问题节点仍可查看，重新打开批改记录后会再次尝试恢复。")
+
+        st.markdown("### 原文词汇推荐与可优化词")
+        st.caption(
+            "这里从整篇原文独立选词：既保留已经用得好的表达，也给普通、模糊或不够自然的词提供升级方案。"
+        )
+        if vocabulary_items:
+            st.markdown(
+                build_vocabulary_cards_html(vocabulary_items),
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info(
+                "这份旧报告没有可可靠关联到原文的独立词汇条目；新生成的报告会提供 4–6 条词汇推荐。"
+            )
+
+        if corrections:
+            st.markdown("### 节点详情与目标表达")
+        latest_cloud_ids = st.session_state.get("latest_cloud_ids")
+        latest_run_id = (
+            str(latest_cloud_ids.get("grading_run_id") or "")
+            if isinstance(latest_cloud_ids, dict) else ""
+        )
+        raw_report_context = "\0".join(
+            (
+                str(st.session_state.get("active_run_id") or latest_run_id),
+                essay or json.dumps(corrections, sort_keys=True, ensure_ascii=False),
+            )
+        )
+        report_context_key = hashlib.sha256(raw_report_context.encode("utf-8")).hexdigest()[:12]
+        dictionary_default_opened = False
+        for criterion, grouped_items in grouped_corrections(corrections):
+            st.markdown(
+                f"#### {criterion} · {ISSUE_MAP_CRITERION_LABELS[criterion]}（{len(grouped_items)}）"
+            )
+            for index, correction in grouped_items:
+                replacements = learning_replacements(correction)
+                with st.container(border=True):
+                    st.markdown(
+                        f'<h3>#{index}&ensp;{html.escape(correction_issue_type(correction))}</h3>',
+                        unsafe_allow_html=True,
                     )
-                else:
-                    train_col, book_col = st.columns(2)
-                    with train_col:
-                        st.button(
-                            "加入单句训练", key=f"queue_correction_{index}", use_container_width=True,
-                            on_click=queue_correction_for_training, args=(correction, store, user),
+                    st.caption("原文证据｜红线处是本节点要处理的问题")
+                    render_correction_original(correction)
+                    st.write(str(correction.get("problem", "")))
+                    st.caption("修改后")
+                    st.success(str(correction.get("improved", "")))
+                    if replacements:
+                        targets = "、".join(
+                            str(item.get("target") or "").strip()
+                            for item in replacements if str(item.get("target") or "").strip()
                         )
-                    with book_col:
-                        if st.button("收入错题本", key=f"save_correction_{index}", use_container_width=True):
-                            ensure_learning_assets(store, user)
-                            st.success("已收入错题本，不会产生模型请求。")
+                        st.markdown(
+                            '<div class="dictionary-trigger"><span>从该问题节点引出的替换词 / 短语</span>'
+                            f'<strong>{html.escape(targets)}</strong></div>',
+                            unsafe_allow_html=True,
+                        )
+                        open_by_default = not dictionary_default_opened
+                        dictionary_default_opened = True
+                        accessible_target = targets[:36] + ("…" if len(targets) > 36 else "")
+                        show_dictionary = st.toggle(
+                            f"展开 #{index}「{accessible_target}」的学习词典式讲解",
+                            value=open_by_default,
+                            key=f"show_dictionary_{report_context_key}_{index}",
+                        )
+                        if show_dictionary:
+                            render_dictionary_card(correction)
+                    else:
+                        st.caption("该节点属于结构或语法修复，没有可靠的词汇替换，因此不强行生成词条。")
+                    if user is None:
+                        st.caption("登录后可把这条问题加入单句训练或错题本。")
+                        st.button(
+                            f"登录后保存 #{index} 并训练",
+                            key=f"login_correction_{report_context_key}_{index}",
+                            use_container_width=True,
+                            on_click=open_cloud_login,
+                            args=("report", ""),
+                        )
+                    else:
+                        train_col, book_col = st.columns(2)
+                        with train_col:
+                            st.button(
+                                f"把 #{index} 加入单句训练",
+                                key=f"queue_correction_{report_context_key}_{index}",
+                                use_container_width=True,
+                                on_click=queue_correction_for_training, args=(correction, store, user),
+                            )
+                        with book_col:
+                            if st.button(
+                                f"把 #{index} 收入错题本",
+                                key=f"save_correction_{report_context_key}_{index}",
+                                use_container_width=True,
+                            ):
+                                ensure_learning_assets(store, user)
+                                st.success(f"已确认 #{index} 收入错题本，不会产生模型请求。")
     with full_tab:
         render_grouped_examiner_report(report)
         if user is not None:
