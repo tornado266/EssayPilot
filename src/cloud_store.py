@@ -37,7 +37,13 @@ class SupabaseStore:
         self.url = _setting("SUPABASE_URL").rstrip("/")
         self.anon_key = _setting("SUPABASE_ANON_KEY")
         self.service_role_key = _setting("SUPABASE_SERVICE_ROLE_KEY")
+        self.secret_key = _setting("SUPABASE_SECRET_KEY")
         self.beta_start_at = _setting("BETA_START_AT")
+
+    @property
+    def server_key(self) -> str:
+        """Prefer Supabase's current secret-key format, with legacy fallback."""
+        return self.secret_key or self.service_role_key
 
     @property
     def enabled(self) -> bool:
@@ -45,11 +51,11 @@ class SupabaseStore:
 
     @property
     def funnel_enabled(self) -> bool:
-        return bool(self.enabled and self.service_role_key and self.beta_start_at)
+        return bool(self.enabled and self.server_key and self.beta_start_at)
 
     @property
     def analytics_enabled(self) -> bool:
-        return bool(self.enabled and self.service_role_key)
+        return bool(self.enabled and self.server_key)
 
     def _headers(
         self,
@@ -61,9 +67,13 @@ class SupabaseStore:
         request_key = api_key or self.anon_key
         headers = {
             "apikey": request_key,
-            "Authorization": f"Bearer {access_token or request_key}",
             "Content-Type": "application/json",
         }
+        bearer = access_token or (
+            "" if request_key.startswith(("sb_secret_", "sb_publishable_")) else request_key
+        )
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
         if prefer:
             headers["Prefer"] = prefer
         return headers
@@ -110,13 +120,14 @@ class SupabaseStore:
         """Return anonymous aggregate counts using a server-only credential."""
         if not self.funnel_enabled:
             raise CloudStoreError(
-                "Public-beta analytics require SUPABASE_SERVICE_ROLE_KEY and BETA_START_AT."
+                "Public-beta analytics require SUPABASE_SECRET_KEY (or the legacy "
+                "SUPABASE_SERVICE_ROLE_KEY) and BETA_START_AT."
             )
         result = self._request(
             "POST",
             "/rest/v1/rpc/get_beta_funnel",
-            access_token=self.service_role_key,
-            api_key=self.service_role_key,
+            access_token="" if self.server_key.startswith("sb_secret_") else self.server_key,
+            api_key=self.server_key,
             payload={"p_since": self.beta_start_at},
         )
         return result if isinstance(result, dict) else {}
@@ -125,13 +136,14 @@ class SupabaseStore:
         """Return privacy-safe lifecycle conversion counts."""
         if not self.funnel_enabled:
             raise CloudStoreError(
-                "Product analytics require SUPABASE_SERVICE_ROLE_KEY and BETA_START_AT."
+                "Product analytics require SUPABASE_SECRET_KEY (or the legacy "
+                "SUPABASE_SERVICE_ROLE_KEY) and BETA_START_AT."
             )
         result = self._request(
             "POST",
             "/rest/v1/rpc/get_product_funnel",
-            access_token=self.service_role_key,
-            api_key=self.service_role_key,
+            access_token="" if self.server_key.startswith("sb_secret_") else self.server_key,
+            api_key=self.server_key,
             payload={"p_since": self.beta_start_at},
         )
         return result if isinstance(result, dict) else {}
@@ -211,13 +223,14 @@ class SupabaseStore:
         """Return aggregate product metrics using a server-only credential."""
         if not self.analytics_enabled:
             raise CloudStoreError(
-                "Product analytics require SUPABASE_SERVICE_ROLE_KEY."
+                "Product analytics require SUPABASE_SECRET_KEY (or the legacy "
+                "SUPABASE_SERVICE_ROLE_KEY)."
             )
         result = self._request(
             "POST",
             "/rest/v1/rpc/get_analytics_dashboard",
-            access_token=self.service_role_key,
-            api_key=self.service_role_key,
+            access_token="" if self.server_key.startswith("sb_secret_") else self.server_key,
+            api_key=self.server_key,
             payload={"p_since": since},
         )
         return result if isinstance(result, dict) else {}

@@ -11,6 +11,7 @@ class CloudStoreTests(unittest.TestCase):
         self.store.url = "https://example.supabase.co"
         self.store.anon_key = "public-anon-key"
         self.store.service_role_key = ""
+        self.store.secret_key = ""
         self.store.beta_start_at = ""
 
     @patch("src.cloud_store.requests.request")
@@ -124,6 +125,20 @@ class CloudStoreTests(unittest.TestCase):
     def test_beta_funnel_is_disabled_without_private_configuration(self):
         with self.assertRaises(CloudStoreError):
             self.store.get_beta_funnel()
+
+    @patch("src.cloud_store.requests.request")
+    def test_current_secret_key_uses_apikey_without_invalid_bearer(self, request):
+        response = Mock(status_code=200, content=b'{}')
+        response.json.return_value = {}
+        request.return_value = response
+        self.store.secret_key = "sb_secret_product_analytics"
+        self.store.beta_start_at = "2026-08-09T12:00:00+08:00"
+
+        self.store.get_beta_funnel()
+
+        headers = request.call_args.kwargs["headers"]
+        self.assertEqual(headers["apikey"], self.store.secret_key)
+        self.assertNotIn("Authorization", headers)
 
     def test_beta_funnel_rpc_is_aggregate_only_and_service_role_restricted(self):
         schema = (Path(__file__).parents[1] / "supabase" / "schema.sql").read_text(encoding="utf-8")

@@ -206,8 +206,9 @@ DEEPSEEK_API_KEY=your_deepseek_api_key
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your_publishable_anon_key
 
-# Optional: enables the private aggregate beta dashboard
-SUPABASE_SERVICE_ROLE_KEY=your_private_service_role_key
+# Optional: enables the private aggregate dashboard (use one server-only key)
+SUPABASE_SECRET_KEY=your_private_secret_key
+# SUPABASE_SERVICE_ROLE_KEY=your_legacy_private_service_role_key
 BETA_START_AT=2026-08-09T17:00:00+08:00
 ADMIN_EMAILS=admin@example.com
 ADMIN_PASSWORD=choose_a_private_dashboard_password
@@ -253,7 +254,8 @@ OPENAI_API_KEY = "your_openai_api_key"
 DEEPSEEK_API_KEY = "your_deepseek_api_key"
 SUPABASE_URL = "https://your-project.supabase.co"
 SUPABASE_ANON_KEY = "your_publishable_anon_key"
-SUPABASE_SERVICE_ROLE_KEY = "your_private_service_role_key"
+SUPABASE_SECRET_KEY = "your_private_secret_key"
+# SUPABASE_SERVICE_ROLE_KEY = "your_legacy_private_service_role_key"
 BETA_START_AT = "2026-08-09T17:00:00+08:00"
 ADMIN_PASSWORD = "choose_a_private_dashboard_password"
 ADMIN_EMAILS = "admin@example.com"

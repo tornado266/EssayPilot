@@ -196,7 +196,10 @@ def render_admin_dashboard() -> None:
         return
     store = SupabaseStore()
     if not store.analytics_enabled:
-        st.warning("请配置 SUPABASE_SERVICE_ROLE_KEY，并先执行产品统计迁移。")
+        st.warning(
+            "请配置 SUPABASE_SECRET_KEY（或旧版 SUPABASE_SERVICE_ROLE_KEY），"
+            "并先执行产品统计迁移。"
+        )
         return
     selected_range = st.segmented_control(
         "时间范围", ["近7天", "近30天", "全部"], default="近30天", key="analytics_range"
