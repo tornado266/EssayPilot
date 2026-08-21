@@ -4,6 +4,7 @@ import base64
 import hashlib
 import html
 import json
+import logging
 import re
 import uuid
 from collections import Counter
@@ -53,6 +54,12 @@ from src.issue_map import (
 from src.expression_catalog import FUNCTION_LABELS, TOPIC_LABELS, load_expression_catalog
 from src.share_card import build_result_card_svg
 from src.problem_spans import contextual_collocation, highlight_problem_text
+from src.product_analytics import (
+    anonymous_user_id,
+    build_dedupe_key,
+    record_event_safely,
+    sanitize_metadata,
+)
 from src.vocabulary_cards import build_vocabulary_cards_html, report_vocabulary_items
 from src.storage import markdown_to_pdf, save_markdown_record
 from src.report_schema import (
@@ -108,6 +115,7 @@ ALPINE_CHART_COLORS = ["#0B2545", "#00796B", "#C45100", "#A52464"]
 ALPINE_CHART_DASHES = [[1, 0], [9, 4], [3, 3], [11, 3, 2, 3]]
 ALPINE_CHART_SHAPES = ["circle", "square", "diamond", "triangle-up"]
 SAMPLE_POPOVER_TITLE = "试用作文"
+LOGGER = logging.getLogger(__name__)
 SAMPLE_TOPIC = (
     "Some people believe university students should only study their main subjects, "
     "while others think they should also study other subjects. "
@@ -141,6 +149,7 @@ def show_demo() -> None:
     """Open the zero-token walkthrough."""
     st.session_state.page_mode = "demo"
     st.session_state.scroll_target = "demo-top"
+    st.session_state.tutorial_clicked_pending = True
 
 
 def load_sample_and_show_workspace() -> None:
@@ -175,10 +184,56 @@ def record_lifecycle_event(
     event_flow = flow_id or str(st.session_state.get("flow_id") or "")
     if not store.enabled or not hashed or not event_flow:
         return
+    record_event_safely(
+        lambda: store.record_product_event(event_name, hashed, event_flow, user=user),
+        asynchronous=True,
+        logger=LOGGER,
+    )
+
+
+def record_usage_event(
+    store: SupabaseStore,
+    event_name: str,
+    *,
+    user: CloudUser | None = None,
+    run_id: str = "",
+    occurrence_key: str = "",
+    metadata: dict[str, object] | None = None,
+) -> None:
+    """Queue one privacy-safe event once per stable dedupe key."""
+    session_id = str(st.session_state.get("flow_id") or "")
+    anonymous_id = anonymous_user_id(str(st.session_state.get("visitor_hash") or ""))
+    if not store.enabled or not session_id or (user is None and not anonymous_id):
+        return
     try:
-        store.record_product_event(event_name, hashed, event_flow, user=user)
-    except (CloudStoreError, AttributeError):
-        pass
+        normalized_run_id = str(uuid.UUID(run_id)) if run_id else ""
+        dedupe_key = build_dedupe_key(
+            event_name,
+            session_id,
+            run_id=normalized_run_id,
+            occurrence_key=occurrence_key,
+        )
+    except (ValueError, TypeError, AttributeError):
+        LOGGER.warning("Invalid product analytics context for %s", event_name)
+        return
+    recorded = st.session_state.setdefault("analytics_recorded_keys", set())
+    if dedupe_key in recorded:
+        return
+    recorded.add(dedupe_key)
+    clean_metadata = sanitize_metadata(metadata)
+    record_event_safely(
+        lambda: store.record_analytics_event(
+            event_name,
+            session_id,
+            dedupe_key,
+            anonymous_user_id=anonymous_id,
+            run_id=normalized_run_id,
+            metadata=clean_metadata,
+            user=user,
+        ),
+        asynchronous=True,
+        logger=LOGGER,
+    )
 
 
 def claim_guest_result(store: SupabaseStore, user: CloudUser) -> bool:
@@ -610,6 +665,16 @@ def render_draft_2_training(
         elif draft_2_text.strip() == draft_1["text"].strip():
             st.warning("第二稿与第一稿完全相同，请根据反馈完成修改后再提交。")
         else:
+            draft_2_attempt_id = str(uuid.uuid4())
+            if cloud_store is not None:
+                record_usage_event(
+                    cloud_store,
+                    "second_draft_submitted",
+                    user=cloud_user,
+                    run_id=str(draft_1.get("grading_run_id") or ""),
+                    occurrence_key=draft_2_attempt_id,
+                    metadata={"draft_number": 2},
+                )
             with st.spinner("正在评分第二稿并生成两稿对比报告..."):
                 render_scoring_loader()
                 try:
@@ -710,6 +775,15 @@ def render_draft_2_training(
 
     result = st.session_state.get("draft_2_result")
     if isinstance(result, dict):
+        if cloud_store is not None:
+            record_usage_event(
+                cloud_store,
+                "diff_viewed",
+                user=cloud_user,
+                run_id=str(draft_1.get("grading_run_id") or ""),
+                occurrence_key=str(result.get("grading_run_id") or "current-result"),
+                metadata={"source": "second_draft_result"},
+            )
         st.divider()
         st.header("两稿对比进步报告")
         render_training_stepper(active=5)
@@ -1204,6 +1278,15 @@ def render_sentence_practice(
                                 )
                             except CloudStoreError as exc:
                                 st.warning(f"已完成练习，但云端同步失败：{exc}")
+                        if cloud_store is not None:
+                            record_usage_event(
+                                cloud_store,
+                                "sentence_training_completed",
+                                user=cloud_user,
+                                run_id=grading_run_id,
+                                occurrence_key=f"sentence-{index}",
+                                metadata={"item_index": index, "task_kind": "sentence"},
+                            )
                         st.success("已掌握。本次改写会计入你的学习档案。")
 
 
@@ -2263,6 +2346,14 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                     st.info("这台设备的一次完整体验已用完，登录后可继续批改并保存学习档案。")
                     st.button("登录 / 保存学习档案", type="primary", on_click=open_cloud_login, args=("write",), use_container_width=True)
                     return
+            grading_attempt_id = str(uuid.uuid4())
+            record_usage_event(
+                store,
+                "first_draft_submitted",
+                user=user,
+                occurrence_key=grading_attempt_id,
+                metadata={"draft_number": 1},
+            )
             record_lifecycle_event(store, "grading_started", user=user, flow_id=flow_id)
             with st.spinner("正在评分、核对原文证据并生成训练任务……"):
                 render_scoring_loader()
@@ -2275,6 +2366,17 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                             # The paid result already exists in this session. Never discard it or call the model again.
                             st.session_state.guest_trial_completion_warning = True
                     record_lifecycle_event(store, "grading_completed", user=user, flow_id=flow_id)
+                    generated_run_id = str(
+                        st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", "")
+                    )
+                    record_usage_event(
+                        store,
+                        "report_generated",
+                        user=user,
+                        run_id=generated_run_id,
+                        occurrence_key=grading_attempt_id,
+                        metadata={"cached": bool(st.session_state.get("reused_result_notice"))},
+                    )
                     st.rerun()
                 except AIGraderError as exc:
                     if guest_reserved:
@@ -2283,6 +2385,13 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                         except CloudStoreError:
                             pass
                     st.session_state.grading_failed = True
+                    record_usage_event(
+                        store,
+                        "report_generation_failed",
+                        user=user,
+                        occurrence_key=grading_attempt_id,
+                        metadata={"failure_type": type(exc).__name__},
+                    )
                     st.error("评分服务暂时不可用。题目和作文已经保留，可以直接重试。")
                     with st.expander("查看技术诊断"):
                         st.code(str(exc), language="text")
@@ -2293,6 +2402,13 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                         except CloudStoreError:
                             pass
                     st.session_state.grading_failed = True
+                    record_usage_event(
+                        store,
+                        "report_generation_failed",
+                        user=user,
+                        occurrence_key=grading_attempt_id,
+                        metadata={"failure_type": type(exc).__name__},
+                    )
                     st.error(f"云端保存失败，题目和作文未清空：{exc}")
                 except Exception as exc:
                     if guest_reserved:
@@ -2301,6 +2417,13 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                         except CloudStoreError:
                             pass
                     st.session_state.grading_failed = True
+                    record_usage_event(
+                        store,
+                        "report_generation_failed",
+                        user=user,
+                        occurrence_key=grading_attempt_id,
+                        metadata={"failure_type": type(exc).__name__},
+                    )
                     st.error("评分没有完成，没有产生半份记录。请稍后重试。")
                     with st.expander("查看技术诊断"):
                         st.code(f"{type(exc).__name__}: {exc}", language="text")
@@ -2423,6 +2546,11 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
     report = learner_safe_report_markdown(report, structured.get("overall_band"))
     ensure_learning_assets(store, user)
     record_lifecycle_event(store, "report_viewed", user=user)
+    run_id = str(
+        st.session_state.get("active_run_id")
+        or st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", "")
+    )
+    record_usage_event(store, "report_viewed", user=user, run_id=run_id)
     st.markdown('<div class="section-kicker">批改报告</div>', unsafe_allow_html=True)
     st.title("先看最影响提分的问题")
     render_training_stepper(active=2)
@@ -2461,11 +2589,18 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
     )
     essay = report_essay_from_state(st.session_state)
     vocabulary_items = report_vocabulary_items(structured, essay)
-    overview_tab, correction_tab, full_tab = st.tabs(["重点诊断", "原文问题地图", "完整报告与下载"])
+    report_sections = ["重点诊断", "原文问题地图", "完整报告与下载"]
+    overview_tab, correction_tab, full_tab = st.tabs(
+        report_sections,
+        key="report_sections",
+        on_change="rerun",
+    )
     with overview_tab:
         render_problem_cards(report)
         render_suggestion_cards(report)
     with correction_tab:
+        if st.session_state.get("report_sections") == "原文问题地图":
+            record_usage_event(store, "problem_map_viewed", user=user, run_id=run_id)
         st.caption("先看问题路径，再回到原文定位；地图和词典卡展开都不会额外调用模型。")
         if corrections:
             st.markdown("### 这篇文章的问题路径")
@@ -2552,6 +2687,15 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                             key=f"show_dictionary_{report_context_key}_{index}",
                         )
                         if show_dictionary:
+                            if st.session_state.get("report_sections") == "原文问题地图":
+                                record_usage_event(
+                                    store,
+                                    "dictionary_opened",
+                                    user=user,
+                                    run_id=run_id,
+                                    occurrence_key=f"node-{index}",
+                                    metadata={"item_index": index},
+                                )
                             render_dictionary_card(correction)
                     else:
                         st.caption("该节点属于结构或语法修复，没有可靠的词汇替换，因此不强行生成词条。")
@@ -2580,6 +2724,14 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                                 use_container_width=True,
                             ):
                                 ensure_learning_assets(store, user)
+                                record_usage_event(
+                                    store,
+                                    "mistake_saved",
+                                    user=user,
+                                    run_id=run_id,
+                                    occurrence_key=f"node-{index}",
+                                    metadata={"item_index": index, "source": "problem_map"},
+                                )
                                 st.success(f"已确认 #{index} 收入错题本，不会产生模型请求。")
     with full_tab:
         render_grouped_examiner_report(report)
@@ -2595,7 +2747,6 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                 args=("report", ""),
             )
 
-    run_id = str(st.session_state.get("active_run_id") or st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
     st.markdown("### 下一步：用第二稿验证这次反馈")
     primary_col, practice_col = st.columns([1.25, 1])
     if user is None:
@@ -2677,7 +2828,25 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
         ["单句训练", "逻辑训练", "第二稿验证"],
         default=default_tab,
         key="training_mode_tabs",
+        on_change="rerun",
     )
+    record_usage_event(
+        store,
+        "training_started",
+        user=user,
+        run_id=run_id,
+        occurrence_key=training_mode,
+        metadata={"entry_mode": training_mode},
+    )
+    if st.session_state.get("training_mode_tabs", default_tab) == "单句训练":
+        record_usage_event(
+            store,
+            "sentence_training_started",
+            user=user,
+            run_id=run_id,
+            occurrence_key="sentence-tab",
+            metadata={"task_kind": "sentence"},
+        )
     with sentence_tab:
         render_sentence_practice(
             sentences, "OpenAI", PRODUCTION_MODEL, references=references,
@@ -3072,6 +3241,14 @@ def render_correction_history(
                     except CloudStoreError as exc:
                         st.warning(f"暂时无法打开二稿变化：{exc}")
                     else:
+                        record_usage_event(
+                            store,
+                            "diff_viewed",
+                            user=user,
+                            run_id=original_id,
+                            occurrence_key=f"archive-{run_id}",
+                            metadata={"source": "archive"},
+                        )
                         st.rerun()
     if has_more and st.button("继续加载", key="load_more_corrections", use_container_width=True):
         st.session_state.correction_history_limit = int(st.session_state.get("correction_history_limit", 10)) + 10
@@ -3088,6 +3265,12 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
         st.info("题材精选可直接浏览；登录后可收藏、练习并跨设备同步进度。")
         render_expression_library(store, None, [], mode=growth_mode)
         return
+    record_usage_event(
+        store,
+        "archive_viewed",
+        user=user,
+        run_id=str(st.session_state.get("active_run_id") or ""),
+    )
     history_limit = int(st.session_state.get("correction_history_limit", 10))
     try:
         loaded_runs = store.list_grading_runs(user, limit=history_limit + 1)
@@ -3203,6 +3386,17 @@ def render_product_route(store: SupabaseStore, user: CloudUser | None) -> None:
 
 
 if st.session_state.page_mode == "demo":
+    demo_store = SupabaseStore()
+    demo_user = session_cloud_user()
+    demo_visitor_id = browser_visitor_id()
+    if demo_visitor_id:
+        st.session_state.visitor_hash = visitor_hash(demo_visitor_id)
+        record_usage_event(demo_store, "session_started", user=demo_user)
+    if st.session_state.get("tutorial_clicked_pending") and (
+        demo_user is not None or st.session_state.get("visitor_hash")
+    ):
+        record_usage_event(demo_store, "tutorial_clicked", user=demo_user)
+        st.session_state.pop("tutorial_clicked_pending", None)
     render_demo_page()
     st.stop()
 
@@ -3212,6 +3406,7 @@ requested_page = str(st.query_params.get("page", "") or "")
 raw_visitor_id = browser_visitor_id()
 if raw_visitor_id:
     st.session_state.visitor_hash = visitor_hash(raw_visitor_id)
+    record_usage_event(cloud_store, "session_started", user=cloud_user)
     if not st.session_state.get("visitor_opened_recorded"):
         record_lifecycle_event(cloud_store, "visitor_opened", user=cloud_user)
         st.session_state.visitor_opened_recorded = True

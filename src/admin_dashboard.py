@@ -1,17 +1,29 @@
-"""Private developer dashboard and robust Streamlit route detection."""
+"""Private aggregate product dashboard and robust Streamlit route detection."""
+
+from __future__ import annotations
 
 import hmac
-import math
 import os
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 
+import pandas as pd
 import streamlit as st
 
 from src.cloud_store import CloudStoreError, SupabaseStore
+from src.product_analytics import EVENT_NAMES, range_start
 
 
-MINI_PROGRAM_USER_TARGET = 30
-MINI_PROGRAM_COMPLETION_TARGET = 0.30
+EVENT_LABELS = {
+    "session_started": "会话开始", "first_draft_submitted": "提交初稿",
+    "report_generated": "报告生成成功", "report_generation_failed": "报告生成失败",
+    "report_viewed": "查看报告", "tutorial_clicked": "点击教程 / 范文",
+    "problem_map_viewed": "查看问题地图", "training_started": "进入训练页",
+    "sentence_training_started": "开始单句训练",
+    "sentence_training_completed": "完成单句训练", "mistake_saved": "保存错题",
+    "archive_viewed": "查看学习档案", "second_draft_submitted": "提交二稿",
+    "diff_viewed": "查看两稿差异", "dictionary_opened": "打开学习词典",
+}
 
 
 def _contains_admin_flag(value: object) -> bool:
@@ -27,7 +39,6 @@ def is_admin_request() -> bool:
             return True
     except (AttributeError, KeyError, TypeError):
         pass
-
     legacy_reader = getattr(st, "experimental_get_query_params", None)
     if callable(legacy_reader):
         try:
@@ -35,148 +46,171 @@ def is_admin_request() -> bool:
                 return True
         except (AttributeError, KeyError, TypeError):
             pass
-
     try:
-        request_url = st.context.url
-        return _contains_admin_flag(parse_qs(urlsplit(request_url).query).get("admin"))
+        return _contains_admin_flag(parse_qs(urlsplit(st.context.url).query).get("admin"))
     except (AttributeError, TypeError, ValueError):
         return False
 
 
-def _admin_password() -> str | None:
-    """Read the admin password from Streamlit Secrets, with a local env fallback."""
+def _setting(name: str) -> str:
     try:
-        value = st.secrets["ADMIN_PASSWORD"]
+        value = st.secrets.get(name, "")
     except (FileNotFoundError, KeyError):
-        value = os.getenv("ADMIN_PASSWORD")
-    return str(value) if value not in (None, "") else None
+        value = ""
+    return str(value or os.getenv(name, "")).strip()
+
+
+def parse_admin_emails(value: str) -> set[str]:
+    """Parse a comma/semicolon/newline separated administrator allowlist."""
+    normalized = value.replace(";", ",").replace("\n", ",")
+    return {item.strip().casefold() for item in normalized.split(",") if item.strip()}
+
+
+def admin_access_allowed(
+    *, email: str = "", configured_admin_emails: set[str] | None = None,
+    password: str = "", expected_password: str = "",
+) -> bool:
+    """Pure authorization rule: allowlist first, password only as fallback."""
+    allowlist = configured_admin_emails or set()
+    if allowlist:
+        return bool(email and email.strip().casefold() in allowlist)
+    return bool(expected_password and password and hmac.compare_digest(password, expected_password))
+
+
+def _authorize_admin() -> bool:
+    allowlist = parse_admin_emails(_setting("ADMIN_EMAILS"))
+    cloud_user = st.session_state.get("cloud_user")
+    email = str(cloud_user.get("email") or "") if isinstance(cloud_user, dict) else ""
+    if allowlist:
+        if admin_access_allowed(email=email, configured_admin_emails=allowlist):
+            return True
+        st.error("无权访问统计后台。请先用管理员白名单邮箱登录普通应用。")
+        return False
+    expected_password = _setting("ADMIN_PASSWORD")
+    if not expected_password:
+        st.error("尚未配置 ADMIN_EMAILS 或 ADMIN_PASSWORD；统计后台已拒绝访问。")
+        return False
+    if st.session_state.get("admin_authenticated"):
+        return True
+    password = st.text_input("管理员密码", type="password")
+    if not password:
+        st.info("请输入管理员密码。")
+        return False
+    if not admin_access_allowed(password=password, expected_password=expected_password):
+        st.error("管理员密码不正确。")
+        return False
+    st.session_state.admin_authenticated = True
+    return True
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    return numerator / denominator if denominator else 0.0
+
+
+def _render_tracking_metrics(data: dict[str, object]) -> None:
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+    users = int(summary.get("unique_users") or 0)
+    new_users = int(summary.get("new_users") or 0)
+    sessions = int(summary.get("sessions") or 0)
+    first_drafts = int(summary.get("first_drafts") or 0)
+    successes = int(summary.get("successful_reports") or 0)
+    failures = int(summary.get("failed_reports") or 0)
+    row_one = st.columns(3)
+    row_one[0].metric("独立用户", users)
+    row_one[1].metric("新用户", new_users)
+    row_one[2].metric("会话数", sessions)
+    row_two = st.columns(4)
+    row_two[0].metric("初稿提交", first_drafts)
+    row_two[1].metric("成功报告", successes)
+    row_two[2].metric("报告失败率", f"{_rate(failures, successes + failures):.1%}")
+    row_two[3].metric("人均批改", f"{_rate(successes, users):.2f}")
+
+    usage_rows = {
+        str(item.get("event_name")): item for item in (data.get("event_usage") or [])
+        if isinstance(item, dict)
+    }
+    st.subheader("功能使用")
+    st.dataframe([
+        {"功能": EVENT_LABELS[name],
+         "使用次数": int(usage_rows.get(name, {}).get("event_count") or 0),
+         "独立使用人数": int(usage_rows.get(name, {}).get("user_count") or 0)}
+        for name in EVENT_NAMES
+    ], hide_index=True, width="stretch")
+
+    funnel = data.get("funnel") if isinstance(data.get("funnel"), dict) else {}
+    first = int(funnel.get("first_draft_submitted") or 0)
+    report = int(funnel.get("report_viewed") or 0)
+    training = int(funnel.get("training_started") or 0)
+    completed = int(funnel.get("sentence_training_completed") or 0)
+    second = int(funnel.get("second_draft_submitted") or 0)
+    funnel_rows = []
+    for label, value, denominator in (
+        ("提交初稿", first, first), ("查看报告", report, first),
+        ("进入训练", training, report), ("完成单句训练", completed, training),
+        ("提交二稿（相对进入训练）", second, training),
+    ):
+        conversion = _rate(value, denominator)
+        funnel_rows.append({"步骤": label, "独立用户": value,
+                            "转化率": f"{conversion:.1%}",
+                            "流失率": f"{1 - conversion:.1%}" if denominator else "—"})
+    st.subheader("核心漏斗")
+    st.caption("核心完成率 = 完成“提交初稿 → 查看报告 → 进入训练 → 提交二稿”的独立用户数 / 初稿独立用户数。")
+    st.metric("核心完成用户 / 完成率", f"{second} / {first}", f"{_rate(second, first):.1%}")
+    st.dataframe(funnel_rows, hide_index=True, width="stretch")
+
+    daily = [row for row in (data.get("daily") or []) if isinstance(row, dict)]
+    st.subheader("每日趋势")
+    if daily:
+        frame = pd.DataFrame(daily).rename(columns={"day": "日期", "active_users": "活跃用户", "gradings": "批改量"})
+        st.line_chart(frame, x="日期", y=["活跃用户", "批改量"], color=["#0B4F8A", "#4D9BE6"])
+    else:
+        st.info("所选范围内还没有埋点数据。")
+
+    retention = data.get("retention") if isinstance(data.get("retention"), dict) else {}
+    retention_cols = st.columns(2)
+    for column, key, label in zip(retention_cols, ("day_1", "day_7"), ("次日复访率", "7 日复访率"), strict=False):
+        item = retention.get(key) if isinstance(retention.get(key), dict) else {}
+        eligible = int(item.get("eligible_users") or 0)
+        retained = int(item.get("retained_users") or 0)
+        column.metric(label, f"{_rate(retained, eligible):.1%}", f"{retained} / {eligible} 个成熟 cohort 用户")
+
+
+def _render_historical(data: dict[str, object]) -> None:
+    historical = data.get("historical") if isinstance(data.get("historical"), dict) else {}
+    st.subheader("历史记录推算")
+    st.caption("来自作文、报告、训练和二稿业务表，可可靠回溯；报告查看、会话、失败、教程、问题地图、词典和档案浏览无法回填。")
+    rows = st.columns(4)
+    rows[0].metric("历史独立批改用户", int(historical.get("unique_users") or 0))
+    rows[1].metric("历史成功报告", int(historical.get("successful_reports") or 0))
+    rows[2].metric("历史训练开始用户", int(historical.get("training_started_users") or 0))
+    rows[3].metric("历史二稿用户", int(historical.get("second_draft_users") or 0))
+    st.caption(f"初稿 {int(historical.get('first_drafts') or 0)} · "
+               f"训练完成人数 {int(historical.get('training_completed_users') or 0)} · "
+               f"二稿记录 {int(historical.get('second_drafts') or 0)}")
 
 
 def render_admin_dashboard() -> None:
-    """Render password protection followed by anonymous beta-funnel metrics."""
-    st.title("EssayPilot 公开内测看板")
-    expected_password = _admin_password()
-    if not expected_password:
-        st.error("尚未在 Streamlit Secrets 中配置 ADMIN_PASSWORD。")
+    """Render the authorized aggregate-only product dashboard."""
+    st.title("EssayPilot 产品数据")
+    if not _authorize_admin():
         return
-
-    if not st.session_state.get("admin_authenticated"):
-        password = st.text_input("管理员密码", type="password")
-        if not password:
-            st.info("请输入管理员密码，查看匿名使用统计。")
-            return
-        if not hmac.compare_digest(password, expected_password):
-            st.error("管理员密码不正确。")
-            return
-        st.session_state.admin_authenticated = True
-
     store = SupabaseStore()
-    if not store.funnel_enabled:
-        st.warning(
-            "公开内测统计尚未启用。请在 Streamlit Secrets 配置 "
-            "SUPABASE_SERVICE_ROLE_KEY 和 BETA_START_AT。普通用户功能不受影响。"
-        )
+    if not store.analytics_enabled:
+        st.warning("请配置 SUPABASE_SERVICE_ROLE_KEY，并先执行产品统计迁移。")
         return
+    selected_range = st.segmented_control(
+        "时间范围", ["近7天", "近30天", "全部"], default="近30天", key="analytics_range"
+    ) or "近30天"
+    days = {"近7天": 7, "近30天": 30, "全部": None}[selected_range]
+    since = range_start(days, datetime.now(timezone.utc))
     try:
-        funnel = store.get_beta_funnel()
+        data = store.get_analytics_dashboard(since.isoformat() if since else None)
     except CloudStoreError as exc:
-        st.error(f"暂时无法读取匿名漏斗：{exc}")
+        st.error(f"暂时无法读取聚合统计：{exc}")
         return
-
-    try:
-        lifecycle = store.get_product_funnel()
-    except CloudStoreError as exc:
-        st.warning(f"用户生命周期统计暂时不可用：{exc}")
-        lifecycle = {}
-
-    if lifecycle:
-        def rate(numerator: int, denominator: int) -> float:
-            return numerator / denominator if denominator else 0.0
-
-        visitors = int(lifecycle.get("visitors") or 0)
-        logins = int(lifecycle.get("logins") or 0)
-        grading_started = int(lifecycle.get("grading_starts") or 0)
-        grading_completed = int(lifecycle.get("grading_completions") or 0)
-        reports = int(lifecycle.get("report_views") or 0)
-        training_clicks = int(lifecycle.get("training_clicks") or 0)
-        draft_2_completed = int(lifecycle.get("second_drafts") or 0)
-        st.subheader("用户生命周期")
-        lifecycle_cols = st.columns(4)
-        lifecycle_cols[0].metric(
-            "登录转化率", f"{rate(logins, visitors):.1%}", f"{logins} / {visitors} 台设备"
-        )
-        lifecycle_cols[1].metric(
-            "首次批改完成率",
-            f"{rate(grading_completed, grading_started):.1%}",
-            f"{grading_completed} / {grading_started} 个流程",
-        )
-        lifecycle_cols[2].metric(
-            "报告→训练率",
-            f"{rate(training_clicks, reports):.1%}",
-            f"{training_clicks} / {reports} 个流程",
-        )
-        lifecycle_cols[3].metric(
-            "第一稿→第二稿率",
-            f"{rate(draft_2_completed, grading_completed):.1%}",
-            f"{draft_2_completed} / {grading_completed} 个流程",
-        )
-
-    first = int(funnel.get("first_grading_users") or 0)
-    sentence = int(funnel.get("sentence_mastered_users") or 0)
-    logic = int(funnel.get("logic_mastered_users") or 0)
-    both = int(funnel.get("both_mastered_users") or 0)
-    draft_2 = int(funnel.get("second_draft_users") or 0)
-
-    def conversion(value: int) -> float:
-        return value / first if first else 0.0
-
-    st.caption(f"统计起点：{funnel.get('since') or store.beta_start_at} · 仅显示匿名聚合数据")
-    first_row = st.columns(3)
-    first_row[0].metric("首次批改用户", first)
-    first_row[1].metric("单句训练掌握", sentence, f"{conversion(sentence):.0%}")
-    first_row[2].metric("逻辑训练掌握", logic, f"{conversion(logic):.0%}")
-    second_row = st.columns(2)
-    second_row[0].metric("两项训练均掌握", both, f"{conversion(both):.0%}")
-    second_row[1].metric("已提交第二稿", draft_2, f"{conversion(draft_2):.0%}")
-
-    st.subheader("小程序启动门槛")
-    completion_rate = conversion(both)
-    required_completions = max(
-        math.ceil(MINI_PROGRAM_USER_TARGET * MINI_PROGRAM_COMPLETION_TARGET),
-        math.ceil(first * MINI_PROGRAM_COMPLETION_TARGET),
-    )
-    users_needed = max(0, MINI_PROGRAM_USER_TARGET - first)
-    completions_needed = max(0, required_completions - both)
-    gate_ready = (
-        first >= MINI_PROGRAM_USER_TARGET
-        and completion_rate >= MINI_PROGRAM_COMPLETION_TARGET
-    )
-    if gate_ready:
-        st.success("已达到门槛：可以开始单独规划微信小程序架构。")
-    else:
-        st.info(
-            f"还需 {users_needed} 名首次批改用户；按当前样本规模，还需 "
-            f"{completions_needed} 名用户掌握两项训练。"
-        )
-    st.progress(min(first / MINI_PROGRAM_USER_TARGET, 1.0), text=f"用户门槛：{first} / 30")
-    st.progress(
-        min(completion_rate / MINI_PROGRAM_COMPLETION_TARGET, 1.0),
-        text=f"训练完成率：{completion_rate:.1%} / 30.0%",
-    )
-
-    st.subheader("每日匿名趋势")
-    daily_rows = [
-        {
-            "日期": row.get("day", ""),
-            "首次批改": row.get("first_grading_users", 0),
-            "单句掌握": row.get("sentence_mastered_users", 0),
-            "逻辑掌握": row.get("logic_mastered_users", 0),
-            "两项均掌握": row.get("both_mastered_users", 0),
-            "第二稿": row.get("second_draft_users", 0),
-        }
-        for row in (funnel.get("daily") or [])
-    ]
-    if daily_rows:
-        st.dataframe(daily_rows, width="stretch", hide_index=True)
-    else:
-        st.info("新版上线后还没有完成首次批改的用户。")
+    tracking_started = str(data.get("tracking_enabled_at") or "")
+    st.caption(f"当前范围：{selected_range} · 埋点启用：{tracking_started[:19].replace('T', ' ') or '尚无事件'} · 默认仅展示聚合结果")
+    st.subheader("埋点启用后数据")
+    _render_tracking_metrics(data)
+    st.divider()
+    _render_historical(data)

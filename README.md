@@ -209,13 +209,22 @@ SUPABASE_ANON_KEY=your_publishable_anon_key
 # Optional: enables the private aggregate beta dashboard
 SUPABASE_SERVICE_ROLE_KEY=your_private_service_role_key
 BETA_START_AT=2026-08-09T17:00:00+08:00
+ADMIN_EMAILS=admin@example.com
 ADMIN_PASSWORD=choose_a_private_dashboard_password
 ```
 
 The app reads Streamlit Secrets first and falls back to environment variables for local development.
+The aggregate product dashboard is available at `?admin=1`. `ADMIN_EMAILS` is the
+preferred comma-separated allowlist for signed-in administrators; `ADMIN_PASSWORD`
+is used only when no allowlist is configured. Never expose the service-role key.
 For cloud profiles, create a Supabase project and run `supabase/schema.sql` once in its SQL editor. Row-level security restricts every essay, report, practice attempt, draft revision, and learning item to its owner.
 
 If the original schema was already installed, run only `supabase/migrations/20260809_learning_items.sql` to enable the cloud error book and reusable learning assets. New projects can run the complete `supabase/schema.sql` directly.
+
+For the privacy-safe product dashboard, run
+`supabase/migrations/20260821_product_analytics.sql` after the base schema. It creates
+the private deduplicated event table, aggregate-only dashboard RPC, and a reliable
+one-time mapping of the older minimal lifecycle events when present.
 
 For the topic-based expression library upgrade, existing projects must also run
 `supabase/migrations/20260809_expression_library.sql`. It makes catalog expressions
@@ -247,9 +256,10 @@ SUPABASE_ANON_KEY = "your_publishable_anon_key"
 SUPABASE_SERVICE_ROLE_KEY = "your_private_service_role_key"
 BETA_START_AT = "2026-08-09T17:00:00+08:00"
 ADMIN_PASSWORD = "choose_a_private_dashboard_password"
+ADMIN_EMAILS = "admin@example.com"
 ```
 
-Never commit `.env` or `.streamlit/secrets.toml`. `SUPABASE_SERVICE_ROLE_KEY` must stay server-side. The dashboard is available at `?admin=1` and remains disabled if either its private key or beta start time is missing; normal grading is unaffected.
+Never commit `.env` or `.streamlit/secrets.toml`. `SUPABASE_SERVICE_ROLE_KEY` must stay server-side. The dashboard is available at `?admin=1` and remains disabled without its private key; normal grading is unaffected.
 
 ## Project Structure
 

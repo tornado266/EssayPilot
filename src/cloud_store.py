@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -46,6 +47,10 @@ class SupabaseStore:
     def funnel_enabled(self) -> bool:
         return bool(self.enabled and self.service_role_key and self.beta_start_at)
 
+    @property
+    def analytics_enabled(self) -> bool:
+        return bool(self.enabled and self.service_role_key)
+
     def _headers(
         self,
         access_token: str = "",
@@ -73,6 +78,7 @@ class SupabaseStore:
         params: dict[str, str] | None = None,
         prefer: str = "",
         api_key: str = "",
+        timeout: float = 20,
     ) -> Any:
         if not self.enabled:
             raise CloudStoreError("Supabase is not configured.")
@@ -83,7 +89,7 @@ class SupabaseStore:
                 headers=self._headers(access_token, prefer=prefer, api_key=api_key),
                 json=payload,
                 params=params,
-                timeout=20,
+                timeout=timeout,
             )
         except requests.RequestException as exc:
             raise CloudStoreError("Unable to reach the learning-record service.") from exc
@@ -171,6 +177,50 @@ class SupabaseStore:
                 "p_flow_id": flow_id,
             },
         ))
+
+    def record_analytics_event(
+        self,
+        event_name: str,
+        session_id: str,
+        dedupe_key: str,
+        *,
+        anonymous_user_id: str = "",
+        run_id: str = "",
+        metadata: dict[str, object] | None = None,
+        user: CloudUser | None = None,
+        event_id: str = "",
+    ) -> bool:
+        """Record one deduplicated event through the narrow analytics RPC."""
+        return bool(self._request(
+            "POST",
+            "/rest/v1/rpc/record_analytics_event",
+            access_token=user.access_token if user else "",
+            payload={
+                "p_event_id": event_id or str(uuid.uuid4()),
+                "p_session_id": session_id,
+                "p_run_id": run_id or None,
+                "p_event_name": event_name,
+                "p_metadata_json": metadata or {},
+                "p_dedupe_key": dedupe_key,
+                "p_anonymous_user_id": anonymous_user_id or None,
+            },
+            timeout=2,
+        ))
+
+    def get_analytics_dashboard(self, since: str | None = None) -> dict[str, Any]:
+        """Return aggregate product metrics using a server-only credential."""
+        if not self.analytics_enabled:
+            raise CloudStoreError(
+                "Product analytics require SUPABASE_SERVICE_ROLE_KEY."
+            )
+        result = self._request(
+            "POST",
+            "/rest/v1/rpc/get_analytics_dashboard",
+            access_token=self.service_role_key,
+            api_key=self.service_role_key,
+            payload={"p_since": since},
+        )
+        return result if isinstance(result, dict) else {}
 
     def send_email_code(self, email: str) -> None:
         self._request("POST", "/auth/v1/otp", payload={"email": email, "create_user": True})
