@@ -682,6 +682,57 @@ div[class*="st-key-correction_history_card_"] [data-testid="stVerticalBlockBorde
   font-weight: 780;
 }
 
+.ep-topic-home-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  margin: 0.85rem 0 1.15rem;
+  padding: 1.15rem 1.25rem;
+  border: 1px solid #b9d4e7;
+  border-radius: var(--ep-radius-md);
+  background: linear-gradient(135deg, #f8fbfd, var(--ep-primary-soft));
+  box-shadow: var(--ep-shadow-sm);
+}
+
+.ep-topic-home-entry span {
+  color: var(--ep-primary);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.ep-topic-home-entry h3 {
+  margin: 0.25rem 0 0.2rem;
+  color: var(--ep-mountain);
+  font-size: 1.25rem;
+}
+
+.ep-topic-home-entry p {
+  margin: 0;
+  color: var(--ep-text-muted);
+  line-height: 1.55;
+}
+
+.ep-topic-home-entry a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0.6rem 0.9rem;
+  border-radius: 10px;
+  background: var(--ep-primary);
+  color: #fff !important;
+  font-size: 0.84rem;
+  font-weight: 780;
+  text-decoration: none !important;
+  white-space: nowrap;
+}
+
+.ep-topic-home-entry a:hover {
+  background: var(--ep-primary-hover);
+}
+
 .ep-topic-expression {
   min-width: 0;
   margin: 0.65rem 0;
@@ -1661,6 +1712,16 @@ div[class*="st-key-correction_history_card_"] [data-testid="stVerticalBlockBorde
 
   .ep-bento__card {
     min-height: 0;
+  }
+
+  .ep-topic-home-entry {
+    grid-template-columns: 1fr;
+    padding: 1rem;
+  }
+
+  .ep-topic-home-entry a {
+    width: 100%;
+    white-space: normal;
   }
 
   .feature-strip {

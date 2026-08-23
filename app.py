@@ -1566,6 +1566,19 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
     render_anchor("learning-dashboard")
     st.markdown('<div class="section-kicker">学习档案</div>', unsafe_allow_html=True)
     st.subheader("今天从最需要提高的地方继续")
+    st.markdown(
+        """
+        <section class="ep-topic-home-entry" aria-label="主题连练入口">
+            <div>
+                <span>高频题材专项练习</span>
+                <h3>主题连练</h3>
+                <p>围绕同一题材连续练习，把观点和表达真正练熟</p>
+            </div>
+            <a href="?page=write&amp;mode=topics">打开主题题库 →</a>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
     try:
         learning_items = store.list_learning_items(user)
     except (CloudStoreError, AttributeError):
