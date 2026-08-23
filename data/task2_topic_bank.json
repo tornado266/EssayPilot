@@ -1,0 +1,212 @@
+[
+  {
+    "id": "education_01",
+    "topic_category": "education",
+    "question_type": "agree_disagree",
+    "question": "Schools should spend more time teaching practical life skills than teaching traditional academic subjects. To what extent do you agree or disagree?",
+    "practice_focus": "比较生活技能与学科知识的长期价值，并明确立场。"
+  },
+  {
+    "id": "education_02",
+    "topic_category": "education",
+    "question_type": "discuss_both_views",
+    "question": "Some people believe university students should study a broad range of subjects, while others think they should specialise in one field. Discuss both views and give your own opinion.",
+    "practice_focus": "练习双边论证，并用课程深度与就业适应力作比较。"
+  },
+  {
+    "id": "education_03",
+    "topic_category": "education",
+    "question_type": "problems_solutions",
+    "question": "In many places, children from rural or low-income families have less access to high-quality education. What problems does this cause, and what measures could improve the situation?",
+    "practice_focus": "建立教育不平等的后果链，并提出可执行的资源方案。"
+  },
+  {
+    "id": "technology_01",
+    "topic_category": "technology",
+    "question_type": "agree_disagree",
+    "question": "Digital communication has improved the quality of people's personal relationships. To what extent do you agree or disagree?",
+    "practice_focus": "区分联系频率与关系质量，避免把两者简单等同。"
+  },
+  {
+    "id": "technology_02",
+    "topic_category": "technology",
+    "question_type": "discuss_both_views",
+    "question": "Some people accept that online services collect personal data because this makes daily life more convenient. Others believe such collection should be strictly limited. Discuss both views and give your own opinion.",
+    "practice_focus": "平衡便利与隐私风险，并提出有条件的立场。"
+  },
+  {
+    "id": "technology_03",
+    "topic_category": "technology",
+    "question_type": "advantages_disadvantages",
+    "question": "More routine tasks in the workplace are being performed by automated systems. Do the advantages of this development outweigh the disadvantages?",
+    "practice_focus": "围绕效率、岗位变化与再培训比较利弊权重。"
+  },
+  {
+    "id": "environment_01",
+    "topic_category": "environment",
+    "question_type": "agree_disagree",
+    "question": "Environmental problems can only be solved if governments and large companies take action; changes made by individuals have little effect. To what extent do you agree or disagree?",
+    "practice_focus": "区分制度性影响与个人选择的累积作用。"
+  },
+  {
+    "id": "environment_02",
+    "topic_category": "environment",
+    "question_type": "advantages_disadvantages",
+    "question": "Some countries are considering strict limits on leisure air travel to reduce carbon emissions. Do the advantages of such limits outweigh the disadvantages?",
+    "practice_focus": "比较减排收益与经济、出行自由方面的代价。"
+  },
+  {
+    "id": "environment_03",
+    "topic_category": "environment",
+    "question_type": "problems_solutions",
+    "question": "Large amounts of edible food are thrown away by households. What are the main causes of this waste, and what solutions could reduce it?",
+    "practice_focus": "从消费习惯和零售环境追溯原因，匹配对应方案。"
+  },
+  {
+    "id": "health_01",
+    "topic_category": "health",
+    "question_type": "agree_disagree",
+    "question": "Governments should spend more public money on preventing illness than on treating people who are already ill. To what extent do you agree or disagree?",
+    "practice_focus": "比较预防与治疗的成本效益，同时处理医疗公平。"
+  },
+  {
+    "id": "health_02",
+    "topic_category": "health",
+    "question_type": "discuss_both_views",
+    "question": "Some people think maintaining good health is mainly an individual's responsibility, while others believe governments should create healthier living conditions. Discuss both views and give your own opinion.",
+    "practice_focus": "划分个人选择与公共环境各自能承担的责任。"
+  },
+  {
+    "id": "health_03",
+    "topic_category": "health",
+    "question_type": "two_part",
+    "question": "In many countries, young adults are doing less physical exercise than previous generations. Why is this happening? How can young adults be encouraged to exercise more?",
+    "practice_focus": "用原因与措施一一对应的结构回答两个问题。"
+  },
+  {
+    "id": "society_family_01",
+    "topic_category": "society_family",
+    "question_type": "agree_disagree",
+    "question": "The growing tendency for older and younger family members to live separately is weakening society. To what extent do you agree or disagree?",
+    "practice_focus": "讨论家庭支持、独立生活与社区关系之间的联系。"
+  },
+  {
+    "id": "society_family_02",
+    "topic_category": "society_family",
+    "question_type": "discuss_both_views",
+    "question": "Some people believe young children should be cared for mainly by relatives, while others prefer professional childcare centres. Discuss both views and give your own opinion.",
+    "practice_focus": "比较情感照护、专业教育与家庭现实条件。"
+  },
+  {
+    "id": "society_family_03",
+    "topic_category": "society_family",
+    "question_type": "advantages_disadvantages",
+    "question": "In some societies, several generations of a family are choosing to live in the same home. Do the advantages of this arrangement outweigh the disadvantages?",
+    "practice_focus": "权衡互助、住房成本、隐私和代际冲突。"
+  },
+  {
+    "id": "work_economy_01",
+    "topic_category": "work_economy",
+    "question_type": "discuss_both_views",
+    "question": "Some people choose a job mainly for security and income, while others consider job satisfaction more important. Discuss both views and give your own opinion.",
+    "practice_focus": "比较物质稳定与内在动力，并避免绝对化结论。"
+  },
+  {
+    "id": "work_economy_02",
+    "topic_category": "work_economy",
+    "question_type": "advantages_disadvantages",
+    "question": "An increasing number of employers are introducing a four-day working week without reducing employees' total pay. Do the advantages of this policy outweigh the disadvantages?",
+    "practice_focus": "从生产率、员工福祉和企业成本比较净影响。"
+  },
+  {
+    "id": "work_economy_03",
+    "topic_category": "work_economy",
+    "question_type": "two_part",
+    "question": "More people now change careers several times during their working lives. Why has this become more common? Is it a positive or negative development?",
+    "practice_focus": "先解释趋势成因，再用清晰标准评价其影响。"
+  },
+  {
+    "id": "government_policy_01",
+    "topic_category": "government_policy",
+    "question_type": "agree_disagree",
+    "question": "Public funding for the arts should be reduced so that more money can be spent on essential public services. To what extent do you agree or disagree?",
+    "practice_focus": "界定公共服务优先级，并评估艺术的公共价值。"
+  },
+  {
+    "id": "government_policy_02",
+    "topic_category": "government_policy",
+    "question_type": "discuss_both_views",
+    "question": "Some people believe national governments should make most important public decisions, while others think local communities should have greater control. Discuss both views and give your own opinion.",
+    "practice_focus": "比较统一协调与地方信息优势，形成条件式判断。"
+  },
+  {
+    "id": "government_policy_03",
+    "topic_category": "government_policy",
+    "question_type": "problems_solutions",
+    "question": "In many countries, few citizens take part in local public decision-making. What problems can this cause, and how can participation be increased?",
+    "practice_focus": "说明低参与如何影响代表性，并提出低门槛参与机制。"
+  },
+  {
+    "id": "media_culture_01",
+    "topic_category": "media_culture",
+    "question_type": "agree_disagree",
+    "question": "The replacement of professionally edited news by information shared on social media is a harmful development. To what extent do you agree or disagree?",
+    "practice_focus": "围绕速度、可信度和信息把关建立评价标准。"
+  },
+  {
+    "id": "media_culture_02",
+    "topic_category": "media_culture",
+    "question_type": "discuss_both_views",
+    "question": "Some people prefer films and television programmes from other countries, while others believe locally produced entertainment should receive more support. Discuss both views and give your own opinion.",
+    "practice_focus": "比较文化多样性、产业质量与本土认同。"
+  },
+  {
+    "id": "media_culture_03",
+    "topic_category": "media_culture",
+    "question_type": "two_part",
+    "question": "Children are increasingly influenced by online celebrities. Why are these figures so influential? What effects can this influence have on children?",
+    "practice_focus": "分别解释影响力来源及其正负后果。"
+  },
+  {
+    "id": "crime_law_01",
+    "topic_category": "crime_law",
+    "question_type": "agree_disagree",
+    "question": "The main purpose of prison should be to rehabilitate offenders rather than to punish them. To what extent do you agree or disagree?",
+    "practice_focus": "比较惩罚、威慑与降低再犯率的政策目标。"
+  },
+  {
+    "id": "crime_law_02",
+    "topic_category": "crime_law",
+    "question_type": "discuss_both_views",
+    "question": "Some people believe short prison sentences are appropriate for minor crimes, while others think community service is more effective. Discuss both views and give your own opinion.",
+    "practice_focus": "用公共安全、改造效果和社会成本比较两种处罚。"
+  },
+  {
+    "id": "crime_law_03",
+    "topic_category": "crime_law",
+    "question_type": "problems_solutions",
+    "question": "Cybercrime is becoming more common as everyday activities move online. What problems does cybercrime create for individuals and society, and what measures can reduce it?",
+    "practice_focus": "区分个人与社会层面的危害，并提出多主体方案。"
+  },
+  {
+    "id": "cities_transport_01",
+    "topic_category": "cities_transport",
+    "question_type": "agree_disagree",
+    "question": "Private cars should be restricted in city centres, even if this makes travel less convenient for some people. To what extent do you agree or disagree?",
+    "practice_focus": "权衡公共环境收益与个人便利、公平问题。"
+  },
+  {
+    "id": "cities_transport_02",
+    "topic_category": "cities_transport",
+    "question_type": "advantages_disadvantages",
+    "question": "Many cities are encouraging high-density housing close to public transport. Do the advantages of this approach outweigh the disadvantages?",
+    "practice_focus": "比较土地效率、通勤便利与居住品质。"
+  },
+  {
+    "id": "cities_transport_03",
+    "topic_category": "cities_transport",
+    "question_type": "two_part",
+    "question": "Many urban residents spend a large amount of time travelling to and from work. Why are commuting times increasing? What can cities do to reduce them?",
+    "practice_focus": "连接城市扩张、住房与交通原因，并匹配规划方案。"
+  }
+]

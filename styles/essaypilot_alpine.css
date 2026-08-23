@@ -650,6 +650,70 @@ div[class*="st-key-correction_history_card_"] [data-testid="stVerticalBlockBorde
   font-size: 0.78rem;
 }
 
+.st-key-topic_bank_panel,
+.st-key-topic_expression_panel {
+  width: min(100%, 860px);
+  min-width: 0;
+  margin: 0 auto 1rem;
+}
+
+[class*="st-key-topic_card_"] {
+  min-width: 0;
+  margin: 0.75rem 0;
+  overflow-wrap: anywhere;
+  border-color: var(--ep-border) !important;
+  background: var(--ep-surface) !important;
+  box-shadow: var(--ep-shadow-sm);
+}
+
+[class*="st-key-topic_card_"] p {
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+}
+
+.ep-topic-type {
+  display: inline-flex;
+  margin-bottom: 0.25rem;
+  padding: 0.28rem 0.58rem;
+  border-radius: 999px;
+  background: var(--ep-primary-soft);
+  color: var(--ep-primary-hover);
+  font-size: 0.72rem;
+  font-weight: 780;
+}
+
+.ep-topic-expression {
+  min-width: 0;
+  margin: 0.65rem 0;
+  padding: 0.85rem 0.95rem;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--ep-border);
+  border-radius: var(--ep-radius-sm);
+  background: var(--ep-surface);
+}
+
+.ep-topic-expression strong,
+.ep-topic-expression span {
+  display: block;
+}
+
+.ep-topic-expression strong {
+  color: var(--ep-mountain);
+}
+
+.ep-topic-expression span {
+  margin-top: 0.2rem;
+  color: var(--ep-primary-hover);
+  font-size: 0.84rem;
+}
+
+.ep-topic-expression p {
+  margin: 0.45rem 0 0;
+  color: var(--ep-text-muted);
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+
 .ep-overall-card {
   position: relative;
   overflow: hidden;

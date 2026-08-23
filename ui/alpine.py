@@ -187,7 +187,7 @@ def render_hero(*, variant: str = "home") -> None:
 
 
 def render_feature_bento() -> None:
-    """Render a four-card overview made only from existing product features."""
+    """Render the product overview and direct feature entries."""
     st.markdown(
         """
         <section class="ep-bento" aria-label="EssayPilot 核心功能">
@@ -196,18 +196,24 @@ def render_feature_bento() -> None:
                 <h3>评分分析</h3>
                 <p>查看 TR、CC、LR、GRA 四项分数，并用连续原文证据核对判断。</p>
             </article>
+            <article class="ep-bento__card ep-bento__card--wide">
+                <span class="ep-bento__index">02 · TOPIC PRACTICE</span>
+                <h3>主题连练</h3>
+                <p>围绕同一题材连续练习，把观点和表达真正练熟</p>
+                <a class="ep-bento__action" href="?page=write&amp;mode=topics">从主题题库选题</a>
+            </article>
             <article class="ep-bento__card">
-                <span class="ep-bento__index">02 · FOCUSED PRACTICE</span>
+                <span class="ep-bento__index">03 · FOCUSED PRACTICE</span>
                 <h3>针对训练</h3>
                 <p>把最重要的问题直接变成单句、逻辑与造句练习。</p>
             </article>
             <article class="ep-bento__card">
-                <span class="ep-bento__index">03 · REVISION</span>
+                <span class="ep-bento__index">04 · REVISION</span>
                 <h3>二稿对比</h3>
                 <p>保留第一稿基线，对照真实增删与四项能力变化。</p>
             </article>
             <article class="ep-bento__card ep-bento__card--wide">
-                <span class="ep-bento__index">04 · LEARNING RECORD</span>
+                <span class="ep-bento__index">05 · LEARNING RECORD</span>
                 <h3>错题与表达</h3>
                 <p>保存批改中的典型错误和可迁移表达，通过复习与造句把反馈带到下一篇作文。</p>
                 <a class="ep-bento__action" href="?page=growth&amp;mode=expressions">打开表达库</a>
