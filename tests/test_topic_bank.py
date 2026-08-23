@@ -110,6 +110,13 @@ class TopicBankTests(unittest.TestCase):
         self.assertIn("从主题题库选题", app_source)
         self.assertIn("用这题开始写", app_source)
         self.assertIn("load_expression_catalog()", app_source)
+        write_page_source = app_source.split("def render_write_page", 1)[1].split(
+            "def render_correction_original", 1
+        )[0]
+        self.assertLess(
+            write_page_source.index("render_topic_bank_picker()"),
+            write_page_source.index('key="essay_editor"'),
+        )
         for forbidden in ("openai", "grade_essay_package", "review_sentence_rewrite"):
             self.assertNotIn(forbidden, topic_source.lower())
 

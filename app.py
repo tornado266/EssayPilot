@@ -2316,6 +2316,72 @@ def grade_submission(
     navigate("report", str(cloud_ids.get("grading_run_id", "")))
 
 
+def render_topic_bank_picker() -> None:
+    """Render the secondary topic picker before the essay editor."""
+    topics_requested = str(st.query_params.get("mode", "") or "") == "topics"
+    topics_expanded = topics_requested or bool(st.session_state.pop("topic_bank_expanded", False))
+    with st.container(key="topic_bank_panel"):
+        with st.expander("从主题题库选题", expanded=topics_expanded):
+            st.markdown("### 主题连练")
+            st.info(
+                "按 IELTS Task 2 常见题材整理，均为 EssayPilot 原创练习题，"
+                "不代表官方真题或考题预测。"
+            )
+            try:
+                topic_bank = load_topic_bank()
+            except TopicBankError:
+                st.warning("主题题库暂时无法加载。你仍可在上方直接粘贴题目并正常批改。")
+                topic_bank = []
+
+            pending = st.session_state.get("pending_topic_selection")
+            if isinstance(pending, dict):
+                st.warning(
+                    "作文输入区已有内容。是否保留现有作文，并将题目更换为刚才选择的练习题？"
+                )
+                st.caption(str(pending.get("question") or ""))
+                confirm_col, cancel_col = st.columns(2)
+                confirm_col.button(
+                    "确认：保留作文并更换题目",
+                    key="confirm_topic_selection",
+                    use_container_width=True,
+                    on_click=confirm_pending_topic_selection,
+                )
+                cancel_col.button(
+                    "取消换题",
+                    key="cancel_topic_selection",
+                    use_container_width=True,
+                    on_click=cancel_pending_topic_selection,
+                )
+
+            if topic_bank:
+                available_categories = list(TOPIC_LABELS)
+                stored_category = str(st.session_state.get("topic_bank_category") or "")
+                if stored_category not in TOPIC_LABELS:
+                    st.session_state.topic_bank_category = available_categories[0]
+                selected_category = st.selectbox(
+                    "选择练习题材",
+                    options=available_categories,
+                    format_func=lambda key: TOPIC_LABELS[key],
+                    key="topic_bank_category",
+                )
+                for item in filter_topics_by_category(topic_bank, selected_category):
+                    with st.container(key=f"topic_card_{item['id']}", border=True):
+                        st.markdown(
+                            f'<span class="ep-topic-type">'
+                            f'{html.escape(QUESTION_TYPE_LABELS[item["question_type"]])}</span>',
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(f"**{item['question']}**")
+                        st.caption(f"练习重点：{item['practice_focus']}")
+                        st.button(
+                            "用这题开始写",
+                            key=f"choose_topic_{item['id']}",
+                            use_container_width=True,
+                            on_click=select_topic_from_bank,
+                            args=(item,),
+                        )
+
+
 def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
     st.markdown('<div class="section-kicker">写作批改</div>', unsafe_allow_html=True)
     st.title("提交 IELTS Writing Task 2 作文")
@@ -2325,8 +2391,12 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
         st.warning("云端历史暂时无法读取，本次仍可继续批改。")
     if st.session_state.pop("cloud_save_warning", False):
         st.warning("报告已保存在当前设备，但云端同步暂时失败；请稍后重试。")
+
+    render_topic_bank_picker()
     render_anchor("writing-input")
     apply_pending_scroll()
+    if st.session_state.pop("topic_selection_notice", False):
+        st.success("题目已带入写作区；你的作文和已有训练记录均未改动。")
     with st.container(key="essay_editor"):
         st.markdown(
             '<div class="ep-editor-note"><span>Task 2 · 题目与正文保持原始段落</span>'
@@ -2461,72 +2531,6 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                     st.error("评分没有完成，没有产生半份记录。请稍后重试。")
                     with st.expander("查看技术诊断"):
                         st.code(f"{type(exc).__name__}: {exc}", language="text")
-
-    if st.session_state.pop("topic_selection_notice", False):
-        st.success("题目已带入写作区；你的作文和已有训练记录均未改动。")
-
-    topics_requested = str(st.query_params.get("mode", "") or "") == "topics"
-    topics_expanded = topics_requested or bool(st.session_state.pop("topic_bank_expanded", False))
-    with st.container(key="topic_bank_panel"):
-        with st.expander("从主题题库选题", expanded=topics_expanded):
-            st.markdown("### 主题连练")
-            st.info(
-                "按 IELTS Task 2 常见题材整理，均为 EssayPilot 原创练习题，"
-                "不代表官方真题或考题预测。"
-            )
-            try:
-                topic_bank = load_topic_bank()
-            except TopicBankError:
-                st.warning("主题题库暂时无法加载。你仍可在上方直接粘贴题目并正常批改。")
-                topic_bank = []
-
-            pending = st.session_state.get("pending_topic_selection")
-            if isinstance(pending, dict):
-                st.warning(
-                    "作文输入区已有内容。是否保留现有作文，并将题目更换为刚才选择的练习题？"
-                )
-                st.caption(str(pending.get("question") or ""))
-                confirm_col, cancel_col = st.columns(2)
-                confirm_col.button(
-                    "确认：保留作文并更换题目",
-                    key="confirm_topic_selection",
-                    use_container_width=True,
-                    on_click=confirm_pending_topic_selection,
-                )
-                cancel_col.button(
-                    "取消换题",
-                    key="cancel_topic_selection",
-                    use_container_width=True,
-                    on_click=cancel_pending_topic_selection,
-                )
-
-            if topic_bank:
-                available_categories = list(TOPIC_LABELS)
-                stored_category = str(st.session_state.get("topic_bank_category") or "")
-                if stored_category not in TOPIC_LABELS:
-                    st.session_state.topic_bank_category = available_categories[0]
-                selected_category = st.selectbox(
-                    "选择练习题材",
-                    options=available_categories,
-                    format_func=lambda key: TOPIC_LABELS[key],
-                    key="topic_bank_category",
-                )
-                for item in filter_topics_by_category(topic_bank, selected_category):
-                    with st.container(key=f"topic_card_{item['id']}", border=True):
-                        st.markdown(
-                            f'<span class="ep-topic-type">'
-                            f'{html.escape(QUESTION_TYPE_LABELS[item["question_type"]])}</span>',
-                            unsafe_allow_html=True,
-                        )
-                        st.markdown(f"**{item['question']}**")
-                        st.caption(f"练习重点：{item['practice_focus']}")
-                        st.button(
-                            "用这题开始写",
-                            key=f"choose_topic_{item['id']}",
-                            use_container_width=True,
-                            on_click=select_topic_from_bank,
-                            args=(item,),
-                        )
 
     selected_topic_category = str(st.session_state.get("selected_topic_category") or "")
     selected_topic_question = str(st.session_state.get("selected_topic_question") or "")
