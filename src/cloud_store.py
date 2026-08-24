@@ -241,6 +241,9 @@ class SupabaseStore:
         except CloudSessionExpiredError:
             self._invalidate_runtime_user(active_user)
             raise
+        except CloudStoreError:
+            self._auth_refresh_attempted_user_ids.discard(active_user.id)
+            raise
         self._runtime_user = refreshed
         if self._auth_user_updated is not None:
             self._auth_user_updated(refreshed)

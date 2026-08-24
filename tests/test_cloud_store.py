@@ -512,5 +512,58 @@ class CloudStoreTests(unittest.TestCase):
                 invalidated.assert_not_called()
 
 
+    @patch("src.cloud_store.requests.request")
+    def test_temporary_refresh_failure_does_not_poison_next_401(self, request):
+        old = CloudUser("user-a", "a@example.com", "access-old", "refresh-old")
+        refreshed_data = {
+            "user": {"id": old.id, "email": old.email},
+            "access_token": "access-new",
+            "refresh_token": "refresh-new",
+            "expires_at": 2_000_003_600,
+            "expires_in": 3600,
+        }
+
+        for label, refresh_failure in (
+            ("503", self.response(503, {"message": "unavailable"})),
+            ("timeout", requests.Timeout("refresh timed out")),
+        ):
+            with self.subTest(refresh_failure=label):
+                store = SupabaseStore()
+                store.url = "https://example.supabase.co"
+                store.anon_key = "public-anon-key"
+                updated = Mock()
+                invalidated = Mock()
+                store.bind_auth_session(lambda: old, updated, invalidated)
+                request.reset_mock()
+                request.side_effect = [
+                    self.response(401, {"message": "expired"}),
+                    refresh_failure,
+                ]
+
+                with self.assertRaises(CloudStoreError):
+                    store.list_grading_runs(old)
+
+                self.assertEqual(request.call_count, 2)
+                self.assertNotIn(
+                    old.id, store._auth_refresh_attempted_user_ids
+                )
+                updated.assert_not_called()
+                invalidated.assert_not_called()
+
+                request.reset_mock()
+                request.side_effect = [
+                    self.response(401, {"message": "expired again"}),
+                    self.response(200, refreshed_data),
+                    self.response(200, []),
+                ]
+
+                self.assertEqual(store.list_grading_runs(old), [])
+                self.assertEqual(request.call_count, 3)
+                updated.assert_called_once()
+                self.assertEqual(
+                    updated.call_args.args[0].refresh_token, "refresh-new"
+                )
+                invalidated.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

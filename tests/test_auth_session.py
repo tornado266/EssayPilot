@@ -165,7 +165,6 @@ class AuthSessionTests(unittest.TestCase):
             "action": "clear",
             "command_id": "clear-1",
             "expected_version": 21,
-            "clear_through_version": 21,
         }
 
         remaining, ack = apply_browser_command_to_record(newer, command)
@@ -173,6 +172,45 @@ class AuthSessionTests(unittest.TestCase):
         self.assertEqual(remaining, newer)
         self.assertEqual(ack["status"], "skipped_newer")
         self.assertEqual(ack["refresh_token"], "refresh-new")
+
+    def test_clear_only_matches_expected_or_exact_superseded_writes(self):
+        state = {AUTH_BROWSER_VERSION_KEY: 10}
+        first_version = queue_refresh_token_write(
+            state, "refresh-first", now=self.now
+        )
+        first_command = take_browser_command(state)
+        second_version = queue_refresh_token_write(
+            state, "refresh-second", now=self.now + 1
+        )
+        second_command = take_browser_command(state)
+
+        self.assertEqual(
+            second_command["superseded_write_versions"], [first_version]
+        )
+        begin_logout(state, reason="invalid", expected_version=10)
+        clear = take_browser_command(state)
+
+        self.assertEqual(clear["expected_version"], 10)
+        self.assertEqual(
+            clear["superseded_write_versions"], [first_version, second_version]
+        )
+        self.assertNotIn("clear_through_version", clear)
+
+        other_tab = PersistedRefreshSession(
+            "refresh-other-tab", self.now + 0.5, first_version + 1
+        )
+        remaining, other_ack = apply_browser_command_to_record(other_tab, clear)
+        self.assertEqual(remaining, other_tab)
+        self.assertEqual(other_ack["status"], "skipped_newer")
+
+        own_pending = PersistedRefreshSession(
+            second_command["refresh_token"],
+            second_command["saved_at"],
+            second_version,
+        )
+        remaining, own_ack = apply_browser_command_to_record(own_pending, clear)
+        self.assertIsNone(remaining)
+        self.assertEqual(own_ack["status"], "cleared")
 
     def test_valid_access_adopts_newer_browser_token_without_refresh(self):
         store = Mock()
@@ -218,9 +256,22 @@ class AuthSessionTests(unittest.TestCase):
         self.assertEqual(user.refresh_token, "refresh-r2")
         self.assertEqual(version, 15)
         store.refresh.assert_not_called()
-        self.assertTrue(browser_signaled_logout({
-            "status": "storage_cleared", "source": "storage", "version": 15
-        }))
+        listener_state = {AUTH_USER_VERSION_KEY: 15}
+        listener = take_browser_command(listener_state)
+        cleared = {
+            "status": "storage_cleared",
+            "source": "storage",
+            "read_epoch": listener["read_epoch"],
+            "version": 15,
+        }
+        stable = mark_browser_listener_stable(listener_state, listener, cleared)
+        self.assertTrue(browser_signaled_logout(
+            cleared,
+            has_current_user=True,
+            command=listener,
+            listener_stable=stable,
+            current_version=15,
+        ))
 
     def test_expired_access_uses_newer_browser_token_once(self):
         expired = CloudUser(
@@ -250,7 +301,13 @@ class AuthSessionTests(unittest.TestCase):
 
         self.assertIsNone(remaining)
         self.assertEqual(ack["status"], "skipped_cleared")
-        self.assertTrue(browser_signaled_logout(ack))
+        matched = acknowledge_browser_command(state, ack, now=self.now)
+        self.assertEqual(matched.status, "skipped_cleared")
+        self.assertTrue(browser_signaled_logout(
+            ack,
+            has_current_user=True,
+            ack=matched,
+        ))
 
     def test_clear_state_cannot_be_overwritten_by_late_write(self):
         state = {AUTH_BROWSER_VERSION_KEY: 10}
@@ -384,6 +441,57 @@ class AuthSessionTests(unittest.TestCase):
             command=command,
             listener_stable=stable,
             persistence_failed=True,
+        ))
+
+    def test_clear_signals_require_current_epoch_version_or_matching_ack(self):
+        state = {AUTH_USER_VERSION_KEY: 20}
+        command = take_browser_command(state)
+        stale_epoch = {
+            "status": "storage_cleared",
+            "source": "storage",
+            "read_epoch": "previous-login-listener",
+            "version": 20,
+        }
+
+        self.assertFalse(
+            mark_browser_listener_stable(state, command, stale_epoch)
+        )
+        self.assertFalse(browser_signaled_logout(
+            stale_epoch,
+            has_current_user=True,
+            command=command,
+            listener_stable=False,
+            current_version=20,
+        ))
+
+        stale_version = {
+            **stale_epoch,
+            "read_epoch": command["read_epoch"],
+            "version": 10,
+        }
+        stable = mark_browser_listener_stable(state, command, stale_version)
+        self.assertTrue(stable)
+        self.assertFalse(browser_signaled_logout(
+            stale_version,
+            has_current_user=True,
+            command=command,
+            listener_stable=stable,
+            current_version=20,
+        ))
+
+        current_clear = {**stale_version, "version": 20}
+        self.assertTrue(browser_signaled_logout(
+            current_clear,
+            has_current_user=True,
+            command=command,
+            listener_stable=mark_browser_listener_stable(
+                state, command, current_clear
+            ),
+            current_version=20,
+        ))
+        self.assertFalse(browser_signaled_logout(
+            {"status": "skipped_cleared", "command_id": "old-write"},
+            has_current_user=True,
         ))
 
     def test_invalid_browser_record_is_cleared_without_refresh(self):
@@ -695,6 +803,58 @@ class AuthSessionTests(unittest.TestCase):
             persistence_failed=state[AUTH_PERSIST_WARNING_KEY],
         ))
 
+    def test_app_stale_clear_signals_do_not_logout_new_user(self):
+        now = time.time()
+        user = CloudUser(
+            "user-a", "person@example.com", "access-login", "refresh-login",
+            int(now + 3600), 3600, "expires_at",
+        )
+        signals = (
+            (
+                "old storage event",
+                {
+                    "status": "storage_cleared",
+                    "source": "storage",
+                    "read_epoch": "previous-login-listener",
+                    "version": 10,
+                },
+            ),
+            (
+                "old skipped write",
+                {
+                    "status": "skipped_cleared",
+                    "command_id": "previous-login-write",
+                    "version": 10,
+                },
+            ),
+        )
+
+        for label, browser_value in signals:
+            with self.subTest(signal=label):
+                app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+                app.session_state["cloud_user"] = cloud_user_to_state(user)
+                app.session_state["user_id"] = user.id
+                app.session_state["page_mode"] = "home"
+                app.session_state[AUTH_USER_VERSION_KEY] = 20
+                app.session_state[AUTH_BROWSER_VERSION_KEY] = 20
+
+                with patch(
+                    "src.auth_session._AUTH_COMPONENT",
+                    return_value=SimpleNamespace(
+                        auth_session=browser_value, auth_wake=0
+                    ),
+                ), patch(
+                    "src.visitor_identity.browser_visitor_id", return_value=""
+                ):
+                    app.run()
+
+                self.assertEqual(len(app.exception), 0)
+                self.assertEqual(
+                    app.session_state["cloud_user"]["refresh_token"],
+                    "refresh-login",
+                )
+                self.assertNotIn(AUTH_LOGOUT_PENDING_KEY, app.session_state)
+
     def test_app_pending_write_ignores_stale_empty(self):
         app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
         now = time.time()
@@ -811,7 +971,7 @@ class AuthSessionTests(unittest.TestCase):
         }
         component_actions = []
         clear_expected_versions = []
-        clear_through_versions = []
+        clear_payloads = []
 
         def auth_component(*_args, **kwargs):
             data = kwargs["data"]
@@ -819,10 +979,10 @@ class AuthSessionTests(unittest.TestCase):
             component_actions.append(action)
             if action == "clear":
                 clear_expected_versions.append(data["expected_version"])
-                clear_through = data["clear_through_version"]
-                clear_through_versions.append(clear_through)
+                clear_payloads.append(dict(data))
+                superseded = data["superseded_write_versions"]
                 browser["record"] = PersistedRefreshSession(
-                    "refresh-new", now + 1, clear_through
+                    "refresh-new", now + 1, superseded[-1]
                 )
                 browser["record"], value = apply_browser_command_to_record(
                     browser["record"], data
@@ -898,8 +1058,10 @@ class AuthSessionTests(unittest.TestCase):
 
         self.assertEqual(len(app.exception), 0)
         self.assertEqual(clear_expected_versions, [10])
-        self.assertEqual(len(clear_through_versions), 1)
-        self.assertGreater(clear_through_versions[0], 10)
+        self.assertEqual(len(clear_payloads), 1)
+        self.assertEqual(len(clear_payloads[0]["superseded_write_versions"]), 1)
+        self.assertGreater(clear_payloads[0]["superseded_write_versions"][0], 10)
+        self.assertNotIn("clear_through_version", clear_payloads[0])
         self.assertIsNone(browser["record"])
         self.assertEqual(request.call_count, 3)
         self.assertIn("clear", component_actions)
@@ -911,6 +1073,106 @@ class AuthSessionTests(unittest.TestCase):
         error_save.assert_not_called()
         cloud_save.assert_not_called()
 
+
+    def test_retry_guest_claim_refresh_reruns_to_browser_write_once(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        now = time.time()
+        old = CloudUser(
+            "user-a", "person@example.com", "access-old", "refresh-old",
+            int(now + 3600), 3600, "expires_at",
+        )
+        refreshed = CloudUser(
+            old.id, old.email, "access-new", "refresh-new",
+            int(now + 7200), 3600, "expires_at",
+        )
+        app.session_state["cloud_user"] = cloud_user_to_state(old)
+        app.session_state["user_id"] = old.id
+        app.session_state["page_mode"] = "home"
+        app.session_state[AUTH_USER_VERSION_KEY] = 10
+        app.session_state[AUTH_BROWSER_VERSION_KEY] = 10
+        app.session_state["pending_guest_claim"] = {
+            "topic": "Discuss both views.",
+            "essay": "word " * 260,
+            "word_count": 260,
+            "fingerprint": "guest-fingerprint",
+            "package": {"structured": {}},
+        }
+
+        browser = {
+            "record": PersistedRefreshSession(old.refresh_token, now, 10)
+        }
+        component_actions = []
+        save_calls = []
+
+        def auth_component(*_args, **kwargs):
+            data = kwargs["data"]
+            action = str(data.get("action") or "read")
+            component_actions.append(action)
+            if action in {"write", "clear"}:
+                browser["record"], value = apply_browser_command_to_record(
+                    browser["record"], data
+                )
+            elif browser["record"] is None:
+                value = {
+                    "status": "empty",
+                    "source": "read",
+                    "read_epoch": data["read_epoch"],
+                }
+            else:
+                record = browser["record"]
+                value = {
+                    "status": "loaded",
+                    "source": "read",
+                    "read_epoch": data["read_epoch"],
+                    "refresh_token": record.refresh_token,
+                    "saved_at": record.saved_at,
+                    "version": record.version,
+                }
+            return SimpleNamespace(auth_session=value, auth_wake=0)
+
+        def save_after_refresh(store, user, **_kwargs):
+            save_calls.append(user.refresh_token)
+            self.assertIsNotNone(store._auth_user_updated)
+            store._auth_user_updated(refreshed)
+            raise CloudStoreError("temporary save failure", status_code=503)
+
+        with (
+            patch("src.auth_session._AUTH_COMPONENT", side_effect=auth_component),
+            patch("src.cloud_store._setting", return_value=""),
+            patch.object(
+                SupabaseStore, "save_grading_cycle", new=save_after_refresh
+            ),
+            patch("src.ai_grader.grade_essay_package") as grade,
+            patch("src.storage.save_markdown_record") as local_save,
+            patch("src.error_book.append_error_book") as error_save,
+            patch("src.product_analytics.record_event_safely", return_value=None),
+            patch("src.visitor_identity.browser_visitor_id", return_value=""),
+        ):
+            app.run()
+            retry = next(
+                button for button in app.button
+                if button.label == "重试保存这次批改"
+            )
+            component_actions.clear()
+            retry.click()
+            app.run()
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(save_calls, ["refresh-old"])
+        self.assertIn("write", component_actions)
+        write_index = component_actions.index("write")
+        self.assertIn("read", component_actions[write_index + 1:])
+        self.assertEqual(browser["record"].refresh_token, "refresh-new")
+        self.assertEqual(
+            app.session_state["cloud_user"]["refresh_token"], "refresh-new"
+        )
+        self.assertTrue(app.session_state["guest_claim_failed"])
+        self.assertIn("pending_guest_claim", app.session_state)
+        self.assertNotIn(AUTH_BROWSER_COMMAND_KEY, app.session_state)
+        self.assertNotIn(AUTH_REQUEST_RERUN_KEY, app.session_state)
+        grade.assert_not_called()
+        local_save.assert_not_called()
+        error_save.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

@@ -357,6 +357,8 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
         st.warning("本次登录无法持久保存；关闭此页面后可能需要重新登录。")
     if browser_signaled_logout(
         browser_value,
+        ack=ack,
+        current_version=int(st.session_state.get(AUTH_USER_VERSION_KEY) or 0),
         has_current_user=current_user is not None,
         command=command,
         listener_stable=listener_stable,
@@ -2343,7 +2345,9 @@ def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> Non
             retry_store = SupabaseStore()
             retry_store.bind_auth_session(
                 session_cloud_user,
-                lambda refreshed: write_cloud_user_state(refreshed, persist=True),
+                lambda refreshed: write_cloud_user_state(
+                    refreshed, persist=True, request_rerun=True
+                ),
                 mark_cloud_session_invalid,
             )
             if claim_guest_result(retry_store, user):

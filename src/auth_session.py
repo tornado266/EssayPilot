@@ -68,6 +68,12 @@ _AUTH_COMPONENT = st.components.v2.component(
         "auth_session",
         {{ status, ...record, ...extra }}
       );
+      const supersededWriteVersions = new Set(
+        (Array.isArray(data?.superseded_write_versions)
+          ? data.superseded_write_versions : [])
+          .map((version) => Number(version))
+          .filter((version) => Number.isFinite(version) && version > 0)
+      );
 
       try {{
         if (action === "write") {{
@@ -103,7 +109,11 @@ _AUTH_COMPONENT = st.components.v2.component(
             }});
             return;
           }}
-          if (existing && expectedVersion > 0 && existing.version !== expectedVersion) {{
+          if (
+            existing && expectedVersion > 0 &&
+            existing.version !== expectedVersion &&
+            !supersededWriteVersions.has(existing.version)
+          ) {{
             emitRecord(existing, "skipped_newer", {{ command_id: commandId }});
             return;
           }}
@@ -128,10 +138,9 @@ _AUTH_COMPONENT = st.components.v2.component(
         if (action === "clear") {{
           const existing = currentRecord();
           const expectedVersion = Number(data?.expected_version || 0);
-          const clearThroughVersion = Number(data?.clear_through_version || 0);
           if (
             existing && existing.version !== expectedVersion &&
-            !(clearThroughVersion > 0 && existing.version <= clearThroughVersion)
+            !supersededWriteVersions.has(existing.version)
           ) {{
             emitRecord(existing, "skipped_newer", {{ command_id: commandId }});
             return;
@@ -267,6 +276,30 @@ def cloud_user_from_state(value: object) -> CloudUser | None:
         return None
 
 
+def _superseded_write_versions(
+    command: object, *, include_current: bool = False
+) -> list[int]:
+    if not isinstance(command, dict):
+        return []
+    raw_versions = command.get("superseded_write_versions")
+    values = (
+        list(raw_versions)
+        if isinstance(raw_versions, (list, tuple))
+        else []
+    )
+    if include_current and command.get("action") == "write":
+        values.append(command.get("version"))
+    versions: list[int] = []
+    for value in values:
+        try:
+            version = int(value)
+        except (TypeError, ValueError):
+            continue
+        if version > 0 and version not in versions:
+            versions.append(version)
+    return versions[-8:]
+
+
 def _next_version(state: MutableMapping[str, Any], now: float) -> int:
     known = max(
         int(state.get(AUTH_BROWSER_VERSION_KEY) or 0),
@@ -293,7 +326,8 @@ def queue_refresh_token_write(
     state.pop(AUTH_BROWSER_READ_EPOCH_KEY, None)
     saved_at = float(time.time() if now is None else now)
     version = _next_version(state, saved_at)
-    state[AUTH_BROWSER_COMMAND_KEY] = {
+    superseded = _superseded_write_versions(pending, include_current=True)
+    command = {
         "action": "write",
         "command_id": str(uuid.uuid4()),
         "refresh_token": refresh_token,
@@ -301,6 +335,9 @@ def queue_refresh_token_write(
         "version": version,
         "expected_version": int(state.get(AUTH_BROWSER_VERSION_KEY) or 0),
     }
+    if superseded:
+        command["superseded_write_versions"] = superseded
+    state[AUTH_BROWSER_COMMAND_KEY] = command
     state[AUTH_USER_VERSION_KEY] = version
     if request_rerun:
         state[AUTH_REQUEST_RERUN_KEY] = True
@@ -311,8 +348,8 @@ def queue_refresh_token_clear(
     state: MutableMapping[str, Any],
     *,
     expected_version: int | None = None,
-    clear_through_version: int = 0,
 ) -> str:
+    pending = state.get(AUTH_BROWSER_COMMAND_KEY)
     version = int(
         state.get(AUTH_BROWSER_VERSION_KEY, 0)
         if expected_version is None
@@ -320,12 +357,15 @@ def queue_refresh_token_clear(
     )
     state.pop(AUTH_BROWSER_READ_EPOCH_KEY, None)
     command_id = str(uuid.uuid4())
-    state[AUTH_BROWSER_COMMAND_KEY] = {
+    command: dict[str, Any] = {
         "action": "clear",
         "command_id": command_id,
         "expected_version": version,
-        "clear_through_version": max(0, int(clear_through_version)),
     }
+    superseded = _superseded_write_versions(pending, include_current=True)
+    if superseded:
+        command["superseded_write_versions"] = superseded
+    state[AUTH_BROWSER_COMMAND_KEY] = command
     return command_id
 
 
@@ -480,17 +520,24 @@ def browser_signaled_logout(
     listener_stable: bool = False,
     has_pending_command: bool = False,
     persistence_failed: bool = False,
+    ack: BrowserAck | None = None,
+    current_version: int = 0,
 ) -> bool:
     if not isinstance(value, dict):
         return False
-    if (
-        value.get("status") == "storage_cleared"
-        and value.get("source") == "storage"
-    ) or value.get("status") == "skipped_cleared":
-        return True
+    status = str(value.get("status") or "")
+    if status == "skipped_cleared":
+        return bool(
+            has_current_user
+            and ack is not None
+            and ack.status == "skipped_cleared"
+            and ack.command.get("action") == "write"
+            and str(value.get("command_id") or "")
+            == str(ack.command.get("command_id") or "")
+        )
     if (
         not has_current_user
-        or value.get("status") != "empty"
+        or status not in {"empty", "storage_cleared"}
         or has_pending_command
         or persistence_failed
         or not listener_stable
@@ -499,7 +546,18 @@ def browser_signaled_logout(
     ):
         return False
     read_epoch = str(command.get("read_epoch") or "")
-    return bool(read_epoch and read_epoch == str(value.get("read_epoch") or ""))
+    if not read_epoch or read_epoch != str(value.get("read_epoch") or ""):
+        return False
+    if status == "empty":
+        return value.get("source") == "read"
+    if value.get("source") != "storage":
+        return False
+    try:
+        cleared_version = int(value.get("version") or 0)
+        user_version = max(0, int(current_version or 0))
+    except (TypeError, ValueError):
+        return False
+    return cleared_version >= user_version
 
 
 def begin_logout(
@@ -511,11 +569,7 @@ def begin_logout(
     if isinstance(state.get(AUTH_LOGOUT_PENDING_KEY), dict):
         return
     state[AUTH_LOGOUT_PENDING_KEY] = {"reason": reason, "clear_retries": 0}
-    queue_refresh_token_clear(
-        state,
-        expected_version=expected_version,
-        clear_through_version=int(state.get(AUTH_USER_VERSION_KEY) or 0),
-    )
+    queue_refresh_token_clear(state, expected_version=expected_version)
 
 
 def start_logout_with_remote_best_effort(
@@ -563,6 +617,7 @@ def apply_browser_command_to_record(
             int(command.get("version") or 0),
         )
         expected = int(command.get("expected_version") or 0)
+        superseded = set(_superseded_write_versions(command))
         if (
             record is not None
             and record.version == requested.version
@@ -575,7 +630,12 @@ def apply_browser_command_to_record(
                 "command_id": command_id,
                 "version": expected,
             }
-        if record is not None and expected > 0 and record.version != expected:
+        if (
+            record is not None
+            and expected > 0
+            and record.version != expected
+            and record.version not in superseded
+        ):
             return record, {"status": "skipped_newer", "command_id": command_id, **asdict(record)}
         if record is not None and (
             record.version > requested.version
@@ -589,9 +649,11 @@ def apply_browser_command_to_record(
         return requested, {"status": "written", "command_id": command_id, **asdict(requested)}
     if action == "clear":
         expected = int(command.get("expected_version") or 0)
-        clear_through = int(command.get("clear_through_version") or 0)
-        if record is not None and record.version != expected and not (
-            clear_through > 0 and record.version <= clear_through
+        superseded = set(_superseded_write_versions(command))
+        if (
+            record is not None
+            and record.version != expected
+            and record.version not in superseded
         ):
             return record, {"status": "skipped_newer", "command_id": command_id, **asdict(record)}
         return None, {"status": "cleared", "command_id": command_id, "version": expected}
