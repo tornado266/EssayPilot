@@ -29,6 +29,7 @@ AUTH_LISTENER_RERUN_KEY = "auth_listener_rerun"
 AUTH_REQUEST_RERUN_KEY = "auth_request_rerun"
 AUTH_BROWSER_READ_EPOCH_KEY = "auth_browser_read_epoch"
 AUTH_PERSIST_WARNING_KEY = "auth_persist_warning"
+AUTH_BROWSER_WRITE_FENCE_KEY = "auth_browser_write_fence"
 AUTH_RETENTION_SECONDS = 7 * 24 * 60 * 60
 ACCESS_REFRESH_SKEW_SECONDS = 5 * 60
 _MAX_REFRESH_TOKEN_LENGTH = 8192
@@ -39,6 +40,7 @@ _AUTH_COMPONENT = st.components.v2.component(
     js=f"""
     export default function({{ data, setStateValue }}) {{
       const key = {AUTH_STORAGE_KEY!r};
+      const fenceKey = key + "_write_fence";
       const retentionSeconds = {AUTH_RETENTION_SECONDS};
       const maxTokenLength = {_MAX_REFRESH_TOKEN_LENGTH};
       const action = data?.action || "read";
@@ -64,6 +66,10 @@ _AUTH_COMPONENT = st.components.v2.component(
       }};
 
       const currentRecord = () => parseRecord(window.localStorage.getItem(key));
+      const currentWriteFence = () => {{
+        const fence = Number(window.localStorage.getItem(fenceKey) || 0);
+        return Number.isFinite(fence) && fence > 0 ? fence : 0;
+      }};
       const emitRecord = (record, status, extra = {{}}) => setStateValue(
         "auth_session",
         {{ status, ...record, ...extra }}
@@ -85,6 +91,7 @@ _AUTH_COMPONENT = st.components.v2.component(
           const now = Date.now() / 1000;
           const existing = currentRecord();
           const expectedVersion = Number(data?.expected_version || 0);
+          const writeFenceVersion = currentWriteFence();
           if (
             !requested.refresh_token || requested.refresh_token.length > maxTokenLength ||
             !Number.isFinite(requested.saved_at) || requested.saved_at <= 0 ||
@@ -92,6 +99,22 @@ _AUTH_COMPONENT = st.components.v2.component(
             !Number.isFinite(requested.version) || requested.version <= 0
           ) {{
             emitRecord(existing || {{}}, "rejected", {{ command_id: commandId }});
+            return;
+          }}
+          if (requested.version <= writeFenceVersion) {{
+            if (existing) {{
+              emitRecord(existing, "skipped_newer", {{
+                command_id: commandId,
+                write_fence_version: writeFenceVersion,
+              }});
+            }} else {{
+              setStateValue("auth_session", {{
+                status: "skipped_cleared",
+                command_id: commandId,
+                version: requested.version,
+                write_fence_version: writeFenceVersion,
+              }});
+            }}
             return;
           }}
           if (
@@ -106,6 +129,7 @@ _AUTH_COMPONENT = st.components.v2.component(
               status: "skipped_cleared",
               command_id: commandId,
               version: expectedVersion,
+              write_fence_version: writeFenceVersion,
             }});
             return;
           }}
@@ -138,11 +162,23 @@ _AUTH_COMPONENT = st.components.v2.component(
         if (action === "clear") {{
           const existing = currentRecord();
           const expectedVersion = Number(data?.expected_version || 0);
+          const requestedWriteFence = Number(data?.write_fence_version || 0);
+          const writeFenceVersion = Math.max(
+            currentWriteFence(),
+            Number.isFinite(requestedWriteFence) && requestedWriteFence > 0
+              ? requestedWriteFence : 0
+          );
+          if (writeFenceVersion > 0) {{
+            window.localStorage.setItem(fenceKey, String(writeFenceVersion));
+          }}
           if (
             existing && existing.version !== expectedVersion &&
             !supersededWriteVersions.has(existing.version)
           ) {{
-            emitRecord(existing, "skipped_newer", {{ command_id: commandId }});
+            emitRecord(existing, "skipped_newer", {{
+              command_id: commandId,
+              write_fence_version: writeFenceVersion,
+            }});
             return;
           }}
           window.localStorage.removeItem(key);
@@ -150,14 +186,17 @@ _AUTH_COMPONENT = st.components.v2.component(
             status: "cleared",
             command_id: commandId,
             version: expectedVersion,
+            write_fence_version: writeFenceVersion,
           }});
           return;
         }}
 
+        const writeFenceVersion = currentWriteFence();
         const raw = window.localStorage.getItem(key);
         if (!raw) {{
           setStateValue("auth_session", {{
-            status: "empty", source: "read", read_epoch: readEpoch
+            status: "empty", source: "read", read_epoch: readEpoch,
+            write_fence_version: writeFenceVersion,
           }});
         }} else {{
           const stored = currentRecord();
@@ -165,18 +204,21 @@ _AUTH_COMPONENT = st.components.v2.component(
           if (!stored) {{
             window.localStorage.removeItem(key);
             setStateValue("auth_session", {{
-              status: "invalid", source: "read", read_epoch: readEpoch, version: 0
+              status: "invalid", source: "read", read_epoch: readEpoch, version: 0,
+              write_fence_version: writeFenceVersion,
             }});
           }} else if (stored.saved_at > now + 300 || now - stored.saved_at >= retentionSeconds) {{
             const expiredVersion = Number(stored?.version || 0);
             window.localStorage.removeItem(key);
             setStateValue("auth_session", {{
               status: "expired", source: "read",
-              read_epoch: readEpoch, version: expiredVersion
+              read_epoch: readEpoch, version: expiredVersion,
+              write_fence_version: writeFenceVersion,
             }});
           }} else {{
             emitRecord(stored, "loaded", {{
-              source: "read", read_epoch: readEpoch
+              source: "read", read_epoch: readEpoch,
+              write_fence_version: writeFenceVersion,
             }});
           }}
         }}
@@ -186,12 +228,14 @@ _AUTH_COMPONENT = st.components.v2.component(
           if (document.visibilityState === "visible") wake();
         }};
         const storageChanged = (event) => {{
+          if (event.key === fenceKey) {{ wake(); return; }}
           if (event.key !== key) return;
           try {{
             const newer = parseRecord(event.newValue);
             if (newer) {{
               emitRecord(newer, "loaded", {{
-                source: "storage", read_epoch: readEpoch
+                source: "storage", read_epoch: readEpoch,
+                write_fence_version: currentWriteFence(),
               }});
             }} else {{
               const previous = parseRecord(event.oldValue);
@@ -201,6 +245,7 @@ _AUTH_COMPONENT = st.components.v2.component(
                 source: "storage",
                 read_epoch: readEpoch,
                 version: Number(previous?.version || 0),
+                write_fence_version: currentWriteFence(),
               }});
             }}
           }} catch (_) {{
@@ -300,10 +345,27 @@ def _superseded_write_versions(
     return versions[-8:]
 
 
+def _observe_browser_write_fence(
+    state: MutableMapping[str, Any], value: object
+) -> None:
+    if not isinstance(value, dict):
+        return
+    try:
+        fence = int(float(value.get("write_fence_version") or 0))
+    except (TypeError, ValueError):
+        return
+    if fence <= 0:
+        return
+    state[AUTH_BROWSER_WRITE_FENCE_KEY] = max(
+        int(state.get(AUTH_BROWSER_WRITE_FENCE_KEY) or 0), fence
+    )
+
+
 def _next_version(state: MutableMapping[str, Any], now: float) -> int:
     known = max(
         int(state.get(AUTH_BROWSER_VERSION_KEY) or 0),
         int(state.get(AUTH_USER_VERSION_KEY) or 0),
+        int(state.get(AUTH_BROWSER_WRITE_FENCE_KEY) or 0),
     )
     return max(known + 1, int(now * 1_000_000))
 
@@ -357,12 +419,20 @@ def queue_refresh_token_clear(
     )
     state.pop(AUTH_BROWSER_READ_EPOCH_KEY, None)
     command_id = str(uuid.uuid4())
+    superseded = _superseded_write_versions(pending, include_current=True)
+    write_fence_version = max(
+        version,
+        int(state.get(AUTH_USER_VERSION_KEY) or 0),
+        int(state.get(AUTH_BROWSER_WRITE_FENCE_KEY) or 0),
+        *superseded,
+    )
     command: dict[str, Any] = {
         "action": "clear",
         "command_id": command_id,
         "expected_version": version,
     }
-    superseded = _superseded_write_versions(pending, include_current=True)
+    if write_fence_version > 0:
+        command["write_fence_version"] = write_fence_version
     if superseded:
         command["superseded_write_versions"] = superseded
     state[AUTH_BROWSER_COMMAND_KEY] = command
@@ -432,6 +502,7 @@ def acknowledge_browser_command(
     *,
     now: float | None = None,
 ) -> BrowserAck | None:
+    _observe_browser_write_fence(state, value)
     pending = state.get(AUTH_BROWSER_COMMAND_KEY)
     if not isinstance(pending, dict) or not isinstance(value, dict):
         return None
@@ -504,6 +575,7 @@ def mark_browser_listener_stable(
     if not read_epoch or value_epoch != read_epoch:
         return False
     state.pop(AUTH_LISTENER_RERUN_KEY, None)
+    _observe_browser_write_fence(state, value)
     return True
 
 
@@ -606,6 +678,8 @@ def start_logout_with_remote_best_effort(
 def apply_browser_command_to_record(
     record: PersistedRefreshSession | None,
     command: dict[str, Any],
+    *,
+    write_fence_version: int = 0,
 ) -> tuple[PersistedRefreshSession | None, dict[str, Any]]:
     """Pure mirror of the component's idempotent write/clear conflict rules."""
     action = str(command.get("action") or "")
@@ -618,6 +692,21 @@ def apply_browser_command_to_record(
         )
         expected = int(command.get("expected_version") or 0)
         superseded = set(_superseded_write_versions(command))
+        write_fence_version = max(0, int(write_fence_version or 0))
+        if requested.version <= write_fence_version:
+            if record is not None:
+                return record, {
+                    "status": "skipped_newer",
+                    "command_id": command_id,
+                    **asdict(record),
+                    "write_fence_version": write_fence_version,
+                }
+            return None, {
+                "status": "skipped_cleared",
+                "command_id": command_id,
+                "version": requested.version,
+                "write_fence_version": write_fence_version,
+            }
         if (
             record is not None
             and record.version == requested.version
@@ -650,13 +739,27 @@ def apply_browser_command_to_record(
     if action == "clear":
         expected = int(command.get("expected_version") or 0)
         superseded = set(_superseded_write_versions(command))
+        write_fence_version = max(
+            int(write_fence_version or 0),
+            int(command.get("write_fence_version") or 0),
+        )
         if (
             record is not None
             and record.version != expected
             and record.version not in superseded
         ):
-            return record, {"status": "skipped_newer", "command_id": command_id, **asdict(record)}
-        return None, {"status": "cleared", "command_id": command_id, "version": expected}
+            return record, {
+                "status": "skipped_newer",
+                "command_id": command_id,
+                **asdict(record),
+                "write_fence_version": write_fence_version,
+            }
+        return None, {
+            "status": "cleared",
+            "command_id": command_id,
+            "version": expected,
+            "write_fence_version": write_fence_version,
+        }
     return record, {"status": "loaded", **(asdict(record) if record else {})}
 
 
@@ -690,9 +793,50 @@ def resolve_auth_session(
     *,
     current_version: int = 0,
     now: float | None = None,
+    force_browser_refresh: bool = False,
 ) -> AuthResolution:
     """Resolve with at most one primary refresh and one newer-token fallback."""
     persisted, should_clear = parse_persisted_refresh_session(browser_value, now=now)
+    if force_browser_refresh and current_user is not None:
+        candidate_token = (
+            persisted.refresh_token if persisted is not None
+            else current_user.refresh_token
+        )
+        candidate_version = (
+            persisted.version if persisted is not None else current_version
+        )
+        if not candidate_token:
+            return AuthResolution(
+                None,
+                clear_persisted=True,
+                clear_expected_version=candidate_version,
+                state_changed=True,
+                browser_version=candidate_version,
+            )
+        synced_user = replace(current_user, refresh_token=candidate_token)
+        refreshed, outcome = _refresh_candidate(store, candidate_token)
+        if outcome == "ok" and refreshed is not None:
+            return AuthResolution(
+                refreshed,
+                persist_refresh=True,
+                state_changed=True,
+                browser_version=candidate_version,
+            )
+        if outcome == "temporary":
+            return AuthResolution(
+                synced_user,
+                state_changed=True,
+                recovery_pending=True,
+                browser_version=candidate_version,
+            )
+        return AuthResolution(
+            None,
+            clear_persisted=True,
+            clear_expected_version=candidate_version,
+            state_changed=True,
+            browser_version=candidate_version,
+        )
+
     if should_clear and current_user is not None and current_user.refresh_token:
         return AuthResolution(
             current_user,

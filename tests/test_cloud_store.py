@@ -513,16 +513,8 @@ class CloudStoreTests(unittest.TestCase):
 
 
     @patch("src.cloud_store.requests.request")
-    def test_temporary_refresh_failure_does_not_poison_next_401(self, request):
+    def test_temporary_refresh_failure_blocks_later_refreshes_in_same_run(self, request):
         old = CloudUser("user-a", "a@example.com", "access-old", "refresh-old")
-        refreshed_data = {
-            "user": {"id": old.id, "email": old.email},
-            "access_token": "access-new",
-            "refresh_token": "refresh-new",
-            "expires_at": 2_000_003_600,
-            "expires_in": 3600,
-        }
-
         for label, refresh_failure in (
             ("503", self.response(503, {"message": "unavailable"})),
             ("timeout", requests.Timeout("refresh timed out")),
@@ -544,8 +536,11 @@ class CloudStoreTests(unittest.TestCase):
                     store.list_grading_runs(old)
 
                 self.assertEqual(request.call_count, 2)
-                self.assertNotIn(
+                self.assertIn(
                     old.id, store._auth_refresh_attempted_user_ids
+                )
+                self.assertIn(
+                    old.id, store._auth_refresh_temporarily_failed_user_ids
                 )
                 updated.assert_not_called()
                 invalidated.assert_not_called()
@@ -553,16 +548,21 @@ class CloudStoreTests(unittest.TestCase):
                 request.reset_mock()
                 request.side_effect = [
                     self.response(401, {"message": "expired again"}),
-                    self.response(200, refreshed_data),
-                    self.response(200, []),
+                    self.response(401, {"message": "expired once more"}),
                 ]
 
-                self.assertEqual(store.list_grading_runs(old), [])
-                self.assertEqual(request.call_count, 3)
-                updated.assert_called_once()
-                self.assertEqual(
-                    updated.call_args.args[0].refresh_token, "refresh-new"
+                for _ in range(2):
+                    with self.assertRaisesRegex(CloudStoreError, "temporarily"):
+                        store.list_grading_runs(old)
+
+                self.assertEqual(request.call_count, 2)
+                self.assertFalse(
+                    any(
+                        "/auth/v1/token" in call.args[1]
+                        for call in request.call_args_list
+                    )
                 )
+                updated.assert_not_called()
                 invalidated.assert_not_called()
 
 if __name__ == "__main__":

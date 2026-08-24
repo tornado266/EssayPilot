@@ -12,8 +12,10 @@ from src.auth_session import (
     AUTH_BROWSER_COMMAND_KEY,
     AUTH_BROWSER_RECOVERY_KEY,
     AUTH_BROWSER_VERSION_KEY,
+    AUTH_BROWSER_WRITE_FENCE_KEY,
     AUTH_LISTENER_RERUN_KEY,
     AUTH_LOGOUT_PENDING_KEY,
+    AUTH_RECOVERY_STATE_KEY,
     AUTH_REQUEST_RERUN_KEY,
     AUTH_BROWSER_READ_EPOCH_KEY,
     AUTH_PERSIST_WARNING_KEY,
@@ -308,6 +310,42 @@ class AuthSessionTests(unittest.TestCase):
             has_current_user=True,
             ack=matched,
         ))
+
+    def test_logout_fence_blocks_delayed_first_login_write(self):
+        state = {}
+        first_version = queue_refresh_token_write(
+            state, "refresh-first-login", now=self.now
+        )
+        delayed_write = dict(take_browser_command(state))
+        self.assertEqual(delayed_write["expected_version"], 0)
+
+        begin_logout(state, reason="user", expected_version=0)
+        clear = take_browser_command(state)
+        self.assertGreaterEqual(clear["write_fence_version"], first_version)
+
+        record, clear_value = apply_browser_command_to_record(None, clear)
+        clear_ack = acknowledge_browser_command(state, clear_value, now=self.now)
+        fence = clear_value["write_fence_version"]
+        self.assertEqual(clear_ack.status, "cleared")
+        self.assertEqual(state[AUTH_BROWSER_WRITE_FENCE_KEY], fence)
+
+        record, delayed_value = apply_browser_command_to_record(
+            record, delayed_write, write_fence_version=fence
+        )
+        self.assertIsNone(record)
+        self.assertEqual(delayed_value["status"], "skipped_cleared")
+
+        next_state = {AUTH_BROWSER_WRITE_FENCE_KEY: fence}
+        next_version = queue_refresh_token_write(
+            next_state, "refresh-next-login", now=self.now + 1
+        )
+        next_write = take_browser_command(next_state)
+        self.assertGreater(next_version, fence)
+        record, next_value = apply_browser_command_to_record(
+            None, next_write, write_fence_version=fence
+        )
+        self.assertEqual(next_value["status"], "written")
+        self.assertEqual(record.refresh_token, "refresh-next-login")
 
     def test_clear_state_cannot_be_overwritten_by_late_write(self):
         state = {AUTH_BROWSER_VERSION_KEY: 10}
@@ -643,6 +681,9 @@ class AuthSessionTests(unittest.TestCase):
         self.assertIn('window.addEventListener("storage", storageChanged)', component)
         self.assertIn("expectedVersion", component)
         self.assertIn("command_id", component)
+        self.assertIn('key + "_write_fence"', component)
+        self.assertIn("requested.version <= writeFenceVersion", component)
+        self.assertIn("window.localStorage.setItem(fenceKey", component)
 
     def test_first_login_pending_write_ignores_stale_empty_until_listener(self):
         state = {}
@@ -768,6 +809,67 @@ class AuthSessionTests(unittest.TestCase):
             [item.args[0] for item in store.refresh.call_args_list],
             ["refresh-r2", "refresh-r2"],
         )
+
+    def test_invalid_local_v20_forces_authoritative_browser_v15_refresh(self):
+        current = CloudUser(
+            "user-a", "person@example.com", "access-v20", "refresh-v20",
+            int(self.now + 3600), 3600, "expires_at",
+        )
+        recovered = CloudUser(
+            "user-a", "person@example.com", "access-v21", "refresh-v21",
+            int(self.now + 7200), 3600, "expires_at",
+        )
+        browser_v15 = self.browser_value(token="refresh-v15", version=15)
+
+        normal_store = Mock()
+        normal = resolve_auth_session(
+            normal_store, current, browser_v15, current_version=20, now=self.now
+        )
+        self.assertEqual(normal.user.refresh_token, "refresh-v20")
+        normal_store.refresh.assert_not_called()
+
+        recovery_store = Mock()
+        recovery_store.refresh.return_value = recovered
+        forced = resolve_auth_session(
+            recovery_store,
+            current,
+            browser_v15,
+            current_version=15,
+            now=self.now,
+            force_browser_refresh=True,
+        )
+        self.assertEqual(forced.user, recovered)
+        self.assertTrue(forced.persist_refresh)
+        self.assertEqual(forced.browser_version, 15)
+        recovery_store.refresh.assert_called_once_with("refresh-v15")
+
+        temporary_store = Mock()
+        temporary_store.refresh.side_effect = CloudStoreError("temporary")
+        temporary = resolve_auth_session(
+            temporary_store,
+            current,
+            browser_v15,
+            current_version=15,
+            now=self.now,
+            force_browser_refresh=True,
+        )
+        self.assertEqual(temporary.user.refresh_token, "refresh-v15")
+        self.assertEqual(temporary.browser_version, 15)
+        self.assertTrue(temporary.recovery_pending)
+        self.assertFalse(temporary.clear_persisted)
+
+        stale_listener_store = Mock()
+        stale_listener_store.refresh.return_value = recovered
+        stale_listener = resolve_auth_session(
+            stale_listener_store,
+            temporary.user,
+            {"status": "empty", "source": "read", "read_epoch": "stale"},
+            current_version=15,
+            now=self.now,
+            force_browser_refresh=True,
+        )
+        self.assertEqual(stale_listener.user, recovered)
+        stale_listener_store.refresh.assert_called_once_with("refresh-v15")
 
     def test_rejected_write_is_bounded_and_returns_to_listener(self):
         state = {}
@@ -947,6 +1049,209 @@ class AuthSessionTests(unittest.TestCase):
         self.assertNotIn(AUTH_LOGOUT_PENDING_KEY, app.session_state)
         self.assertNotIn("cloud_user", app.session_state)
         self.assertIn(warning, [item.value for item in app.warning])
+
+    def test_app_logout_fence_rejects_delayed_initial_write(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        now = time.time()
+        user = CloudUser(
+            "user-a", "person@example.com", "access-login", "refresh-login",
+            int(now + 3600), 3600, "expires_at",
+        )
+        auth_state = {}
+        queue_refresh_token_write(auth_state, user.refresh_token, now=now)
+        delayed_write = dict(take_browser_command(auth_state))
+        begin_logout(auth_state, reason="user", expected_version=0)
+        clear = take_browser_command(auth_state)
+
+        app.session_state["cloud_user"] = cloud_user_to_state(user)
+        app.session_state["user_id"] = user.id
+        app.session_state["page_mode"] = "home"
+        for key, value in auth_state.items():
+            app.session_state[key] = value
+
+        browser = {"record": None, "fence": 0, "delayed_status": ""}
+        component_actions = []
+
+        def auth_component(*_args, **kwargs):
+            data = kwargs["data"]
+            action = str(data.get("action") or "read")
+            component_actions.append(action)
+            if action == "clear":
+                browser["fence"] = max(
+                    browser["fence"], int(data.get("write_fence_version") or 0)
+                )
+                browser["record"], value = apply_browser_command_to_record(
+                    browser["record"],
+                    data,
+                    write_fence_version=browser["fence"],
+                )
+                browser["record"], delayed_value = apply_browser_command_to_record(
+                    browser["record"],
+                    delayed_write,
+                    write_fence_version=browser["fence"],
+                )
+                browser["delayed_status"] = delayed_value["status"]
+            else:
+                value = {
+                    "status": "empty",
+                    "source": "read",
+                    "read_epoch": data["read_epoch"],
+                    "write_fence_version": browser["fence"],
+                }
+            return SimpleNamespace(auth_session=value, auth_wake=0)
+
+        with (
+            patch("src.auth_session._AUTH_COMPONENT", side_effect=auth_component),
+            patch("src.cloud_store._setting", return_value=""),
+            patch("src.ai_grader.grade_essay_package") as grade,
+            patch("src.storage.save_markdown_record") as local_save,
+            patch("src.error_book.append_error_book") as error_save,
+            patch.object(SupabaseStore, "save_grading_cycle") as cloud_save,
+            patch("src.product_analytics.record_event_safely", return_value=None),
+            patch("src.visitor_identity.browser_visitor_id", return_value=""),
+        ):
+            for _ in range(3):
+                app.run()
+                if AUTH_LOGOUT_PENDING_KEY not in app.session_state:
+                    break
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(browser["delayed_status"], "skipped_cleared")
+        self.assertIsNone(browser["record"])
+        self.assertIn("clear", component_actions)
+        self.assertNotIn(AUTH_LOGOUT_PENDING_KEY, app.session_state)
+        self.assertNotIn("cloud_user", app.session_state)
+        self.assertEqual(
+            app.session_state[AUTH_BROWSER_WRITE_FENCE_KEY],
+            clear["write_fence_version"],
+        )
+        grade.assert_not_called()
+        local_save.assert_not_called()
+        error_save.assert_not_called()
+        cloud_save.assert_not_called()
+
+    def test_app_invalid_v20_adopts_protected_browser_v15(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        now = time.time()
+        invalid_local = CloudUser(
+            "user-a", "person@example.com", "access-v20", "refresh-v20",
+            int(now + 3600), 3600, "expires_at",
+        )
+        recovered = CloudUser(
+            invalid_local.id, invalid_local.email, "access-v21", "refresh-v21",
+            int(now + 7200), 3600, "expires_at",
+        )
+        app.session_state["cloud_user"] = cloud_user_to_state(invalid_local)
+        app.session_state["user_id"] = invalid_local.id
+        app.session_state["page_mode"] = "home"
+        app.session_state[AUTH_USER_VERSION_KEY] = 20
+        app.session_state[AUTH_BROWSER_VERSION_KEY] = 10
+        app.session_state[AUTH_LOGOUT_PENDING_KEY] = {
+            "reason": "invalid",
+            "clear_retries": 0,
+        }
+        app.session_state[AUTH_BROWSER_COMMAND_KEY] = {
+            "action": "clear",
+            "command_id": "invalid-v20-clear",
+            "expected_version": 10,
+            "write_fence_version": 20,
+            "superseded_write_versions": [20],
+        }
+
+        browser = {
+            "record": PersistedRefreshSession("refresh-v15", now, 15),
+            "fence": 0,
+            "stale_empty_reads": 1,
+        }
+        component_actions = []
+
+        def auth_component(*_args, **kwargs):
+            data = kwargs["data"]
+            action = str(data.get("action") or "read")
+            component_actions.append(action)
+            if action == "clear":
+                browser["fence"] = max(
+                    browser["fence"], int(data.get("write_fence_version") or 0)
+                )
+                browser["record"], value = apply_browser_command_to_record(
+                    browser["record"],
+                    data,
+                    write_fence_version=browser["fence"],
+                )
+            elif action == "write":
+                browser["record"], value = apply_browser_command_to_record(
+                    browser["record"],
+                    data,
+                    write_fence_version=browser["fence"],
+                )
+            elif browser["stale_empty_reads"] > 0:
+                browser["stale_empty_reads"] -= 1
+                value = {
+                    "status": "empty",
+                    "source": "read",
+                    "read_epoch": data["read_epoch"],
+                    "write_fence_version": browser["fence"],
+                }
+            elif browser["record"] is None:
+                value = {
+                    "status": "empty",
+                    "source": "read",
+                    "read_epoch": data["read_epoch"],
+                    "write_fence_version": browser["fence"],
+                }
+            else:
+                record = browser["record"]
+                value = {
+                    "status": "loaded",
+                    "source": "read",
+                    "read_epoch": data["read_epoch"],
+                    "refresh_token": record.refresh_token,
+                    "saved_at": record.saved_at,
+                    "version": record.version,
+                    "write_fence_version": browser["fence"],
+                }
+            return SimpleNamespace(auth_session=value, auth_wake=0)
+
+        with (
+            patch("src.auth_session._AUTH_COMPONENT", side_effect=auth_component),
+            patch("src.cloud_store._setting", return_value=""),
+            patch.object(SupabaseStore, "refresh", return_value=recovered) as refresh,
+            patch("src.ai_grader.grade_essay_package") as grade,
+            patch("src.storage.save_markdown_record") as local_save,
+            patch("src.error_book.append_error_book") as error_save,
+            patch.object(SupabaseStore, "save_grading_cycle") as cloud_save,
+            patch("src.product_analytics.record_event_safely", return_value=None),
+            patch("src.visitor_identity.browser_visitor_id", return_value=""),
+        ):
+            for _ in range(5):
+                app.run()
+                if (
+                    AUTH_BROWSER_COMMAND_KEY not in app.session_state
+                    and browser["record"].refresh_token == "refresh-v21"
+                    and component_actions[-1] == "read"
+                ):
+                    break
+
+        self.assertEqual(len(app.exception), 0)
+        refresh.assert_called_once_with("refresh-v15")
+        self.assertEqual(browser["fence"], 20)
+        self.assertEqual(browser["record"].refresh_token, "refresh-v21")
+        self.assertGreater(browser["record"].version, browser["fence"])
+        self.assertEqual(
+            app.session_state["cloud_user"]["refresh_token"], "refresh-v21"
+        )
+        self.assertEqual(
+            app.session_state[AUTH_USER_VERSION_KEY], browser["record"].version
+        )
+        self.assertNotIn(AUTH_LOGOUT_PENDING_KEY, app.session_state)
+        self.assertNotIn(AUTH_RECOVERY_STATE_KEY, app.session_state)
+        self.assertNotIn(AUTH_BROWSER_COMMAND_KEY, app.session_state)
+        self.assertEqual(component_actions.count("clear"), 1)
+        self.assertIn("write", component_actions)
+        grade.assert_not_called()
+        local_save.assert_not_called()
+        error_save.assert_not_called()
+        cloud_save.assert_not_called()
 
     def test_app_second_401_reruns_to_clear_ack_without_side_effects(self):
         app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)

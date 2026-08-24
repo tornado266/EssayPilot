@@ -104,6 +104,7 @@ class SupabaseStore:
         self._auth_user_invalidated: Callable[[CloudUser], None] | None = None
         self._runtime_user: CloudUser | None = None
         self._auth_refresh_attempted_user_ids: set[str] = set()
+        self._auth_refresh_temporarily_failed_user_ids: set[str] = set()
         self._auth_blocked_user_ids: set[str] = set()
 
     def bind_auth_session(
@@ -231,6 +232,10 @@ class SupabaseStore:
                 "The saved login session has expired.", status_code=401
             )
         if active_user.id in self._auth_refresh_attempted_user_ids:
+            if active_user.id in self._auth_refresh_temporarily_failed_user_ids:
+                raise CloudStoreError(
+                    "The saved login session could not be refreshed temporarily."
+                )
             self._invalidate_runtime_user(active_user)
             raise CloudSessionExpiredError(
                 "The saved login session has expired.", status_code=401
@@ -242,7 +247,7 @@ class SupabaseStore:
             self._invalidate_runtime_user(active_user)
             raise
         except CloudStoreError:
-            self._auth_refresh_attempted_user_ids.discard(active_user.id)
+            self._auth_refresh_temporarily_failed_user_ids.add(active_user.id)
             raise
         self._runtime_user = refreshed
         if self._auth_user_updated is not None:

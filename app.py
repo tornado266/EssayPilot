@@ -8,6 +8,7 @@ import logging
 import re
 import uuid
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 
 import altair as alt
@@ -303,6 +304,7 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
     browser_value = browser_refresh_session(command)
     ack = acknowledge_browser_command(st.session_state, browser_value)
     current_user = session_cloud_user()
+    force_browser_refresh = False
 
     logout_pending = st.session_state.get(AUTH_LOGOUT_PENDING_KEY)
     if isinstance(logout_pending, dict):
@@ -313,6 +315,18 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
         if ack is not None and ack.status == "skipped_newer" and ack.record is not None:
             if reason == "invalid":
                 st.session_state.pop(AUTH_LOGOUT_PENDING_KEY, None)
+                if current_user is not None:
+                    current_user = replace(
+                        current_user, refresh_token=ack.record.refresh_token
+                    )
+                    write_cloud_user_state(current_user, persist=False)
+                st.session_state[AUTH_USER_VERSION_KEY] = ack.record.version
+                st.session_state[AUTH_BROWSER_VERSION_KEY] = ack.record.version
+                recovery = st.session_state.setdefault(
+                    AUTH_RECOVERY_STATE_KEY, {"attempts": 0}
+                )
+                recovery["force_browser_refresh"] = True
+                force_browser_refresh = True
                 browser_value = {
                     "status": "loaded",
                     "source": "ack",
@@ -375,6 +389,10 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
             browser_record.version,
         )
     recovery_gate = st.session_state.get(AUTH_RECOVERY_STATE_KEY)
+    if isinstance(recovery_gate, dict):
+        force_browser_refresh = force_browser_refresh or bool(
+            recovery_gate.get("force_browser_refresh")
+        )
     if isinstance(recovery_gate, dict) and int(recovery_gate.get("attempts") or 0) >= 1:
         if recovery_gate.pop("retry_due", False):
             pass
@@ -388,6 +406,7 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
         current_user,
         browser_value,
         current_version=int(st.session_state.get(AUTH_USER_VERSION_KEY) or 0),
+        force_browser_refresh=force_browser_refresh,
     )
     if resolution.clear_persisted:
         begin_logout(
