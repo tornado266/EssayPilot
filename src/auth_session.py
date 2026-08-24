@@ -29,7 +29,8 @@ AUTH_LISTENER_RERUN_KEY = "auth_listener_rerun"
 AUTH_REQUEST_RERUN_KEY = "auth_request_rerun"
 AUTH_BROWSER_READ_EPOCH_KEY = "auth_browser_read_epoch"
 AUTH_PERSIST_WARNING_KEY = "auth_persist_warning"
-AUTH_BROWSER_WRITE_FENCE_KEY = "auth_browser_write_fence"
+AUTH_BROWSER_TOMBSTONES_KEY = "auth_browser_tombstones"
+_MAX_BROWSER_TOMBSTONES = 32
 AUTH_RETENTION_SECONDS = 7 * 24 * 60 * 60
 ACCESS_REFRESH_SKEW_SECONDS = 5 * 60
 _MAX_REFRESH_TOKEN_LENGTH = 8192
@@ -40,7 +41,8 @@ _AUTH_COMPONENT = st.components.v2.component(
     js=f"""
     export default function({{ data, setStateValue }}) {{
       const key = {AUTH_STORAGE_KEY!r};
-      const fenceKey = key + "_write_fence";
+      const tombstoneKey = key + "_write_tombstones";
+      const maxTombstones = {_MAX_BROWSER_TOMBSTONES};
       const retentionSeconds = {AUTH_RETENTION_SECONDS};
       const maxTokenLength = {_MAX_REFRESH_TOKEN_LENGTH};
       const action = data?.action || "read";
@@ -66,10 +68,65 @@ _AUTH_COMPONENT = st.components.v2.component(
       }};
 
       const currentRecord = () => parseRecord(window.localStorage.getItem(key));
-      const currentWriteFence = () => {{
-        const fence = Number(window.localStorage.getItem(fenceKey) || 0);
-        return Number.isFinite(fence) && fence > 0 ? fence : 0;
+      const parseTombstones = (raw) => {{
+        const now = Date.now() / 1000;
+        let stored = [];
+        try {{
+          stored = JSON.parse(raw || "[]");
+        }} catch (_) {{
+          stored = [];
+        }}
+        if (!Array.isArray(stored)) stored = [];
+        const byVersion = new Map();
+        for (const item of stored) {{
+          const version = Number(item?.version || 0);
+          const expiresAt = Number(item?.expires_at || 0);
+          if (
+            !Number.isSafeInteger(version) || version <= 0 ||
+            !Number.isFinite(expiresAt) || expiresAt <= now
+          ) continue;
+          const boundedExpiry = Math.min(expiresAt, now + retentionSeconds);
+          byVersion.set(
+            version, Math.max(byVersion.get(version) || 0, boundedExpiry)
+          );
+        }}
+        return Array.from(byVersion, ([version, expires_at]) => ({{
+          version, expires_at
+        }}))
+          .sort((left, right) => left.expires_at - right.expires_at)
+          .slice(-maxTombstones);
       }};
+      const currentTombstones = () => {{
+        const raw = window.localStorage.getItem(tombstoneKey);
+        const active = parseTombstones(raw);
+        const serialized = JSON.stringify(active);
+        if (active.length > 0 && raw !== serialized) {{
+          window.localStorage.setItem(tombstoneKey, serialized);
+        }} else if (active.length === 0 && raw) {{
+          window.localStorage.removeItem(tombstoneKey);
+        }}
+        return active;
+      }};
+      const addTombstones = (versions) => {{
+        const now = Date.now() / 1000;
+        const byVersion = new Map(
+          currentTombstones().map((item) => [item.version, item.expires_at])
+        );
+        for (const rawVersion of versions) {{
+          const version = Number(rawVersion);
+          if (!Number.isSafeInteger(version) || version <= 0) continue;
+          byVersion.set(version, now + retentionSeconds);
+        }}
+        const active = Array.from(byVersion, ([version, expires_at]) => ({{
+          version, expires_at
+        }}))
+          .sort((left, right) => left.expires_at - right.expires_at)
+          .slice(-maxTombstones);
+        window.localStorage.setItem(tombstoneKey, JSON.stringify(active));
+        return active.map((item) => item.version);
+      }};
+      const currentTombstoneVersions = () =>
+        currentTombstones().map((item) => item.version);
       const emitRecord = (record, status, extra = {{}}) => setStateValue(
         "auth_session",
         {{ status, ...record, ...extra }}
@@ -91,28 +148,31 @@ _AUTH_COMPONENT = st.components.v2.component(
           const now = Date.now() / 1000;
           const existing = currentRecord();
           const expectedVersion = Number(data?.expected_version || 0);
-          const writeFenceVersion = currentWriteFence();
+          const tombstoneVersions = currentTombstoneVersions();
+          const tombstoneExtra = {{ tombstone_versions: tombstoneVersions }};
           if (
             !requested.refresh_token || requested.refresh_token.length > maxTokenLength ||
             !Number.isFinite(requested.saved_at) || requested.saved_at <= 0 ||
             requested.saved_at > now + 300 || now - requested.saved_at >= retentionSeconds ||
             !Number.isFinite(requested.version) || requested.version <= 0
           ) {{
-            emitRecord(existing || {{}}, "rejected", {{ command_id: commandId }});
+            emitRecord(existing || {{}}, "rejected", {{
+              command_id: commandId, ...tombstoneExtra
+            }});
             return;
           }}
-          if (requested.version <= writeFenceVersion) {{
+          if (tombstoneVersions.includes(requested.version)) {{
             if (existing) {{
               emitRecord(existing, "skipped_newer", {{
                 command_id: commandId,
-                write_fence_version: writeFenceVersion,
+                ...tombstoneExtra,
               }});
             }} else {{
               setStateValue("auth_session", {{
                 status: "skipped_cleared",
                 command_id: commandId,
                 version: requested.version,
-                write_fence_version: writeFenceVersion,
+                ...tombstoneExtra,
               }});
             }}
             return;
@@ -121,15 +181,8 @@ _AUTH_COMPONENT = st.components.v2.component(
             existing && existing.version === requested.version &&
             existing.refresh_token === requested.refresh_token
           ) {{
-            emitRecord(existing, "written", {{ command_id: commandId }});
-            return;
-          }}
-          if (!existing && expectedVersion > 0) {{
-            setStateValue("auth_session", {{
-              status: "skipped_cleared",
-              command_id: commandId,
-              version: expectedVersion,
-              write_fence_version: writeFenceVersion,
+            emitRecord(existing, "written", {{
+              command_id: commandId, ...tombstoneExtra
             }});
             return;
           }}
@@ -138,7 +191,9 @@ _AUTH_COMPONENT = st.components.v2.component(
             existing.version !== expectedVersion &&
             !supersededWriteVersions.has(existing.version)
           ) {{
-            emitRecord(existing, "skipped_newer", {{ command_id: commandId }});
+            emitRecord(existing, "skipped_newer", {{
+              command_id: commandId, ...tombstoneExtra
+            }});
             return;
           }}
           if (
@@ -151,33 +206,35 @@ _AUTH_COMPONENT = st.components.v2.component(
               )
             )
           ) {{
-            emitRecord(existing, "skipped_newer", {{ command_id: commandId }});
+            emitRecord(existing, "skipped_newer", {{
+              command_id: commandId, ...tombstoneExtra
+            }});
             return;
           }}
           window.localStorage.setItem(key, JSON.stringify(requested));
-          emitRecord(requested, "written", {{ command_id: commandId }});
+          emitRecord(requested, "written", {{
+            command_id: commandId, ...tombstoneExtra
+          }});
           return;
         }}
 
         if (action === "clear") {{
           const existing = currentRecord();
           const expectedVersion = Number(data?.expected_version || 0);
-          const requestedWriteFence = Number(data?.write_fence_version || 0);
-          const writeFenceVersion = Math.max(
-            currentWriteFence(),
-            Number.isFinite(requestedWriteFence) && requestedWriteFence > 0
-              ? requestedWriteFence : 0
-          );
-          if (writeFenceVersion > 0) {{
-            window.localStorage.setItem(fenceKey, String(writeFenceVersion));
-          }}
+          const requestedTombstones = Array.isArray(data?.tombstone_versions)
+            ? data.tombstone_versions : [];
+          const tombstoneVersions = addTombstones([
+            expectedVersion,
+            ...supersededWriteVersions,
+            ...requestedTombstones,
+          ]);
           if (
             existing && existing.version !== expectedVersion &&
             !supersededWriteVersions.has(existing.version)
           ) {{
             emitRecord(existing, "skipped_newer", {{
               command_id: commandId,
-              write_fence_version: writeFenceVersion,
+              tombstone_versions: tombstoneVersions,
             }});
             return;
           }}
@@ -186,17 +243,17 @@ _AUTH_COMPONENT = st.components.v2.component(
             status: "cleared",
             command_id: commandId,
             version: expectedVersion,
-            write_fence_version: writeFenceVersion,
+            tombstone_versions: tombstoneVersions,
           }});
           return;
         }}
 
-        const writeFenceVersion = currentWriteFence();
+        const tombstoneVersions = currentTombstoneVersions();
         const raw = window.localStorage.getItem(key);
         if (!raw) {{
           setStateValue("auth_session", {{
             status: "empty", source: "read", read_epoch: readEpoch,
-            write_fence_version: writeFenceVersion,
+            tombstone_versions: tombstoneVersions,
           }});
         }} else {{
           const stored = currentRecord();
@@ -205,7 +262,7 @@ _AUTH_COMPONENT = st.components.v2.component(
             window.localStorage.removeItem(key);
             setStateValue("auth_session", {{
               status: "invalid", source: "read", read_epoch: readEpoch, version: 0,
-              write_fence_version: writeFenceVersion,
+              tombstone_versions: tombstoneVersions,
             }});
           }} else if (stored.saved_at > now + 300 || now - stored.saved_at >= retentionSeconds) {{
             const expiredVersion = Number(stored?.version || 0);
@@ -213,12 +270,12 @@ _AUTH_COMPONENT = st.components.v2.component(
             setStateValue("auth_session", {{
               status: "expired", source: "read",
               read_epoch: readEpoch, version: expiredVersion,
-              write_fence_version: writeFenceVersion,
+              tombstone_versions: tombstoneVersions,
             }});
           }} else {{
             emitRecord(stored, "loaded", {{
               source: "read", read_epoch: readEpoch,
-              write_fence_version: writeFenceVersion,
+              tombstone_versions: tombstoneVersions,
             }});
           }}
         }}
@@ -228,14 +285,14 @@ _AUTH_COMPONENT = st.components.v2.component(
           if (document.visibilityState === "visible") wake();
         }};
         const storageChanged = (event) => {{
-          if (event.key === fenceKey) {{ wake(); return; }}
+          if (event.key === tombstoneKey) {{ wake(); return; }}
           if (event.key !== key) return;
           try {{
             const newer = parseRecord(event.newValue);
             if (newer) {{
               emitRecord(newer, "loaded", {{
                 source: "storage", read_epoch: readEpoch,
-                write_fence_version: currentWriteFence(),
+                tombstone_versions: currentTombstoneVersions(),
               }});
             }} else {{
               const previous = parseRecord(event.oldValue);
@@ -245,7 +302,7 @@ _AUTH_COMPONENT = st.components.v2.component(
                 source: "storage",
                 read_epoch: readEpoch,
                 version: Number(previous?.version || 0),
-                write_fence_version: currentWriteFence(),
+                tombstone_versions: currentTombstoneVersions(),
               }});
             }}
           }} catch (_) {{
@@ -345,27 +402,47 @@ def _superseded_write_versions(
     return versions[-8:]
 
 
-def _observe_browser_write_fence(
+def _normalize_tombstone_versions(values: object) -> list[int]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    versions: list[int] = []
+    for value in values:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if (
+            not numeric.is_integer()
+            or numeric <= 0
+            or numeric > 9_007_199_254_740_991
+        ):
+            continue
+        version = int(numeric)
+        if version not in versions:
+            versions.append(version)
+    return versions[-_MAX_BROWSER_TOMBSTONES:]
+
+
+def _observe_browser_tombstones(
     state: MutableMapping[str, Any], value: object
 ) -> None:
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or "tombstone_versions" not in value:
         return
-    try:
-        fence = int(float(value.get("write_fence_version") or 0))
-    except (TypeError, ValueError):
-        return
-    if fence <= 0:
-        return
-    state[AUTH_BROWSER_WRITE_FENCE_KEY] = max(
-        int(state.get(AUTH_BROWSER_WRITE_FENCE_KEY) or 0), fence
-    )
+    versions = _normalize_tombstone_versions(value.get("tombstone_versions"))
+    if versions:
+        state[AUTH_BROWSER_TOMBSTONES_KEY] = versions
+    else:
+        state.pop(AUTH_BROWSER_TOMBSTONES_KEY, None)
 
 
 def _next_version(state: MutableMapping[str, Any], now: float) -> int:
+    tombstone_versions = _normalize_tombstone_versions(
+        state.get(AUTH_BROWSER_TOMBSTONES_KEY)
+    )
     known = max(
         int(state.get(AUTH_BROWSER_VERSION_KEY) or 0),
         int(state.get(AUTH_USER_VERSION_KEY) or 0),
-        int(state.get(AUTH_BROWSER_WRITE_FENCE_KEY) or 0),
+        *tombstone_versions,
     )
     return max(known + 1, int(now * 1_000_000))
 
@@ -420,19 +497,18 @@ def queue_refresh_token_clear(
     state.pop(AUTH_BROWSER_READ_EPOCH_KEY, None)
     command_id = str(uuid.uuid4())
     superseded = _superseded_write_versions(pending, include_current=True)
-    write_fence_version = max(
+    tombstone_versions = _normalize_tombstone_versions([
         version,
         int(state.get(AUTH_USER_VERSION_KEY) or 0),
-        int(state.get(AUTH_BROWSER_WRITE_FENCE_KEY) or 0),
         *superseded,
-    )
+    ])
     command: dict[str, Any] = {
         "action": "clear",
         "command_id": command_id,
         "expected_version": version,
     }
-    if write_fence_version > 0:
-        command["write_fence_version"] = write_fence_version
+    if tombstone_versions:
+        command["tombstone_versions"] = tombstone_versions
     if superseded:
         command["superseded_write_versions"] = superseded
     state[AUTH_BROWSER_COMMAND_KEY] = command
@@ -502,7 +578,7 @@ def acknowledge_browser_command(
     *,
     now: float | None = None,
 ) -> BrowserAck | None:
-    _observe_browser_write_fence(state, value)
+    _observe_browser_tombstones(state, value)
     pending = state.get(AUTH_BROWSER_COMMAND_KEY)
     if not isinstance(pending, dict) or not isinstance(value, dict):
         return None
@@ -575,7 +651,7 @@ def mark_browser_listener_stable(
     if not read_epoch or value_epoch != read_epoch:
         return False
     state.pop(AUTH_LISTENER_RERUN_KEY, None)
-    _observe_browser_write_fence(state, value)
+    _observe_browser_tombstones(state, value)
     return True
 
 
@@ -679,7 +755,7 @@ def apply_browser_command_to_record(
     record: PersistedRefreshSession | None,
     command: dict[str, Any],
     *,
-    write_fence_version: int = 0,
+    tombstone_versions: object = (),
 ) -> tuple[PersistedRefreshSession | None, dict[str, Any]]:
     """Pure mirror of the component's idempotent write/clear conflict rules."""
     action = str(command.get("action") or "")
@@ -692,20 +768,20 @@ def apply_browser_command_to_record(
         )
         expected = int(command.get("expected_version") or 0)
         superseded = set(_superseded_write_versions(command))
-        write_fence_version = max(0, int(write_fence_version or 0))
-        if requested.version <= write_fence_version:
+        active_tombstones = _normalize_tombstone_versions(tombstone_versions)
+        if requested.version in active_tombstones:
             if record is not None:
                 return record, {
                     "status": "skipped_newer",
                     "command_id": command_id,
                     **asdict(record),
-                    "write_fence_version": write_fence_version,
+                    "tombstone_versions": active_tombstones,
                 }
             return None, {
                 "status": "skipped_cleared",
                 "command_id": command_id,
                 "version": requested.version,
-                "write_fence_version": write_fence_version,
+                "tombstone_versions": active_tombstones,
             }
         if (
             record is not None
@@ -713,12 +789,6 @@ def apply_browser_command_to_record(
             and record.refresh_token == requested.refresh_token
         ):
             return record, {"status": "written", "command_id": command_id, **asdict(record)}
-        if record is None and expected > 0:
-            return None, {
-                "status": "skipped_cleared",
-                "command_id": command_id,
-                "version": expected,
-            }
         if (
             record is not None
             and expected > 0
@@ -738,11 +808,14 @@ def apply_browser_command_to_record(
         return requested, {"status": "written", "command_id": command_id, **asdict(requested)}
     if action == "clear":
         expected = int(command.get("expected_version") or 0)
-        superseded = set(_superseded_write_versions(command))
-        write_fence_version = max(
-            int(write_fence_version or 0),
-            int(command.get("write_fence_version") or 0),
-        )
+        superseded_versions = _superseded_write_versions(command)
+        superseded = set(superseded_versions)
+        active_tombstones = _normalize_tombstone_versions([
+            *_normalize_tombstone_versions(tombstone_versions),
+            expected,
+            *superseded_versions,
+            *_normalize_tombstone_versions(command.get("tombstone_versions")),
+        ])
         if (
             record is not None
             and record.version != expected
@@ -752,15 +825,19 @@ def apply_browser_command_to_record(
                 "status": "skipped_newer",
                 "command_id": command_id,
                 **asdict(record),
-                "write_fence_version": write_fence_version,
+                "tombstone_versions": active_tombstones,
             }
         return None, {
             "status": "cleared",
             "command_id": command_id,
             "version": expected,
-            "write_fence_version": write_fence_version,
+            "tombstone_versions": active_tombstones,
         }
-    return record, {"status": "loaded", **(asdict(record) if record else {})}
+    return record, {
+        "status": "loaded",
+        **(asdict(record) if record else {}),
+        "tombstone_versions": _normalize_tombstone_versions(tombstone_versions),
+    }
 
 
 def access_token_needs_refresh(user: CloudUser, *, now: float | None = None) -> bool:

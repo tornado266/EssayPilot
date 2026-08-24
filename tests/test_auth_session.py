@@ -12,7 +12,7 @@ from src.auth_session import (
     AUTH_BROWSER_COMMAND_KEY,
     AUTH_BROWSER_RECOVERY_KEY,
     AUTH_BROWSER_VERSION_KEY,
-    AUTH_BROWSER_WRITE_FENCE_KEY,
+    AUTH_BROWSER_TOMBSTONES_KEY,
     AUTH_LISTENER_RERUN_KEY,
     AUTH_LOGOUT_PENDING_KEY,
     AUTH_RECOVERY_STATE_KEY,
@@ -299,7 +299,9 @@ class AuthSessionTests(unittest.TestCase):
         queue_refresh_token_write(state, "rotated-token", now=self.now)
         command = take_browser_command(state)
 
-        remaining, ack = apply_browser_command_to_record(None, command)
+        remaining, ack = apply_browser_command_to_record(
+            None, command, tombstone_versions=[command["version"]]
+        )
 
         self.assertIsNone(remaining)
         self.assertEqual(ack["status"], "skipped_cleared")
@@ -311,7 +313,7 @@ class AuthSessionTests(unittest.TestCase):
             ack=matched,
         ))
 
-    def test_logout_fence_blocks_delayed_first_login_write(self):
+    def test_exact_tombstone_blocks_only_the_cleared_login_write(self):
         state = {}
         first_version = queue_refresh_token_write(
             state, "refresh-first-login", now=self.now
@@ -321,28 +323,48 @@ class AuthSessionTests(unittest.TestCase):
 
         begin_logout(state, reason="user", expected_version=0)
         clear = take_browser_command(state)
-        self.assertGreaterEqual(clear["write_fence_version"], first_version)
+        self.assertIn(first_version, clear["tombstone_versions"])
 
         record, clear_value = apply_browser_command_to_record(None, clear)
         clear_ack = acknowledge_browser_command(state, clear_value, now=self.now)
-        fence = clear_value["write_fence_version"]
+        active_tombstones = clear_value["tombstone_versions"]
         self.assertEqual(clear_ack.status, "cleared")
-        self.assertEqual(state[AUTH_BROWSER_WRITE_FENCE_KEY], fence)
+        self.assertEqual(
+            state[AUTH_BROWSER_TOMBSTONES_KEY], active_tombstones
+        )
 
         record, delayed_value = apply_browser_command_to_record(
-            record, delayed_write, write_fence_version=fence
+            record, delayed_write, tombstone_versions=active_tombstones
         )
         self.assertIsNone(record)
         self.assertEqual(delayed_value["status"], "skipped_cleared")
 
-        next_state = {AUTH_BROWSER_WRITE_FENCE_KEY: fence}
+        independent_version = first_version - 1
+        independent_write = {
+            "action": "write",
+            "command_id": "other-tab-login",
+            "refresh_token": "refresh-other-tab",
+            "saved_at": self.now,
+            "version": independent_version,
+            "expected_version": independent_version - 1,
+        }
+        record, independent_value = apply_browser_command_to_record(
+            record,
+            independent_write,
+            tombstone_versions=active_tombstones,
+        )
+        self.assertEqual(independent_value["status"], "written")
+        self.assertEqual(record.refresh_token, "refresh-other-tab")
+        self.assertLess(independent_version, max(active_tombstones))
+
+        next_state = {AUTH_BROWSER_TOMBSTONES_KEY: active_tombstones}
         next_version = queue_refresh_token_write(
             next_state, "refresh-next-login", now=self.now + 1
         )
         next_write = take_browser_command(next_state)
-        self.assertGreater(next_version, fence)
+        self.assertGreater(next_version, max(active_tombstones))
         record, next_value = apply_browser_command_to_record(
-            None, next_write, write_fence_version=fence
+            record, next_write, tombstone_versions=active_tombstones
         )
         self.assertEqual(next_value["status"], "written")
         self.assertEqual(record.refresh_token, "refresh-next-login")
@@ -681,9 +703,14 @@ class AuthSessionTests(unittest.TestCase):
         self.assertIn('window.addEventListener("storage", storageChanged)', component)
         self.assertIn("expectedVersion", component)
         self.assertIn("command_id", component)
-        self.assertIn('key + "_write_fence"', component)
-        self.assertIn("requested.version <= writeFenceVersion", component)
-        self.assertIn("window.localStorage.setItem(fenceKey", component)
+        self.assertIn('key + "_write_tombstones"', component)
+        self.assertIn("tombstoneVersions.includes(requested.version)", component)
+        self.assertNotIn("requested.version <= writeFenceVersion", component)
+        self.assertNotIn("!existing && expectedVersion > 0", component)
+        self.assertIn("expires_at", component)
+        self.assertIn("now + retentionSeconds", component)
+        self.assertIn("slice(-maxTombstones)", component)
+        self.assertNotIn("fenceKey", component)
 
     def test_first_login_pending_write_ignores_stale_empty_until_listener(self):
         state = {}
@@ -1050,18 +1077,30 @@ class AuthSessionTests(unittest.TestCase):
         self.assertNotIn("cloud_user", app.session_state)
         self.assertIn(warning, [item.value for item in app.warning])
 
-    def test_app_logout_fence_rejects_delayed_initial_write(self):
+    def test_app_exact_tombstone_allows_lower_other_tab_login(self):
         app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
         now = time.time()
         user = CloudUser(
             "user-a", "person@example.com", "access-login", "refresh-login",
             int(now + 3600), 3600, "expires_at",
         )
+        other_user = CloudUser(
+            "user-b", "other@example.com", "access-other",
+            "refresh-other-rotated", int(now + 7200), 3600, "expires_at",
+        )
         auth_state = {}
         queue_refresh_token_write(auth_state, user.refresh_token, now=now)
         delayed_write = dict(take_browser_command(auth_state))
         begin_logout(auth_state, reason="user", expected_version=0)
         clear = take_browser_command(auth_state)
+        independent_write = {
+            "action": "write",
+            "command_id": "other-tab-login",
+            "refresh_token": "refresh-other-tab",
+            "saved_at": now,
+            "version": delayed_write["version"] - 1,
+            "expected_version": delayed_write["version"] - 2,
+        }
 
         app.session_state["cloud_user"] = cloud_user_to_state(user)
         app.session_state["user_id"] = user.id
@@ -1069,7 +1108,12 @@ class AuthSessionTests(unittest.TestCase):
         for key, value in auth_state.items():
             app.session_state[key] = value
 
-        browser = {"record": None, "fence": 0, "delayed_status": ""}
+        browser = {
+            "record": None,
+            "tombstones": [],
+            "delayed_status": "",
+            "independent_status": "",
+        }
         component_actions = []
 
         def auth_component(*_args, **kwargs):
@@ -1077,32 +1121,55 @@ class AuthSessionTests(unittest.TestCase):
             action = str(data.get("action") or "read")
             component_actions.append(action)
             if action == "clear":
-                browser["fence"] = max(
-                    browser["fence"], int(data.get("write_fence_version") or 0)
-                )
                 browser["record"], value = apply_browser_command_to_record(
                     browser["record"],
                     data,
-                    write_fence_version=browser["fence"],
+                    tombstone_versions=browser["tombstones"],
                 )
+                browser["tombstones"] = value["tombstone_versions"]
                 browser["record"], delayed_value = apply_browser_command_to_record(
                     browser["record"],
                     delayed_write,
-                    write_fence_version=browser["fence"],
+                    tombstone_versions=browser["tombstones"],
                 )
                 browser["delayed_status"] = delayed_value["status"]
-            else:
+                browser["record"], independent_value = apply_browser_command_to_record(
+                    browser["record"],
+                    independent_write,
+                    tombstone_versions=browser["tombstones"],
+                )
+                browser["independent_status"] = independent_value["status"]
+            elif action == "write":
+                browser["record"], value = apply_browser_command_to_record(
+                    browser["record"],
+                    data,
+                    tombstone_versions=browser["tombstones"],
+                )
+                value["tombstone_versions"] = browser["tombstones"]
+            elif browser["record"] is None:
                 value = {
                     "status": "empty",
                     "source": "read",
                     "read_epoch": data["read_epoch"],
-                    "write_fence_version": browser["fence"],
+                    "tombstone_versions": browser["tombstones"],
+                }
+            else:
+                record = browser["record"]
+                value = {
+                    "status": "loaded",
+                    "source": "read",
+                    "read_epoch": data["read_epoch"],
+                    "refresh_token": record.refresh_token,
+                    "saved_at": record.saved_at,
+                    "version": record.version,
+                    "tombstone_versions": browser["tombstones"],
                 }
             return SimpleNamespace(auth_session=value, auth_wake=0)
 
         with (
             patch("src.auth_session._AUTH_COMPONENT", side_effect=auth_component),
             patch("src.cloud_store._setting", return_value=""),
+            patch.object(SupabaseStore, "refresh", return_value=other_user) as refresh,
             patch("src.ai_grader.grade_essay_package") as grade,
             patch("src.storage.save_markdown_record") as local_save,
             patch("src.error_book.append_error_book") as error_save,
@@ -1110,20 +1177,31 @@ class AuthSessionTests(unittest.TestCase):
             patch("src.product_analytics.record_event_safely", return_value=None),
             patch("src.visitor_identity.browser_visitor_id", return_value=""),
         ):
-            for _ in range(3):
+            for _ in range(5):
                 app.run()
-                if AUTH_LOGOUT_PENDING_KEY not in app.session_state:
+                if (
+                    AUTH_BROWSER_COMMAND_KEY not in app.session_state
+                    and "cloud_user" in app.session_state
+                    and app.session_state["cloud_user"]["id"] == other_user.id
+                    and component_actions[-1] == "read"
+                ):
                     break
 
         self.assertEqual(len(app.exception), 0)
         self.assertEqual(browser["delayed_status"], "skipped_cleared")
-        self.assertIsNone(browser["record"])
+        self.assertEqual(browser["independent_status"], "written")
+        self.assertEqual(browser["record"].refresh_token, "refresh-other-rotated")
+        self.assertLess(independent_write["version"], max(browser["tombstones"]))
+        refresh.assert_called_once_with("refresh-other-tab")
         self.assertIn("clear", component_actions)
         self.assertNotIn(AUTH_LOGOUT_PENDING_KEY, app.session_state)
-        self.assertNotIn("cloud_user", app.session_state)
+        self.assertEqual(app.session_state["cloud_user"]["id"], other_user.id)
         self.assertEqual(
-            app.session_state[AUTH_BROWSER_WRITE_FENCE_KEY],
-            clear["write_fence_version"],
+            app.session_state["cloud_user"]["refresh_token"], "refresh-other-rotated"
+        )
+        self.assertEqual(
+            app.session_state[AUTH_BROWSER_TOMBSTONES_KEY],
+            clear["tombstone_versions"],
         )
         grade.assert_not_called()
         local_save.assert_not_called()
@@ -1154,13 +1232,13 @@ class AuthSessionTests(unittest.TestCase):
             "action": "clear",
             "command_id": "invalid-v20-clear",
             "expected_version": 10,
-            "write_fence_version": 20,
+            "tombstone_versions": [10, 20],
             "superseded_write_versions": [20],
         }
 
         browser = {
             "record": PersistedRefreshSession("refresh-v15", now, 15),
-            "fence": 0,
+            "tombstones": [],
             "stale_empty_reads": 1,
         }
         component_actions = []
@@ -1170,19 +1248,17 @@ class AuthSessionTests(unittest.TestCase):
             action = str(data.get("action") or "read")
             component_actions.append(action)
             if action == "clear":
-                browser["fence"] = max(
-                    browser["fence"], int(data.get("write_fence_version") or 0)
-                )
                 browser["record"], value = apply_browser_command_to_record(
                     browser["record"],
                     data,
-                    write_fence_version=browser["fence"],
+                    tombstone_versions=browser["tombstones"],
                 )
+                browser["tombstones"] = value["tombstone_versions"]
             elif action == "write":
                 browser["record"], value = apply_browser_command_to_record(
                     browser["record"],
                     data,
-                    write_fence_version=browser["fence"],
+                    tombstone_versions=browser["tombstones"],
                 )
             elif browser["stale_empty_reads"] > 0:
                 browser["stale_empty_reads"] -= 1
@@ -1190,14 +1266,14 @@ class AuthSessionTests(unittest.TestCase):
                     "status": "empty",
                     "source": "read",
                     "read_epoch": data["read_epoch"],
-                    "write_fence_version": browser["fence"],
+                    "tombstone_versions": browser["tombstones"],
                 }
             elif browser["record"] is None:
                 value = {
                     "status": "empty",
                     "source": "read",
                     "read_epoch": data["read_epoch"],
-                    "write_fence_version": browser["fence"],
+                    "tombstone_versions": browser["tombstones"],
                 }
             else:
                 record = browser["record"]
@@ -1208,7 +1284,7 @@ class AuthSessionTests(unittest.TestCase):
                     "refresh_token": record.refresh_token,
                     "saved_at": record.saved_at,
                     "version": record.version,
-                    "write_fence_version": browser["fence"],
+                    "tombstone_versions": browser["tombstones"],
                 }
             return SimpleNamespace(auth_session=value, auth_wake=0)
 
@@ -1234,9 +1310,10 @@ class AuthSessionTests(unittest.TestCase):
 
         self.assertEqual(len(app.exception), 0)
         refresh.assert_called_once_with("refresh-v15")
-        self.assertEqual(browser["fence"], 20)
+        self.assertEqual(browser["tombstones"], [10, 20])
+        self.assertNotIn(15, browser["tombstones"])
         self.assertEqual(browser["record"].refresh_token, "refresh-v21")
-        self.assertGreater(browser["record"].version, browser["fence"])
+        self.assertGreater(browser["record"].version, max(browser["tombstones"]))
         self.assertEqual(
             app.session_state["cloud_user"]["refresh_token"], "refresh-v21"
         )
