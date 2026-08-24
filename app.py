@@ -26,6 +26,15 @@ from src.ai_grader import (
     review_sentence_rewrite,
 )
 from src.admin_dashboard import is_admin_request, render_admin_dashboard
+from src.auth_session import (
+    browser_refresh_session,
+    cloud_user_from_state,
+    cloud_user_to_state,
+    queue_refresh_token_clear,
+    queue_refresh_token_write,
+    resolve_auth_session,
+    take_browser_command,
+)
 from src.analytics import record_grading_event
 from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
 from src.dictionary_provider import DictionaryProvider, get_default_dictionary_provider
@@ -193,15 +202,34 @@ def cancel_pending_topic_selection() -> None:
 
 
 def session_cloud_user() -> CloudUser | None:
-    data = st.session_state.get("cloud_user")
-    if not isinstance(data, dict) or not data.get("access_token"):
-        return None
-    return CloudUser(
-        id=str(data.get("id", "")),
-        email=str(data.get("email", "")),
-        access_token=str(data.get("access_token", "")),
-        refresh_token=str(data.get("refresh_token", "")),
-    )
+    return cloud_user_from_state(st.session_state.get("cloud_user"))
+
+
+def write_cloud_user_state(user: CloudUser, *, persist: bool) -> None:
+    """Update login state without running first-login product side effects."""
+    st.session_state.cloud_user = cloud_user_to_state(user)
+    st.session_state.user_id = user.id
+    if persist:
+        queue_refresh_token_write(st.session_state, user.refresh_token)
+
+
+def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
+    """Restore or rotate one auth session without changing the product route."""
+    command = take_browser_command(st.session_state)
+    browser_value = browser_refresh_session(command)
+    current_user = session_cloud_user()
+    resolution = resolve_auth_session(store, current_user, browser_value)
+    if resolution.user is None:
+        if current_user is not None and resolution.state_changed:
+            st.session_state.pop("cloud_user", None)
+            st.session_state.user_id = str(uuid.uuid4())
+    elif resolution.state_changed:
+        write_cloud_user_state(resolution.user, persist=resolution.persist_refresh)
+    if resolution.clear_persisted:
+        queue_refresh_token_clear(st.session_state)
+    if resolution.state_changed:
+        st.rerun()
+    return resolution.user
 
 
 def record_lifecycle_event(
@@ -302,8 +330,7 @@ def claim_guest_result(store: SupabaseStore, user: CloudUser) -> bool:
 
 
 def complete_login(store: SupabaseStore, user: CloudUser) -> None:
-    st.session_state.cloud_user = user.__dict__
-    st.session_state.user_id = user.id
+    write_cloud_user_state(user, persist=True)
     claim_guest_result(store, user)
     record_lifecycle_event(store, "login_completed", user=user)
     route = str(st.session_state.pop("login_return_route", "home") or "home")
@@ -342,6 +369,7 @@ def render_login_page(store: SupabaseStore) -> None:
 
 def logout_cloud_user() -> None:
     st.session_state.pop("cloud_user", None)
+    queue_refresh_token_clear(st.session_state)
     st.session_state.user_id = str(uuid.uuid4())
     st.session_state.page_mode = "home"
     st.query_params.clear()
@@ -3526,23 +3554,22 @@ def render_product_route(store: SupabaseStore, user: CloudUser | None) -> None:
         render_growth_page(store, user)
 
 
+cloud_store = SupabaseStore()
+cloud_user = restore_cloud_user_session(cloud_store)
+
 if st.session_state.page_mode == "demo":
-    demo_store = SupabaseStore()
-    demo_user = session_cloud_user()
     demo_visitor_id = browser_visitor_id()
     if demo_visitor_id:
         st.session_state.visitor_hash = visitor_hash(demo_visitor_id)
-        record_usage_event(demo_store, "session_started", user=demo_user)
+        record_usage_event(cloud_store, "session_started", user=cloud_user)
     if st.session_state.get("tutorial_clicked_pending") and (
-        demo_user is not None or st.session_state.get("visitor_hash")
+        cloud_user is not None or st.session_state.get("visitor_hash")
     ):
-        record_usage_event(demo_store, "tutorial_clicked", user=demo_user)
+        record_usage_event(cloud_store, "tutorial_clicked", user=cloud_user)
         st.session_state.pop("tutorial_clicked_pending", None)
     render_demo_page()
     st.stop()
 
-cloud_store = SupabaseStore()
-cloud_user = session_cloud_user()
 requested_page = str(st.query_params.get("page", "") or "")
 raw_visitor_id = browser_visitor_id()
 if raw_visitor_id:

@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
+from src.cloud_store import CloudSessionExpiredError, CloudStoreError, CloudUser, SupabaseStore
 
 
 class CloudStoreTests(unittest.TestCase):
@@ -13,6 +13,51 @@ class CloudStoreTests(unittest.TestCase):
         self.store.service_role_key = ""
         self.store.secret_key = ""
         self.store.beta_start_at = ""
+
+    @patch("src.cloud_store.requests.request")
+    def test_email_verification_keeps_supabase_expiry_fields(self, request):
+        response = Mock(status_code=200, content=b"{}")
+        response.json.return_value = {
+            "user": {"id": "user-a", "email": "a@example.com"},
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "expires_at": 2_000_003_600,
+            "expires_in": 3600,
+        }
+        request.return_value = response
+
+        user = self.store.verify_email_code("a@example.com", "123456")
+
+        self.assertEqual(user.expires_at, 2_000_003_600)
+        self.assertEqual(user.expires_in, 3600)
+
+    @patch("src.cloud_store.requests.request")
+    def test_refresh_rotates_token_without_putting_it_in_url_params(self, request):
+        response = Mock(status_code=200, content=b"{}")
+        response.json.return_value = {
+            "user": {"id": "user-a", "email": "a@example.com"},
+            "access_token": "access-new",
+            "refresh_token": "refresh-new",
+            "expires_at": 2_000_003_600,
+            "expires_in": 3600,
+        }
+        request.return_value = response
+
+        user = self.store.refresh("refresh-old")
+
+        self.assertEqual(user.refresh_token, "refresh-new")
+        self.assertEqual(request.call_args.kwargs["params"], {"grant_type": "refresh_token"})
+        self.assertNotIn("refresh-old", str(request.call_args.kwargs["params"]))
+        self.assertEqual(request.call_args.kwargs["json"], {"refresh_token": "refresh-old"})
+
+    @patch("src.cloud_store.requests.request")
+    def test_invalid_refresh_is_distinguished_from_temporary_failure(self, request):
+        response = Mock(status_code=400, content=b"{}")
+        response.json.return_value = {"message": "Invalid Refresh Token"}
+        request.return_value = response
+
+        with self.assertRaises(CloudSessionExpiredError):
+            self.store.refresh("invalid-secret")
 
     @patch("src.cloud_store.requests.request")
     def test_user_token_is_used_for_row_level_security(self, request):

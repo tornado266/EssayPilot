@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,6 +24,14 @@ def _setting(name: str) -> str:
 class CloudStoreError(RuntimeError):
     """Safe cloud/authentication error for display in the app."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class CloudSessionExpiredError(CloudStoreError):
+    """The stored refresh token is no longer accepted by the auth service."""
+
 
 @dataclass(frozen=True)
 class CloudUser:
@@ -30,6 +39,8 @@ class CloudUser:
     email: str
     access_token: str
     refresh_token: str = ""
+    expires_at: int = 0
+    expires_in: int = 0
 
 
 class SupabaseStore:
@@ -108,7 +119,10 @@ class SupabaseStore:
                 detail = response.json().get("msg") or response.json().get("message")
             except (ValueError, AttributeError):
                 detail = ""
-            raise CloudStoreError(detail or f"Cloud request failed ({response.status_code}).")
+            raise CloudStoreError(
+                detail or f"Cloud request failed ({response.status_code}).",
+                status_code=response.status_code,
+            )
         if not response.content:
             return None
         try:
@@ -244,27 +258,56 @@ class SupabaseStore:
             "/auth/v1/verify",
             payload={"email": email, "token": code, "type": "email"},
         )
-        user = result.get("user") or {}
-        return CloudUser(
-            id=str(user.get("id", "")),
-            email=str(user.get("email", email)),
-            access_token=str(result.get("access_token", "")),
-            refresh_token=str(result.get("refresh_token", "")),
-        )
+        return self._auth_user(result, fallback_email=email)
 
     def refresh(self, refresh_token: str) -> CloudUser:
-        result = self._request(
-            "POST",
-            "/auth/v1/token",
-            params={"grant_type": "refresh_token"},
-            payload={"refresh_token": refresh_token},
-        )
+        try:
+            result = self._request(
+                "POST",
+                "/auth/v1/token",
+                params={"grant_type": "refresh_token"},
+                payload={"refresh_token": refresh_token},
+            )
+        except CloudStoreError as exc:
+            if exc.status_code in {400, 401, 403}:
+                raise CloudSessionExpiredError(
+                    "The saved login session has expired.",
+                    status_code=exc.status_code,
+                ) from exc
+            raise
+        return self._auth_user(result, fallback_refresh_token=refresh_token)
+
+    @staticmethod
+    def _auth_user(
+        result: Any,
+        *,
+        fallback_email: str = "",
+        fallback_refresh_token: str = "",
+    ) -> CloudUser:
+        """Normalize Supabase auth responses without exposing their credentials."""
+        if not isinstance(result, dict):
+            raise CloudStoreError("Authentication service returned an incomplete session.")
         user = result.get("user") or {}
+        try:
+            expires_in = max(0, int(float(result.get("expires_in") or 0)))
+            expires_at = max(0, int(float(result.get("expires_at") or 0)))
+        except (TypeError, ValueError):
+            expires_in = 0
+            expires_at = 0
+        if not expires_at and expires_in:
+            expires_at = int(time.time()) + expires_in
+        access_token = str(result.get("access_token", ""))
+        refresh_token = str(result.get("refresh_token") or fallback_refresh_token)
+        user_id = str(user.get("id", ""))
+        if not user_id or not access_token or not refresh_token:
+            raise CloudStoreError("Authentication service returned an incomplete session.")
         return CloudUser(
-            id=str(user.get("id", "")),
-            email=str(user.get("email", "")),
-            access_token=str(result.get("access_token", "")),
-            refresh_token=str(result.get("refresh_token", refresh_token)),
+            id=user_id,
+            email=str(user.get("email") or fallback_email),
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=expires_at,
+            expires_in=expires_in,
         )
 
     def save_grading_cycle(
