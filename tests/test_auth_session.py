@@ -1,4 +1,5 @@
 import ast
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,9 @@ from src.auth_session import (
     AUTH_LISTENER_RERUN_KEY,
     AUTH_LOGOUT_PENDING_KEY,
     AUTH_REQUEST_RERUN_KEY,
+    AUTH_BROWSER_READ_EPOCH_KEY,
+    AUTH_PERSIST_WARNING_KEY,
+    AUTH_USER_VERSION_KEY,
     AUTH_RETENTION_SECONDS,
     PersistedRefreshSession,
     acknowledge_browser_command,
@@ -34,7 +38,7 @@ from src.auth_session import (
     start_logout_with_remote_best_effort,
     take_browser_command,
 )
-from src.cloud_store import CloudSessionExpiredError, CloudStoreError, CloudUser
+from src.cloud_store import CloudSessionExpiredError, CloudStoreError, CloudUser, SupabaseStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -161,6 +165,7 @@ class AuthSessionTests(unittest.TestCase):
             "action": "clear",
             "command_id": "clear-1",
             "expected_version": 21,
+            "clear_through_version": 21,
         }
 
         remaining, ack = apply_browser_command_to_record(newer, command)
@@ -273,12 +278,14 @@ class AuthSessionTests(unittest.TestCase):
         self.assertFalse(browser_ack_needs_listener_rerun(state, ack))
         self.assertNotIn(AUTH_REQUEST_RERUN_KEY, state)
         read_command = take_browser_command(state)
-        self.assertEqual(read_command, {"action": "read"})
-        self.assertTrue(mark_browser_listener_stable(
-            state,
-            read_command,
-            self.browser_value(token="refresh-new", version=record.version),
-        ))
+        self.assertEqual(read_command["action"], "read")
+        listener_value = self.browser_value(token="refresh-new", version=record.version)
+        listener_value.update(
+            {"source": "read", "read_epoch": read_command["read_epoch"]}
+        )
+        self.assertTrue(
+            mark_browser_listener_stable(state, read_command, listener_value)
+        )
         self.assertNotIn(AUTH_LISTENER_RERUN_KEY, state)
 
     def test_skipped_newer_write_ack_also_returns_to_listener_once(self):
@@ -354,10 +361,29 @@ class AuthSessionTests(unittest.TestCase):
         self.assertEqual(take_browser_command(state), clear)
         self.assertIn(AUTH_LOGOUT_PENDING_KEY, state)
 
-    def test_explicit_empty_logs_out_only_an_existing_session(self):
-        self.assertFalse(browser_signaled_logout({"status": "empty"}))
+    def test_explicit_empty_requires_confirmed_current_listener(self):
+        state = {}
+        command = take_browser_command(state)
+        empty = {
+            "status": "empty",
+            "source": "read",
+            "read_epoch": command["read_epoch"],
+        }
+        self.assertFalse(browser_signaled_logout(empty, has_current_user=True))
+        stable = mark_browser_listener_stable(state, command, empty)
         self.assertTrue(browser_signaled_logout(
-            {"status": "empty"}, has_current_user=True
+            empty,
+            has_current_user=True,
+            command=command,
+            listener_stable=stable,
+            has_pending_command=False,
+        ))
+        self.assertFalse(browser_signaled_logout(
+            empty,
+            has_current_user=True,
+            command=command,
+            listener_stable=stable,
+            persistence_failed=True,
         ))
 
     def test_invalid_browser_record_is_cleared_without_refresh(self):
@@ -509,6 +535,381 @@ class AuthSessionTests(unittest.TestCase):
         self.assertIn('window.addEventListener("storage", storageChanged)', component)
         self.assertIn("expectedVersion", component)
         self.assertIn("command_id", component)
+
+    def test_first_login_pending_write_ignores_stale_empty_until_listener(self):
+        state = {}
+        guest_read = take_browser_command(state)
+        guest_empty = {
+            "status": "empty",
+            "source": "read",
+            "read_epoch": guest_read["read_epoch"],
+        }
+        self.assertTrue(mark_browser_listener_stable(state, guest_read, guest_empty))
+
+        logged_in = CloudUser(
+            "user-a", "person@example.com", "access-login", "refresh-login",
+            int(self.now + 3600), 3600, "expires_at",
+        )
+        queue_refresh_token_write(state, logged_in.refresh_token, now=self.now)
+        write_command = take_browser_command(state)
+
+        self.assertEqual(write_command["action"], "write")
+        self.assertNotIn(AUTH_BROWSER_READ_EPOCH_KEY, state)
+        stale_is_stable = mark_browser_listener_stable(
+            state, write_command, guest_empty
+        )
+        self.assertFalse(stale_is_stable)
+        self.assertFalse(browser_signaled_logout(
+            guest_empty,
+            has_current_user=True,
+            command=write_command,
+            listener_stable=stale_is_stable,
+            has_pending_command=AUTH_BROWSER_COMMAND_KEY in state,
+        ))
+        before_ack = resolve_auth_session(
+            Mock(),
+            logged_in,
+            guest_empty,
+            current_version=state[AUTH_USER_VERSION_KEY],
+            now=self.now,
+        )
+        self.assertEqual(before_ack.user, logged_in)
+
+        record, write_value = apply_browser_command_to_record(None, write_command)
+        ack = acknowledge_browser_command(state, write_value, now=self.now)
+        self.assertEqual(ack.status, "written")
+        self.assertTrue(browser_ack_needs_listener_rerun(state, ack))
+
+        listener_read = take_browser_command(state)
+        self.assertNotEqual(
+            listener_read["read_epoch"], guest_read["read_epoch"]
+        )
+        self.assertFalse(
+            mark_browser_listener_stable(state, listener_read, guest_empty)
+        )
+        self.assertFalse(browser_signaled_logout(
+            guest_empty,
+            has_current_user=True,
+            command=listener_read,
+            listener_stable=False,
+            has_pending_command=False,
+        ))
+
+        listener_value = {
+            "status": "loaded",
+            "source": "read",
+            "read_epoch": listener_read["read_epoch"],
+            "refresh_token": record.refresh_token,
+            "saved_at": record.saved_at,
+            "version": record.version,
+        }
+        self.assertTrue(
+            mark_browser_listener_stable(state, listener_read, listener_value)
+        )
+        final = resolve_auth_session(
+            Mock(),
+            logged_in,
+            listener_value,
+            current_version=state[AUTH_USER_VERSION_KEY],
+            now=self.now,
+        )
+        self.assertEqual(final.user, logged_in)
+
+    def test_newer_token_temporary_failure_keeps_token_version_pair(self):
+        expired = CloudUser(
+            "user-a", "person@example.com", "access-expired", "refresh-r1",
+            int(self.now - 1), 3600, "expires_at",
+        )
+        store = Mock()
+        store.refresh.side_effect = [CloudStoreError("temporary"), self.rotated]
+        browser_value = self.browser_value(token="refresh-r2", version=15)
+
+        first = resolve_auth_session(
+            store,
+            expired,
+            browser_value,
+            current_version=10,
+            now=self.now,
+        )
+
+        self.assertEqual(first.user.refresh_token, "refresh-r2")
+        self.assertEqual(first.browser_version, 15)
+        self.assertTrue(first.state_changed)
+        self.assertTrue(first.recovery_pending)
+        state = {
+            "cloud_user": cloud_user_to_state(first.user),
+            AUTH_USER_VERSION_KEY: first.browser_version,
+        }
+        self.assertEqual(
+            (
+                state["cloud_user"]["refresh_token"],
+                state[AUTH_USER_VERSION_KEY],
+            ),
+            ("refresh-r2", 15),
+        )
+
+        second = resolve_auth_session(
+            store,
+            cloud_user_from_state(state["cloud_user"]),
+            browser_value,
+            current_version=state[AUTH_USER_VERSION_KEY],
+            now=self.now,
+        )
+        self.assertEqual(second.user, self.rotated)
+        self.assertEqual(
+            [item.args[0] for item in store.refresh.call_args_list],
+            ["refresh-r2", "refresh-r2"],
+        )
+
+    def test_rejected_write_is_bounded_and_returns_to_listener(self):
+        state = {}
+        queue_refresh_token_write(state, "refresh-login", now=self.now)
+        command = take_browser_command(state)
+        rejected = {
+            "status": "rejected",
+            "command_id": command["command_id"],
+        }
+
+        ack = acknowledge_browser_command(state, rejected, now=self.now)
+
+        self.assertEqual(ack.status, "rejected")
+        self.assertNotIn(AUTH_BROWSER_COMMAND_KEY, state)
+        self.assertTrue(state[AUTH_PERSIST_WARNING_KEY])
+        self.assertTrue(browser_ack_needs_listener_rerun(state, ack))
+        read_command = take_browser_command(state)
+        self.assertEqual(read_command["action"], "read")
+        self.assertEqual(take_browser_command(state), read_command)
+
+        empty = {
+            "status": "empty",
+            "source": "read",
+            "read_epoch": read_command["read_epoch"],
+        }
+        stable = mark_browser_listener_stable(state, read_command, empty)
+        self.assertTrue(stable)
+        self.assertFalse(browser_signaled_logout(
+            empty,
+            has_current_user=True,
+            command=read_command,
+            listener_stable=stable,
+            persistence_failed=state[AUTH_PERSIST_WARNING_KEY],
+        ))
+
+    def test_app_pending_write_ignores_stale_empty(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        now = time.time()
+        user = CloudUser(
+            "user-a", "person@example.com", "access-login", "refresh-login",
+            int(now + 3600), 3600, "expires_at",
+        )
+        version = int(now * 1_000_000)
+        command = {
+            "action": "write",
+            "command_id": "login-write",
+            "refresh_token": user.refresh_token,
+            "saved_at": now,
+            "version": version,
+            "expected_version": 0,
+        }
+        app.session_state["cloud_user"] = cloud_user_to_state(user)
+        app.session_state["user_id"] = user.id
+        app.session_state["page_mode"] = "home"
+        app.session_state[AUTH_USER_VERSION_KEY] = version
+        app.session_state[AUTH_BROWSER_COMMAND_KEY] = command
+
+        with patch(
+            "src.auth_session._AUTH_COMPONENT",
+            return_value=SimpleNamespace(
+                auth_session={
+                    "status": "empty",
+                    "source": "read",
+                    "read_epoch": "guest-read",
+                },
+                auth_wake=0,
+            ),
+        ), patch(
+            "src.visitor_identity.browser_visitor_id", return_value=""
+        ):
+            app.run()
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(
+            app.session_state["cloud_user"]["refresh_token"], "refresh-login"
+        )
+        self.assertEqual(
+            app.session_state[AUTH_BROWSER_COMMAND_KEY]["command_id"],
+            "login-write",
+        )
+        self.assertNotIn(AUTH_LOGOUT_PENDING_KEY, app.session_state)
+
+    def test_app_unavailable_storage_logout_leaves_waiting_state(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        now = time.time()
+        user = CloudUser(
+            "user-a", "person@example.com", "access-login", "refresh-login",
+            int(now + 3600), 3600, "expires_at",
+        )
+        app.session_state["cloud_user"] = cloud_user_to_state(user)
+        app.session_state["user_id"] = user.id
+        app.session_state["page_mode"] = "home"
+        app.session_state[AUTH_USER_VERSION_KEY] = 10
+        app.session_state[AUTH_BROWSER_VERSION_KEY] = 10
+        app.session_state[AUTH_LOGOUT_PENDING_KEY] = {
+            "reason": "user",
+            "clear_retries": 0,
+        }
+        app.session_state[AUTH_BROWSER_COMMAND_KEY] = {
+            "action": "clear",
+            "command_id": "logout-clear",
+            "expected_version": 10,
+        }
+        warning = (
+            "\u6d4f\u89c8\u5668\u5b58\u50a8\u672a\u80fd\u6e05\u7406\uff0c"
+            "\u8bf7\u5173\u95ed\u5176\u4ed6\u6807\u7b7e\u9875\u6216\u6e05\u9664"
+            "\u672c\u7ad9\u70b9\u6570\u636e\u3002"
+        )
+
+        with patch(
+            "src.auth_session._AUTH_COMPONENT",
+            return_value=SimpleNamespace(
+                auth_session={"status": "unavailable"},
+                auth_wake=0,
+            ),
+        ), patch(
+            "src.visitor_identity.browser_visitor_id", return_value=""
+        ):
+            for _ in range(3):
+                app.run()
+                if AUTH_LOGOUT_PENDING_KEY not in app.session_state:
+                    break
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertNotIn(AUTH_LOGOUT_PENDING_KEY, app.session_state)
+        self.assertNotIn("cloud_user", app.session_state)
+        self.assertIn(warning, [item.value for item in app.warning])
+
+    def test_app_second_401_reruns_to_clear_ack_without_side_effects(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        now = time.time()
+        old = CloudUser(
+            "user-a", "person@example.com", "access-old", "refresh-old",
+            int(now + 3600), 3600, "expires_at",
+        )
+        app.query_params["page"] = "write"
+        app.session_state["cloud_user"] = cloud_user_to_state(old)
+        app.session_state["user_id"] = old.id
+        app.session_state["page_mode"] = "write"
+        app.session_state["topic_input"] = (
+            "Some people think public transport should be free. Discuss both views."
+        )
+        app.session_state["essay_input"] = "word " * 260
+        app.session_state[AUTH_USER_VERSION_KEY] = 10
+        app.session_state[AUTH_BROWSER_VERSION_KEY] = 10
+
+        browser = {
+            "record": PersistedRefreshSession(old.refresh_token, now, 10)
+        }
+        component_actions = []
+        clear_expected_versions = []
+        clear_through_versions = []
+
+        def auth_component(*_args, **kwargs):
+            data = kwargs["data"]
+            action = str(data.get("action") or "read")
+            component_actions.append(action)
+            if action == "clear":
+                clear_expected_versions.append(data["expected_version"])
+                clear_through = data["clear_through_version"]
+                clear_through_versions.append(clear_through)
+                browser["record"] = PersistedRefreshSession(
+                    "refresh-new", now + 1, clear_through
+                )
+                browser["record"], value = apply_browser_command_to_record(
+                    browser["record"], data
+                )
+            elif browser["record"] is None:
+                value = {
+                    "status": "empty",
+                    "source": "read",
+                    "read_epoch": data["read_epoch"],
+                }
+            else:
+                value = {
+                    "status": "loaded",
+                    "source": "read",
+                    "read_epoch": data["read_epoch"],
+                    "refresh_token": old.refresh_token,
+                    "saved_at": now,
+                    "version": 10,
+                }
+            return SimpleNamespace(auth_session=value, auth_wake=0)
+
+        def response(status, data):
+            result = Mock(status_code=status, content=b"{}")
+            result.json.return_value = data
+            return result
+
+        refreshed_data = {
+            "user": {"id": old.id, "email": old.email},
+            "access_token": "access-new",
+            "refresh_token": "refresh-new",
+            "expires_at": int(now + 3600),
+            "expires_in": 3600,
+        }
+        settings = {
+            "SUPABASE_URL": "https://example.supabase.co",
+            "SUPABASE_ANON_KEY": "public-anon-key",
+        }
+
+        with (
+            patch(
+                "src.auth_session._AUTH_COMPONENT",
+                side_effect=auth_component,
+            ),
+            patch(
+                "src.cloud_store._setting",
+                side_effect=lambda name: settings.get(name, ""),
+            ),
+            patch("src.cloud_store.requests.request") as request,
+            patch("src.ai_grader.grade_essay_package") as grade,
+            patch("src.storage.save_markdown_record") as local_save,
+            patch("src.error_book.append_error_book") as error_save,
+            patch.object(SupabaseStore, "save_grading_cycle") as cloud_save,
+            patch("src.product_analytics.record_event_safely", return_value=None),
+            patch("src.visitor_identity.browser_visitor_id", return_value=""),
+        ):
+            request.side_effect = [
+                response(401, {"message": "expired"}),
+                response(200, refreshed_data),
+                response(401, {"message": "still expired"}),
+            ]
+            app.run()
+            self.assertEqual(len(app.exception), 0)
+            submit = next(
+                button for button in app.button
+                if button.label == "开始批改作文"
+            )
+            submit.click()
+            app.run()
+            for _ in range(3):
+                if AUTH_LOGOUT_PENDING_KEY not in app.session_state:
+                    break
+                app.run()
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(clear_expected_versions, [10])
+        self.assertEqual(len(clear_through_versions), 1)
+        self.assertGreater(clear_through_versions[0], 10)
+        self.assertIsNone(browser["record"])
+        self.assertEqual(request.call_count, 3)
+        self.assertIn("clear", component_actions)
+        self.assertNotIn(AUTH_LOGOUT_PENDING_KEY, app.session_state)
+        self.assertNotIn(AUTH_REQUEST_RERUN_KEY, app.session_state)
+        self.assertNotIn("cloud_user", app.session_state)
+        grade.assert_not_called()
+        local_save.assert_not_called()
+        error_save.assert_not_called()
+        cloud_save.assert_not_called()
 
 
 if __name__ == "__main__":

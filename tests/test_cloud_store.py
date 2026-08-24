@@ -14,6 +14,7 @@ from src.auth_session import (
     acknowledge_browser_command,
     apply_browser_command_to_record,
     begin_logout,
+    consume_auth_request_rerun,
     PersistedRefreshSession,
     queue_refresh_token_write,
     take_browser_command,
@@ -197,7 +198,8 @@ class CloudStoreTests(unittest.TestCase):
             self.store.list_grading_runs(old)
 
         self.assertEqual(request.call_count, 3)
-        updated.assert_not_called()
+        updated.assert_called_once()
+        self.assertEqual(updated.call_args.args[0].refresh_token, "refresh-new")
         invalidated.assert_called_once()
 
         with self.assertRaises(CloudSessionExpiredError):
@@ -217,21 +219,38 @@ class CloudStoreTests(unittest.TestCase):
             self.response(401, {"message": "still expired"}),
         ]
         state = {AUTH_BROWSER_VERSION_KEY: 12}
+        updates = []
+
+        def updated(user):
+            updates.append(user)
+            queue_refresh_token_write(
+                state, user.refresh_token, now=2_000_000_000, request_rerun=True
+            )
 
         def invalidated(_user):
             begin_logout(state, reason="invalid", expected_version=12)
 
-        self.store.bind_auth_session(lambda: old, Mock(), invalidated)
+        self.store.bind_auth_session(lambda: old, updated, invalidated)
         with self.assertRaises(CloudSessionExpiredError):
             self.store.list_grading_runs(old)
 
         clear_command = take_browser_command(state)
+        self.assertEqual([user.refresh_token for user in updates], ["refresh-new"])
+        self.assertTrue(consume_auth_request_rerun(state))
+        self.assertFalse(consume_auth_request_rerun(state))
         self.assertEqual(clear_command["action"], "clear")
         self.assertIn(AUTH_LOGOUT_PENDING_KEY, state)
         queue_refresh_token_write(
             state, "late-refresh", now=2_000_000_000, request_rerun=True
         )
         self.assertEqual(take_browser_command(state), clear_command)
+        existing = PersistedRefreshSession("refresh-old", 1_999_999_900, 12)
+        remaining, clear_value = apply_browser_command_to_record(existing, clear_command)
+        clear_ack = acknowledge_browser_command(
+            state, clear_value, now=2_000_000_000
+        )
+        self.assertIsNone(remaining)
+        self.assertEqual(clear_ack.status, "cleared")
         with self.assertRaises(CloudSessionExpiredError):
             self.store.get_grading_run(old, "run-2")
         self.assertEqual(request.call_count, 3)
@@ -451,6 +470,46 @@ class CloudStoreTests(unittest.TestCase):
             "grant execute on function public.get_beta_funnel(timestamptz) to service_role",
             schema,
         )
+
+    @patch("src.cloud_store.requests.request")
+    def test_refresh_is_published_before_retry_503_or_timeout(self, request):
+        old = CloudUser("user-a", "a@example.com", "access-old", "refresh-old")
+        refreshed_data = {
+            "user": {"id": "user-a", "email": "a@example.com"},
+            "access_token": "access-new",
+            "refresh_token": "refresh-new",
+            "expires_at": 2_000_003_600,
+            "expires_in": 3600,
+        }
+
+        for label, retry_failure in (
+            ("503", self.response(503, {"message": "unavailable"})),
+            ("timeout", requests.Timeout("retry timed out")),
+        ):
+            with self.subTest(retry_failure=label):
+                store = SupabaseStore()
+                store.url = "https://example.supabase.co"
+                store.anon_key = "public-anon-key"
+                updated = Mock()
+                invalidated = Mock()
+                store.bind_auth_session(lambda: old, updated, invalidated)
+                request.reset_mock()
+                request.side_effect = [
+                    self.response(401, {"message": "expired"}),
+                    self.response(200, refreshed_data),
+                    retry_failure,
+                ]
+
+                with self.assertRaises(CloudStoreError):
+                    store.list_grading_runs(old)
+
+                self.assertEqual(request.call_count, 3)
+                updated.assert_called_once()
+                self.assertEqual(
+                    updated.call_args.args[0].refresh_token, "refresh-new"
+                )
+                self.assertEqual(store._runtime_user.refresh_token, "refresh-new")
+                invalidated.assert_not_called()
 
 
 if __name__ == "__main__":

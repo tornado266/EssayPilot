@@ -27,6 +27,8 @@ AUTH_RECOVERY_STATE_KEY = "auth_recovery_state"
 AUTH_BROWSER_RECOVERY_KEY = "auth_browser_recovery"
 AUTH_LISTENER_RERUN_KEY = "auth_listener_rerun"
 AUTH_REQUEST_RERUN_KEY = "auth_request_rerun"
+AUTH_BROWSER_READ_EPOCH_KEY = "auth_browser_read_epoch"
+AUTH_PERSIST_WARNING_KEY = "auth_persist_warning"
 AUTH_RETENTION_SECONDS = 7 * 24 * 60 * 60
 ACCESS_REFRESH_SKEW_SECONDS = 5 * 60
 _MAX_REFRESH_TOKEN_LENGTH = 8192
@@ -41,6 +43,7 @@ _AUTH_COMPONENT = st.components.v2.component(
       const maxTokenLength = {_MAX_REFRESH_TOKEN_LENGTH};
       const action = data?.action || "read";
       const commandId = String(data?.command_id || "");
+      const readEpoch = String(data?.read_epoch || "");
 
       const parseRecord = (raw) => {{
         if (!raw) return null;
@@ -125,7 +128,11 @@ _AUTH_COMPONENT = st.components.v2.component(
         if (action === "clear") {{
           const existing = currentRecord();
           const expectedVersion = Number(data?.expected_version || 0);
-          if (existing && existing.version !== expectedVersion) {{
+          const clearThroughVersion = Number(data?.clear_through_version || 0);
+          if (
+            existing && existing.version !== expectedVersion &&
+            !(clearThroughVersion > 0 && existing.version <= clearThroughVersion)
+          ) {{
             emitRecord(existing, "skipped_newer", {{ command_id: commandId }});
             return;
           }}
@@ -140,19 +147,28 @@ _AUTH_COMPONENT = st.components.v2.component(
 
         const raw = window.localStorage.getItem(key);
         if (!raw) {{
-          setStateValue("auth_session", {{ status: "empty" }});
+          setStateValue("auth_session", {{
+            status: "empty", source: "read", read_epoch: readEpoch
+          }});
         }} else {{
           const stored = currentRecord();
           const now = Date.now() / 1000;
           if (!stored) {{
             window.localStorage.removeItem(key);
-            setStateValue("auth_session", {{ status: "invalid", version: 0 }});
+            setStateValue("auth_session", {{
+              status: "invalid", source: "read", read_epoch: readEpoch, version: 0
+            }});
           }} else if (stored.saved_at > now + 300 || now - stored.saved_at >= retentionSeconds) {{
             const expiredVersion = Number(stored?.version || 0);
             window.localStorage.removeItem(key);
-            setStateValue("auth_session", {{ status: "expired", version: expiredVersion }});
+            setStateValue("auth_session", {{
+              status: "expired", source: "read",
+              read_epoch: readEpoch, version: expiredVersion
+            }});
           }} else {{
-            emitRecord(stored, "loaded", {{ source: "read" }});
+            emitRecord(stored, "loaded", {{
+              source: "read", read_epoch: readEpoch
+            }});
           }}
         }}
 
@@ -165,18 +181,23 @@ _AUTH_COMPONENT = st.components.v2.component(
           try {{
             const newer = parseRecord(event.newValue);
             if (newer) {{
-              emitRecord(newer, "loaded", {{ source: "storage" }});
+              emitRecord(newer, "loaded", {{
+                source: "storage", read_epoch: readEpoch
+              }});
             }} else {{
               const previous = parseRecord(event.oldValue);
               if (event.newValue) window.localStorage.removeItem(key);
               setStateValue("auth_session", {{
                 status: "storage_cleared",
                 source: "storage",
+                read_epoch: readEpoch,
                 version: Number(previous?.version || 0),
               }});
             }}
           }} catch (_) {{
-            setStateValue("auth_session", {{ status: "unavailable" }});
+            setStateValue("auth_session", {{
+              status: "unavailable", read_epoch: readEpoch
+            }});
           }}
         }};
         window.addEventListener("online", wake);
@@ -188,7 +209,9 @@ _AUTH_COMPONENT = st.components.v2.component(
           document.removeEventListener("visibilitychange", wakeWhenVisible);
         }};
       }} catch (_) {{
-        setStateValue("auth_session", {{ status: "unavailable" }});
+        setStateValue("auth_session", {{
+          status: "unavailable", read_epoch: readEpoch
+        }});
       }}
     }}
     """,
@@ -267,6 +290,7 @@ def queue_refresh_token_write(
     if not refresh_token:
         queue_refresh_token_clear(state)
         return 0
+    state.pop(AUTH_BROWSER_READ_EPOCH_KEY, None)
     saved_at = float(time.time() if now is None else now)
     version = _next_version(state, saved_at)
     state[AUTH_BROWSER_COMMAND_KEY] = {
@@ -287,17 +311,20 @@ def queue_refresh_token_clear(
     state: MutableMapping[str, Any],
     *,
     expected_version: int | None = None,
+    clear_through_version: int = 0,
 ) -> str:
     version = int(
         state.get(AUTH_BROWSER_VERSION_KEY, 0)
         if expected_version is None
         else expected_version
     )
+    state.pop(AUTH_BROWSER_READ_EPOCH_KEY, None)
     command_id = str(uuid.uuid4())
     state[AUTH_BROWSER_COMMAND_KEY] = {
         "action": "clear",
         "command_id": command_id,
         "expected_version": version,
+        "clear_through_version": max(0, int(clear_through_version)),
     }
     return command_id
 
@@ -307,7 +334,11 @@ def take_browser_command(state: MutableMapping[str, Any]) -> dict[str, Any]:
     command = state.get(AUTH_BROWSER_COMMAND_KEY)
     if isinstance(command, dict) and command.get("action") in {"write", "clear"}:
         return dict(command)
-    return {"action": "read"}
+    read_epoch = str(state.get(AUTH_BROWSER_READ_EPOCH_KEY) or "")
+    if not read_epoch:
+        read_epoch = str(uuid.uuid4())
+        state[AUTH_BROWSER_READ_EPOCH_KEY] = read_epoch
+    return {"action": "read", "read_epoch": read_epoch}
 
 
 def browser_refresh_session(command: dict[str, Any]) -> dict[str, Any]:
@@ -368,13 +399,17 @@ def acknowledge_browser_command(
         return None
     status = str(value.get("status") or "")
     allowed = {
-        "write": {"written", "skipped_newer", "skipped_cleared"},
+        "write": {"written", "skipped_newer", "skipped_cleared", "rejected"},
         "clear": {"cleared", "skipped_newer"},
     }
     if status not in allowed.get(str(pending.get("action")), set()):
         return None
     record, _ = parse_persisted_refresh_session(value, now=now)
     state.pop(AUTH_BROWSER_COMMAND_KEY, None)
+    if status == "rejected":
+        state[AUTH_PERSIST_WARNING_KEY] = True
+    elif status in {"written", "skipped_newer"}:
+        state.pop(AUTH_PERSIST_WARNING_KEY, None)
     if record is not None:
         state[AUTH_BROWSER_VERSION_KEY] = max(
             int(state.get(AUTH_BROWSER_VERSION_KEY) or 0), record.version
@@ -405,7 +440,7 @@ def browser_ack_needs_listener_rerun(
     state: MutableMapping[str, Any], ack: BrowserAck | None
 ) -> bool:
     """Request exactly one rerun after an ACK whose component did not mount listeners."""
-    if ack is None or ack.status not in {"written", "skipped_newer"}:
+    if ack is None or ack.status not in {"written", "skipped_newer", "rejected"}:
         return False
     command_id = str(ack.command.get("command_id") or "")
     if not command_id or state.get(AUTH_LISTENER_RERUN_KEY) == command_id:
@@ -424,6 +459,10 @@ def mark_browser_listener_stable(
     status = str(value.get("status") or "") if isinstance(value, dict) else ""
     if status in {"", "loading", "unavailable"}:
         return False
+    read_epoch = str(command.get("read_epoch") or "")
+    value_epoch = str(value.get("read_epoch") or "") if isinstance(value, dict) else ""
+    if not read_epoch or value_epoch != read_epoch:
+        return False
     state.pop(AUTH_LISTENER_RERUN_KEY, None)
     return True
 
@@ -433,18 +472,34 @@ def consume_auth_request_rerun(state: MutableMapping[str, Any]) -> bool:
     return bool(state.pop(AUTH_REQUEST_RERUN_KEY, False))
 
 
-def browser_signaled_logout(value: object, *, has_current_user: bool = False) -> bool:
-    return bool(
-        isinstance(value, dict)
-        and (
-            (
-                value.get("status") == "storage_cleared"
-                and value.get("source") == "storage"
-            )
-            or value.get("status") == "skipped_cleared"
-            or (has_current_user and value.get("status") == "empty")
-        )
-    )
+def browser_signaled_logout(
+    value: object,
+    *,
+    has_current_user: bool = False,
+    command: object = None,
+    listener_stable: bool = False,
+    has_pending_command: bool = False,
+    persistence_failed: bool = False,
+) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if (
+        value.get("status") == "storage_cleared"
+        and value.get("source") == "storage"
+    ) or value.get("status") == "skipped_cleared":
+        return True
+    if (
+        not has_current_user
+        or value.get("status") != "empty"
+        or has_pending_command
+        or persistence_failed
+        or not listener_stable
+        or not isinstance(command, dict)
+        or command.get("action") != "read"
+    ):
+        return False
+    read_epoch = str(command.get("read_epoch") or "")
+    return bool(read_epoch and read_epoch == str(value.get("read_epoch") or ""))
 
 
 def begin_logout(
@@ -456,7 +511,11 @@ def begin_logout(
     if isinstance(state.get(AUTH_LOGOUT_PENDING_KEY), dict):
         return
     state[AUTH_LOGOUT_PENDING_KEY] = {"reason": reason, "clear_retries": 0}
-    queue_refresh_token_clear(state, expected_version=expected_version)
+    queue_refresh_token_clear(
+        state,
+        expected_version=expected_version,
+        clear_through_version=int(state.get(AUTH_USER_VERSION_KEY) or 0),
+    )
 
 
 def start_logout_with_remote_best_effort(
@@ -530,7 +589,10 @@ def apply_browser_command_to_record(
         return requested, {"status": "written", "command_id": command_id, **asdict(requested)}
     if action == "clear":
         expected = int(command.get("expected_version") or 0)
-        if record is not None and record.version != expected:
+        clear_through = int(command.get("clear_through_version") or 0)
+        if record is not None and record.version != expected and not (
+            clear_through > 0 and record.version <= clear_through
+        ):
             return record, {"status": "skipped_newer", "command_id": command_id, **asdict(record)}
         return None, {"status": "cleared", "command_id": command_id, "version": expected}
     return record, {"status": "loaded", **(asdict(record) if record else {})}
@@ -606,8 +668,9 @@ def resolve_auth_session(
                 )
             if outcome == "temporary":
                 return AuthResolution(
-                    current_user,
-                    recovery_pending=access_token_is_expired(current_user, now=now),
+                    synced_user,
+                    state_changed=True,
+                    recovery_pending=access_token_is_expired(synced_user, now=now),
                     browser_version=persisted.version,
                 )
             return AuthResolution(

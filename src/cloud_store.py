@@ -242,6 +242,8 @@ class SupabaseStore:
             self._invalidate_runtime_user(active_user)
             raise
         self._runtime_user = refreshed
+        if self._auth_user_updated is not None:
+            self._auth_user_updated(refreshed)
         try:
             result = self._request(
                 method, path, access_token=refreshed.access_token, **kwargs
@@ -253,8 +255,6 @@ class SupabaseStore:
                     "The saved login session has expired.", status_code=401
                 ) from exc
             raise
-        if self._auth_user_updated is not None:
-            self._auth_user_updated(refreshed)
         return result
 
     def _invalidate_runtime_user(self, user: CloudUser) -> None:

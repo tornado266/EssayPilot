@@ -29,6 +29,8 @@ from src.admin_dashboard import is_admin_request, render_admin_dashboard
 from src.auth_session import (
     AUTH_BROWSER_COMMAND_KEY,
     AUTH_BROWSER_RECOVERY_KEY,
+    AUTH_BROWSER_READ_EPOCH_KEY,
+    AUTH_PERSIST_WARNING_KEY,
     AUTH_BROWSER_VERSION_KEY,
     AUTH_LISTENER_RERUN_KEY,
     AUTH_LOGOUT_PENDING_KEY,
@@ -245,6 +247,8 @@ def finish_local_logout(*, reason: str) -> None:
         AUTH_BROWSER_VERSION_KEY,
         AUTH_BROWSER_COMMAND_KEY,
         AUTH_BROWSER_RECOVERY_KEY,
+        AUTH_BROWSER_READ_EPOCH_KEY,
+        AUTH_PERSIST_WARNING_KEY,
         AUTH_LISTENER_RERUN_KEY,
         AUTH_LOGOUT_PENDING_KEY,
         AUTH_RECOVERY_STATE_KEY,
@@ -271,8 +275,10 @@ def mark_cloud_session_invalid(user: CloudUser) -> None:
     begin_logout(
         st.session_state,
         reason="invalid",
-        expected_version=int(st.session_state.get(AUTH_USER_VERSION_KEY) or 0),
+        expected_version=int(st.session_state.get(AUTH_BROWSER_VERSION_KEY) or 0),
     )
+    st.session_state[AUTH_REQUEST_RERUN_KEY] = True
+    st.rerun()
 
 
 def _render_auth_wait(message: str, *, retry_label: str) -> None:
@@ -327,11 +333,15 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
             if bootstrap == "retry":
                 st.info("正在退出登录…")
                 st.rerun()
+            if bootstrap == "degraded":
+                finish_local_logout(reason=reason)
+                st.warning("浏览器存储未能清理，请关闭其他标签页或清除本站点数据。")
+                return None
             _render_auth_wait("正在退出登录…", retry_label="重试退出")
 
     if browser_ack_needs_listener_rerun(st.session_state, ack):
         st.rerun()
-    mark_browser_listener_stable(st.session_state, command, browser_value)
+    listener_stable = mark_browser_listener_stable(st.session_state, command, browser_value)
 
     bootstrap = browser_bootstrap_transition(st.session_state, browser_value)
     if bootstrap == "wait":
@@ -343,8 +353,15 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
     if bootstrap == "degraded":
         st.warning("浏览器暂时无法保存登录状态，本次会话仍可继续使用。")
 
+    if st.session_state.get(AUTH_PERSIST_WARNING_KEY):
+        st.warning("本次登录无法持久保存；关闭此页面后可能需要重新登录。")
     if browser_signaled_logout(
-        browser_value, has_current_user=current_user is not None
+        browser_value,
+        has_current_user=current_user is not None,
+        command=command,
+        listener_stable=listener_stable,
+        has_pending_command=AUTH_BROWSER_COMMAND_KEY in st.session_state,
+        persistence_failed=bool(st.session_state.get(AUTH_PERSIST_WARNING_KEY)),
     ):
         finish_local_logout(reason="user")
         st.rerun()
@@ -377,17 +394,6 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
             expected_version=resolution.clear_expected_version,
         )
         st.rerun()
-    if resolution.recovery_pending:
-        recovery = st.session_state.setdefault(
-            AUTH_RECOVERY_STATE_KEY, {"attempts": 0}
-        )
-        attempts = int(recovery.get("attempts") or 0)
-        if attempts < 1:
-            recovery["attempts"] = attempts + 1
-            recovery["retry_due"] = True
-            st.rerun()
-        _render_auth_wait("正在恢复登录…", retry_label="重试恢复")
-    st.session_state.pop(AUTH_RECOVERY_STATE_KEY, None)
     if resolution.user is None and current_user is not None and resolution.state_changed:
         st.session_state.pop("cloud_user", None)
         st.session_state.pop(AUTH_USER_VERSION_KEY, None)
@@ -399,6 +405,17 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
             int(st.session_state.get(AUTH_USER_VERSION_KEY) or 0),
             resolution.browser_version,
         )
+    if resolution.recovery_pending:
+        recovery = st.session_state.setdefault(
+            AUTH_RECOVERY_STATE_KEY, {"attempts": 0}
+        )
+        attempts = int(recovery.get("attempts") or 0)
+        if attempts < 1:
+            recovery["attempts"] = attempts + 1
+            recovery["retry_due"] = True
+            st.rerun()
+        _render_auth_wait("正在恢复登录…", retry_label="重试恢复")
+    st.session_state.pop(AUTH_RECOVERY_STATE_KEY, None)
     if resolution.state_changed:
         st.rerun()
     return resolution.user
