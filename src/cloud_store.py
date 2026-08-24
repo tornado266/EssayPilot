@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import json
 import os
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import requests
 import streamlit as st
@@ -19,6 +22,44 @@ def _setting(name: str) -> str:
     except (FileNotFoundError, KeyError):
         value = ""
     return str(value or os.getenv(name, "")).strip()
+
+
+def _positive_int(value: object) -> int:
+    try:
+        return max(0, int(float(value or 0)))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _jwt_exp(access_token: str) -> int:
+    """Decode exp only to schedule refresh; this deliberately does not verify identity."""
+    try:
+        payload = access_token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+        return _positive_int(decoded.get("exp")) if isinstance(decoded, dict) else 0
+    except (IndexError, ValueError, TypeError, UnicodeError, binascii.Error):
+        return 0
+
+
+def _auth_expiry(
+    access_token: str,
+    raw_expires_at: object,
+    raw_expires_in: object,
+    *,
+    now: float | None = None,
+) -> tuple[int, int, str]:
+    expires_at = _positive_int(raw_expires_at)
+    expires_in = _positive_int(raw_expires_in)
+    if expires_at:
+        return expires_at, expires_in, "expires_at"
+    if expires_in:
+        current_time = time.time() if now is None else now
+        return int(current_time) + expires_in, expires_in, "expires_in"
+    jwt_exp = _jwt_exp(access_token)
+    if jwt_exp:
+        return jwt_exp, 0, "jwt"
+    return 0, 0, "unknown"
 
 
 class CloudStoreError(RuntimeError):
@@ -33,6 +74,13 @@ class CloudSessionExpiredError(CloudStoreError):
     """The stored refresh token is no longer accepted by the auth service."""
 
 
+def _missing_column_error(exc: CloudStoreError, *column_names: str) -> bool:
+    message = str(exc).lower()
+    return exc.status_code in {400, 404} and any(
+        column.lower() in message for column in column_names
+    )
+
+
 @dataclass(frozen=True)
 class CloudUser:
     id: str
@@ -41,6 +89,7 @@ class CloudUser:
     refresh_token: str = ""
     expires_at: int = 0
     expires_in: int = 0
+    expiry_source: str = "unknown"
 
 
 class SupabaseStore:
@@ -50,6 +99,21 @@ class SupabaseStore:
         self.service_role_key = _setting("SUPABASE_SERVICE_ROLE_KEY")
         self.secret_key = _setting("SUPABASE_SECRET_KEY")
         self.beta_start_at = _setting("BETA_START_AT")
+        self._auth_user_getter: Callable[[], CloudUser | None] | None = None
+        self._auth_user_updated: Callable[[CloudUser], None] | None = None
+        self._auth_user_invalidated: Callable[[CloudUser], None] | None = None
+        self._runtime_user: CloudUser | None = None
+
+    def bind_auth_session(
+        self,
+        user_getter: Callable[[], CloudUser | None],
+        user_updated: Callable[[CloudUser], None],
+        user_invalidated: Callable[[CloudUser], None],
+    ) -> None:
+        """Bind main-thread session callbacks used by the one-shot 401 recovery path."""
+        self._auth_user_getter = user_getter
+        self._auth_user_updated = user_updated
+        self._auth_user_invalidated = user_invalidated
 
     @property
     def server_key(self) -> str:
@@ -130,6 +194,61 @@ class SupabaseStore:
         except ValueError:
             return response.text
 
+    def _authenticated_request(
+        self,
+        user: CloudUser,
+        method: str,
+        path: str,
+        *,
+        allow_refresh: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """Retry exactly one explicit 401 after rotating the user's session."""
+        active_user = user
+        if allow_refresh:
+            if self._auth_user_getter is not None:
+                latest = self._auth_user_getter()
+                if latest is not None and latest.id == user.id:
+                    active_user = latest
+            elif self._runtime_user is not None and self._runtime_user.id == user.id:
+                active_user = self._runtime_user
+        try:
+            return self._request(
+                method, path, access_token=active_user.access_token, **kwargs
+            )
+        except CloudStoreError as exc:
+            if exc.status_code != 401 or not allow_refresh:
+                raise
+        if not active_user.refresh_token:
+            self._invalidate_runtime_user(active_user)
+            raise CloudSessionExpiredError(
+                "The saved login session has expired.", status_code=401
+            )
+        try:
+            refreshed = self.refresh(active_user.refresh_token)
+        except CloudSessionExpiredError:
+            self._invalidate_runtime_user(active_user)
+            raise
+        self._runtime_user = refreshed
+        if self._auth_user_updated is not None:
+            self._auth_user_updated(refreshed)
+        try:
+            return self._request(
+                method, path, access_token=refreshed.access_token, **kwargs
+            )
+        except CloudStoreError as exc:
+            if exc.status_code == 401:
+                self._invalidate_runtime_user(refreshed)
+                raise CloudSessionExpiredError(
+                    "The saved login session has expired.", status_code=401
+                ) from exc
+            raise
+
+    def _invalidate_runtime_user(self, user: CloudUser) -> None:
+        self._runtime_user = None
+        if self._auth_user_invalidated is not None:
+            self._auth_user_invalidated(user)
+
     def get_beta_funnel(self) -> dict[str, Any]:
         """Return anonymous aggregate counts using a server-only credential."""
         if not self.funnel_enabled:
@@ -193,10 +312,21 @@ class SupabaseStore:
         user: CloudUser | None = None,
     ) -> bool:
         """Record a deduplicated event without essay, report, email, or raw device id."""
-        return bool(self._request(
+        if user is None:
+            return bool(self._request(
+                "POST",
+                "/rest/v1/rpc/record_product_event",
+                payload={
+                    "p_event_name": event_name,
+                    "p_visitor_hash": visitor_hash,
+                    "p_flow_id": flow_id,
+                },
+            ))
+        return bool(self._authenticated_request(
+            user,
             "POST",
             "/rest/v1/rpc/record_product_event",
-            access_token=user.access_token if user else "",
+            allow_refresh=False,
             payload={
                 "p_event_name": event_name,
                 "p_visitor_hash": visitor_hash,
@@ -217,10 +347,26 @@ class SupabaseStore:
         event_id: str = "",
     ) -> bool:
         """Record one deduplicated event through the narrow analytics RPC."""
-        return bool(self._request(
+        if user is None:
+            return bool(self._request(
+                "POST",
+                "/rest/v1/rpc/record_analytics_event",
+                payload={
+                    "p_event_id": event_id or str(uuid.uuid4()),
+                    "p_session_id": session_id,
+                    "p_run_id": run_id or None,
+                    "p_event_name": event_name,
+                    "p_metadata_json": metadata or {},
+                    "p_dedupe_key": dedupe_key,
+                    "p_anonymous_user_id": anonymous_user_id or None,
+                },
+                timeout=2,
+            ))
+        return bool(self._authenticated_request(
+            user,
             "POST",
             "/rest/v1/rpc/record_analytics_event",
-            access_token=user.access_token if user else "",
+            allow_refresh=False,
             payload={
                 "p_event_id": event_id or str(uuid.uuid4()),
                 "p_session_id": session_id,
@@ -277,6 +423,15 @@ class SupabaseStore:
             raise
         return self._auth_user(result, fallback_refresh_token=refresh_token)
 
+    def sign_out(self, user: CloudUser) -> None:
+        """Best-effort official GoTrue logout; callers still clear local state on failure."""
+        self._request(
+            "POST",
+            "/auth/v1/logout",
+            access_token=user.access_token,
+            timeout=5,
+        )
+
     @staticmethod
     def _auth_user(
         result: Any,
@@ -288,19 +443,16 @@ class SupabaseStore:
         if not isinstance(result, dict):
             raise CloudStoreError("Authentication service returned an incomplete session.")
         user = result.get("user") or {}
-        try:
-            expires_in = max(0, int(float(result.get("expires_in") or 0)))
-            expires_at = max(0, int(float(result.get("expires_at") or 0)))
-        except (TypeError, ValueError):
-            expires_in = 0
-            expires_at = 0
-        if not expires_at and expires_in:
-            expires_at = int(time.time()) + expires_in
         access_token = str(result.get("access_token", ""))
         refresh_token = str(result.get("refresh_token") or fallback_refresh_token)
         user_id = str(user.get("id", ""))
         if not user_id or not access_token or not refresh_token:
             raise CloudStoreError("Authentication service returned an incomplete session.")
+        expires_at, expires_in, expiry_source = _auth_expiry(
+            access_token,
+            result.get("expires_at"),
+            result.get("expires_in"),
+        )
         return CloudUser(
             id=user_id,
             email=str(user.get("email") or fallback_email),
@@ -308,6 +460,7 @@ class SupabaseStore:
             refresh_token=refresh_token,
             expires_at=expires_at,
             expires_in=expires_in,
+            expiry_source=expiry_source,
         )
 
     def save_grading_cycle(
@@ -321,10 +474,10 @@ class SupabaseStore:
         content_hash: str,
     ) -> dict[str, Any]:
         structured = package["structured"]
-        result = self._request(
+        result = self._authenticated_request(
+            user,
             "POST",
             "/rest/v1/rpc/save_grading_cycle",
-            access_token=user.access_token,
             payload={
                 "p_question": question,
                 "p_essay": essay,
@@ -340,10 +493,10 @@ class SupabaseStore:
             },
         )
         if isinstance(result, dict) and result.get("reused") and result.get("grading_run_id"):
-            existing = self._request(
+            existing = self._authenticated_request(
+                user,
                 "GET",
                 "/rest/v1/grading_runs",
-                access_token=user.access_token,
                 params={
                     "select": "prompt_version",
                     "id": f"eq.{result['grading_run_id']}",
@@ -352,10 +505,10 @@ class SupabaseStore:
             )
             existing_version = existing[0].get("prompt_version") if isinstance(existing, list) and existing else ""
             if existing_version != package["prompt_version"]:
-                inserted = self._request(
+                inserted = self._authenticated_request(
+                    user,
                     "POST",
                     "/rest/v1/grading_runs",
-                    access_token=user.access_token,
                     prefer="return=representation",
                     payload={
                         "essay_id": result["essay_id"],
@@ -391,10 +544,10 @@ class SupabaseStore:
         }
         if prompt_version:
             params["prompt_version"] = f"eq.{prompt_version}"
-        result = self._request(
+        result = self._authenticated_request(
+            user,
             "GET",
             "/rest/v1/grading_runs",
-            access_token=user.access_token,
             params=params,
         )
         if isinstance(result, list) and result:
@@ -408,10 +561,10 @@ class SupabaseStore:
         scoring_prompt_version: str,
     ) -> dict[str, Any] | None:
         """Find a locked score independently of the teaching/report version."""
-        result = self._request(
+        result = self._authenticated_request(
+            user,
             "GET",
             "/rest/v1/grading_runs",
-            access_token=user.access_token,
             params={
                 "select": "id,essay_id,report_json,model,skill_version,created_at,essays!inner(content_hash)",
                 "essays.content_hash": f"eq.{content_hash}",
@@ -436,22 +589,26 @@ class SupabaseStore:
             "offset": str(offset),
         }
         try:
-            result = self._request(
-                "GET", "/rest/v1/grading_runs", access_token=user.access_token, params=params
+            result = self._authenticated_request(
+                user, "GET", "/rest/v1/grading_runs", params=params
             )
-        except CloudStoreError:
+        except CloudSessionExpiredError:
+            raise
+        except CloudStoreError as exc:
+            if not _missing_column_error(exc, "draft_role", "parent_run_id"):
+                raise
             params["select"] = "id,essay_id,overall_band,criteria,report_json,report_markdown,model,prompt_version,skill_version,created_at,essays(question,content,word_count)"
-            result = self._request(
-                "GET", "/rest/v1/grading_runs", access_token=user.access_token, params=params
+            result = self._authenticated_request(
+                user, "GET", "/rest/v1/grading_runs", params=params
             )
         return result if isinstance(result, list) else []
 
     def get_grading_run(self, user: CloudUser, grading_run_id: str) -> dict[str, Any] | None:
         """Load one owner-scoped grading run for a direct report link."""
-        result = self._request(
+        result = self._authenticated_request(
+            user,
             "GET",
             "/rest/v1/grading_runs",
-            access_token=user.access_token,
             params={
                 "select": "id,essay_id,overall_band,criteria,report_json,report_markdown,model,prompt_version,skill_version,created_at,essays(question,content,word_count)",
                 "id": f"eq.{grading_run_id}",
@@ -474,9 +631,8 @@ class SupabaseStore:
     ) -> dict[str, Any]:
         """Persist a linked draft as its own reusable run and report."""
         structured = package["structured"]
-        result = self._request(
-            "POST", "/rest/v1/rpc/save_linked_grading_cycle",
-            access_token=user.access_token,
+        result = self._authenticated_request(
+            user, "POST", "/rest/v1/rpc/save_linked_grading_cycle",
             payload={
                 "p_question": question, "p_essay": essay, "p_word_count": word_count,
                 "p_content_hash": content_hash, "p_overall_band": structured["overall_band"],
@@ -492,10 +648,10 @@ class SupabaseStore:
         """Persist derived learning assets without creating duplicates."""
         if not rows:
             return
-        self._request(
+        self._authenticated_request(
+            user,
             "POST",
             "/rest/v1/learning_items",
-            access_token=user.access_token,
             params={"on_conflict": "user_id,item_key"},
             prefer="resolution=ignore-duplicates,return=minimal",
             payload=rows,
@@ -503,18 +659,18 @@ class SupabaseStore:
 
     def upsert_learning_item(self, user: CloudUser, row: dict[str, Any]) -> dict[str, Any]:
         """Create a catalog-derived personal row on first use and return its id."""
-        result = self._request(
-            "POST", "/rest/v1/learning_items", access_token=user.access_token,
+        result = self._authenticated_request(
+            user, "POST", "/rest/v1/learning_items",
             params={"on_conflict": "user_id,item_key"},
             prefer="resolution=merge-duplicates,return=representation", payload=row,
         )
         return result[0] if isinstance(result, list) and result else {}
 
     def list_learning_items(self, user: CloudUser, limit: int = 1000) -> list[dict[str, Any]]:
-        result = self._request(
+        result = self._authenticated_request(
+            user,
             "GET",
             "/rest/v1/learning_items",
-            access_token=user.access_token,
             params={
                 "select": "id,grading_run_id,item_key,item_type,category,source_text,target_text,explanation,origin,topic_category,function_category,usage_note,favorite,status,review_count,last_reviewed_at,created_at,updated_at,grading_runs(created_at,essays(question))",
                 "order": "updated_at.desc",
@@ -540,10 +696,10 @@ class SupabaseStore:
         if review_count is not None:
             payload["review_count"] = review_count
             payload["last_reviewed_at"] = datetime.now(timezone.utc).isoformat()
-        self._request(
+        self._authenticated_request(
+            user,
             "PATCH",
             "/rest/v1/learning_items",
-            access_token=user.access_token,
             params={"id": f"eq.{item_id}"},
             prefer="return=minimal",
             payload=payload,
@@ -559,8 +715,8 @@ class SupabaseStore:
         model: str,
         prompt_version: str,
     ) -> None:
-        self._request(
-            "POST", "/rest/v1/expression_attempts", access_token=user.access_token,
+        self._authenticated_request(
+            user, "POST", "/rest/v1/expression_attempts",
             prefer="return=minimal",
             payload={
                 "user_id": user.id,
@@ -576,8 +732,8 @@ class SupabaseStore:
         )
 
     def list_expression_attempts(self, user: CloudUser, limit: int = 100) -> list[dict[str, Any]]:
-        result = self._request(
-            "GET", "/rest/v1/expression_attempts", access_token=user.access_token,
+        result = self._authenticated_request(
+            user, "GET", "/rest/v1/expression_attempts",
             params={
                 "select": "id,learning_item_id,submitted_sentence,feedback_zh,improved_sentence_en,appropriate,mastered,model,prompt_version,created_at",
                 "order": "created_at.desc", "limit": str(limit),
@@ -594,10 +750,10 @@ class SupabaseStore:
         mastered: bool,
     ) -> None:
         """Synchronize a practice result with matching reusable error assets."""
-        matches = self._request(
+        matches = self._authenticated_request(
+            user,
             "GET",
             "/rest/v1/learning_items",
-            access_token=user.access_token,
             params={
                 "select": "id,review_count",
                 "grading_run_id": f"eq.{grading_run_id}",
@@ -627,10 +783,10 @@ class SupabaseStore:
         mastered: bool = False,
         error_tags: list[str] | None = None,
     ) -> None:
-        self._request(
+        self._authenticated_request(
+            user,
             "POST",
             "/rest/v1/practice_attempts",
-            access_token=user.access_token,
             params={"on_conflict": "user_id,grading_run_id,task_kind,task_index"},
             prefer="resolution=merge-duplicates,return=minimal",
             payload={
@@ -648,10 +804,10 @@ class SupabaseStore:
         )
 
     def list_pending_practice(self, user: CloudUser, limit: int = 10) -> list[dict[str, Any]]:
-        result = self._request(
+        result = self._authenticated_request(
+            user,
             "GET",
             "/rest/v1/practice_attempts",
-            access_token=user.access_token,
             params={
                 "select": "id,grading_run_id,task_kind,task_index,original_text,submitted_text,feedback,revision_text,status,error_tags,updated_at",
                 "status": "eq.in_progress",
@@ -667,13 +823,17 @@ class SupabaseStore:
             "order": "created_at.desc", "limit": str(limit),
         }
         try:
-            result = self._request(
-                "GET", "/rest/v1/draft_revisions", access_token=user.access_token, params=params
+            result = self._authenticated_request(
+                user, "GET", "/rest/v1/draft_revisions", params=params
             )
-        except CloudStoreError:
+        except CloudSessionExpiredError:
+            raise
+        except CloudStoreError as exc:
+            if not _missing_column_error(exc, "revised_grading_run_id"):
+                raise
             params["select"] = "id,essay_id,grading_run_id,draft_number,content,score_snapshot,report_json,report_markdown,progress_report,created_at,grading_runs(overall_band,report_json,report_markdown,essays(question,content))"
-            result = self._request(
-                "GET", "/rest/v1/draft_revisions", access_token=user.access_token, params=params
+            result = self._authenticated_request(
+                user, "GET", "/rest/v1/draft_revisions", params=params
             )
         return result if isinstance(result, list) else []
 
@@ -704,17 +864,21 @@ class SupabaseStore:
         if revised_grading_run_id:
             payload["revised_grading_run_id"] = revised_grading_run_id
         try:
-            self._request(
-                "POST", "/rest/v1/draft_revisions", access_token=user.access_token,
+            self._authenticated_request(
+                user, "POST", "/rest/v1/draft_revisions",
                 prefer="return=minimal", payload=payload,
             )
-        except CloudStoreError:
+        except CloudSessionExpiredError:
+            raise
+        except CloudStoreError as exc:
             if not revised_grading_run_id:
+                raise
+            if not _missing_column_error(exc, "revised_grading_run_id"):
                 raise
             payload.pop("revised_grading_run_id", None)
             payload["report_json"] = report_json
             payload["report_markdown"] = report_markdown
-            self._request(
-                "POST", "/rest/v1/draft_revisions", access_token=user.access_token,
+            self._authenticated_request(
+                user, "POST", "/rest/v1/draft_revisions",
                 prefer="return=minimal", payload=payload,
             )

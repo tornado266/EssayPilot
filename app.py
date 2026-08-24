@@ -27,12 +27,22 @@ from src.ai_grader import (
 )
 from src.admin_dashboard import is_admin_request, render_admin_dashboard
 from src.auth_session import (
+    AUTH_BROWSER_COMMAND_KEY,
+    AUTH_BROWSER_VERSION_KEY,
+    AUTH_LOGOUT_PENDING_KEY,
+    AUTH_RECOVERY_STATE_KEY,
+    AUTH_USER_VERSION_KEY,
+    acknowledge_browser_command,
+    begin_logout,
+    browser_signaled_logout,
     browser_refresh_session,
     cloud_user_from_state,
     cloud_user_to_state,
+    parse_persisted_refresh_session,
     queue_refresh_token_clear,
     queue_refresh_token_write,
     resolve_auth_session,
+    start_logout_with_remote_best_effort,
     take_browser_command,
 )
 from src.analytics import record_grading_event
@@ -213,20 +223,141 @@ def write_cloud_user_state(user: CloudUser, *, persist: bool) -> None:
         queue_refresh_token_write(st.session_state, user.refresh_token)
 
 
+def finish_local_logout(*, reason: str) -> None:
+    """Finish phase two only after the browser has confirmed localStorage cleanup."""
+    previous_route = str(st.session_state.get("page_mode") or "home")
+    for key in (
+        "cloud_user",
+        AUTH_USER_VERSION_KEY,
+        AUTH_BROWSER_VERSION_KEY,
+        AUTH_BROWSER_COMMAND_KEY,
+        AUTH_LOGOUT_PENDING_KEY,
+        AUTH_RECOVERY_STATE_KEY,
+    ):
+        st.session_state.pop(key, None)
+    st.session_state.user_id = str(uuid.uuid4())
+    st.query_params.clear()
+    if reason == "invalid":
+        st.session_state.login_return_route = (
+            previous_route if previous_route in APP_ROUTES else "home"
+        )
+        st.session_state.page_mode = "login"
+        st.query_params["page"] = "login"
+    else:
+        st.session_state.page_mode = "home"
+
+
+def mark_cloud_session_invalid(user: CloudUser) -> None:
+    """Start a conditional clear so a stale tab cannot erase a newer session."""
+    current = session_cloud_user()
+    if current is None or current.id != user.id:
+        return
+    begin_logout(
+        st.session_state,
+        reason="invalid",
+        expected_version=int(st.session_state.get(AUTH_USER_VERSION_KEY) or 0),
+    )
+
+
+def _render_auth_wait(message: str, *, retry_label: str) -> None:
+    st.info(message)
+    if st.button(retry_label, key=f"auth_wait_{retry_label}"):
+        recovery = st.session_state.get(AUTH_RECOVERY_STATE_KEY)
+        if isinstance(recovery, dict):
+            recovery["attempts"] = 0
+        pending = st.session_state.get(AUTH_LOGOUT_PENDING_KEY)
+        if isinstance(pending, dict) and AUTH_BROWSER_COMMAND_KEY not in st.session_state:
+            queue_refresh_token_clear(
+                st.session_state,
+                expected_version=int(st.session_state.get(AUTH_BROWSER_VERSION_KEY) or 0),
+            )
+        st.rerun()
+    st.stop()
+
+
 def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
     """Restore or rotate one auth session without changing the product route."""
     command = take_browser_command(st.session_state)
     browser_value = browser_refresh_session(command)
+    ack = acknowledge_browser_command(st.session_state, browser_value)
+
+    logout_pending = st.session_state.get(AUTH_LOGOUT_PENDING_KEY)
+    if isinstance(logout_pending, dict):
+        reason = str(logout_pending.get("reason") or "user")
+        if ack is not None and ack.status == "cleared":
+            finish_local_logout(reason=reason)
+            st.rerun()
+        if ack is not None and ack.status == "skipped_newer" and ack.record is not None:
+            if reason == "invalid":
+                st.session_state.pop(AUTH_LOGOUT_PENDING_KEY, None)
+                browser_value = {
+                    "status": "loaded",
+                    "source": "ack",
+                    "refresh_token": ack.record.refresh_token,
+                    "saved_at": ack.record.saved_at,
+                    "version": ack.record.version,
+                }
+            else:
+                retries = int(logout_pending.get("clear_retries") or 0) + 1
+                logout_pending["clear_retries"] = retries
+                queue_refresh_token_clear(
+                    st.session_state, expected_version=ack.record.version
+                )
+                if retries <= 1:
+                    st.rerun()
+        if isinstance(st.session_state.get(AUTH_LOGOUT_PENDING_KEY), dict):
+            _render_auth_wait("正在退出登录…", retry_label="重试退出")
+
+    if browser_signaled_logout(browser_value):
+        finish_local_logout(reason="user")
+        st.rerun()
+
+    browser_record, _ = parse_persisted_refresh_session(browser_value)
+    if browser_record is not None:
+        st.session_state[AUTH_BROWSER_VERSION_KEY] = max(
+            int(st.session_state.get(AUTH_BROWSER_VERSION_KEY) or 0),
+            browser_record.version,
+        )
+    recovery_gate = st.session_state.get(AUTH_RECOVERY_STATE_KEY)
+    if isinstance(recovery_gate, dict) and int(recovery_gate.get("attempts") or 0) >= 1:
+        if recovery_gate.pop("retry_due", False):
+            pass
+        elif not (
+            isinstance(browser_value, dict)
+            and browser_value.get("source") == "storage"
+        ):
+            _render_auth_wait("正在恢复登录…", retry_label="重试恢复")
     current_user = session_cloud_user()
-    resolution = resolve_auth_session(store, current_user, browser_value)
-    if resolution.user is None:
-        if current_user is not None and resolution.state_changed:
-            st.session_state.pop("cloud_user", None)
-            st.session_state.user_id = str(uuid.uuid4())
-    elif resolution.state_changed:
-        write_cloud_user_state(resolution.user, persist=resolution.persist_refresh)
+    resolution = resolve_auth_session(
+        store,
+        current_user,
+        browser_value,
+        current_version=int(st.session_state.get(AUTH_USER_VERSION_KEY) or 0),
+    )
     if resolution.clear_persisted:
-        queue_refresh_token_clear(st.session_state)
+        begin_logout(
+            st.session_state,
+            reason="invalid",
+            expected_version=resolution.clear_expected_version,
+        )
+        st.rerun()
+    if resolution.recovery_pending:
+        recovery = st.session_state.setdefault(
+            AUTH_RECOVERY_STATE_KEY, {"attempts": 0}
+        )
+        attempts = int(recovery.get("attempts") or 0)
+        if attempts < 1:
+            recovery["attempts"] = attempts + 1
+            recovery["retry_due"] = True
+            st.rerun()
+        _render_auth_wait("正在恢复登录…", retry_label="重试恢复")
+    st.session_state.pop(AUTH_RECOVERY_STATE_KEY, None)
+    if resolution.user is None and current_user is not None and resolution.state_changed:
+        st.session_state.pop("cloud_user", None)
+        st.session_state.pop(AUTH_USER_VERSION_KEY, None)
+        st.session_state.user_id = str(uuid.uuid4())
+    elif resolution.user is not None and resolution.state_changed:
+        write_cloud_user_state(resolution.user, persist=resolution.persist_refresh)
     if resolution.state_changed:
         st.rerun()
     return resolution.user
@@ -368,11 +499,15 @@ def render_login_page(store: SupabaseStore) -> None:
 
 
 def logout_cloud_user() -> None:
-    st.session_state.pop("cloud_user", None)
-    queue_refresh_token_clear(st.session_state)
-    st.session_state.user_id = str(uuid.uuid4())
-    st.session_state.page_mode = "home"
-    st.query_params.clear()
+    """Start two-phase logout; local state remains blocked until browser ACK."""
+    user = session_cloud_user()
+    store = SupabaseStore()
+    start_logout_with_remote_best_effort(
+        st.session_state,
+        user,
+        store.sign_out,
+        expected_version=int(st.session_state.get(AUTH_USER_VERSION_KEY) or 0),
+    )
 
 
 def open_cloud_login(return_route: str = "home", return_mode: str = "") -> None:
@@ -2147,7 +2282,13 @@ def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> Non
     if user is not None and st.session_state.get("pending_guest_claim"):
         st.warning("这次游客批改仍在当前页面中，尚未保存到学习档案。")
         if st.button("重试保存这次批改", key="retry_guest_claim", use_container_width=True):
-            if claim_guest_result(SupabaseStore(), user):
+            retry_store = SupabaseStore()
+            retry_store.bind_auth_session(
+                session_cloud_user,
+                lambda refreshed: write_cloud_user_state(refreshed, persist=True),
+                mark_cloud_session_invalid,
+            )
+            if claim_guest_result(retry_store, user):
                 st.success("已保存到学习档案。")
                 st.rerun()
     with st.container(key="mobile_account_bar", border=True):
@@ -3555,6 +3696,11 @@ def render_product_route(store: SupabaseStore, user: CloudUser | None) -> None:
 
 
 cloud_store = SupabaseStore()
+cloud_store.bind_auth_session(
+    session_cloud_user,
+    lambda refreshed: write_cloud_user_state(refreshed, persist=True),
+    mark_cloud_session_invalid,
+)
 cloud_user = restore_cloud_user_session(cloud_store)
 
 if st.session_state.page_mode == "demo":

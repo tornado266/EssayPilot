@@ -1,6 +1,10 @@
 import unittest
+import base64
+import json
 from pathlib import Path
 from unittest.mock import Mock, patch
+
+import requests
 
 from src.cloud_store import CloudSessionExpiredError, CloudStoreError, CloudUser, SupabaseStore
 
@@ -13,6 +17,20 @@ class CloudStoreTests(unittest.TestCase):
         self.store.service_role_key = ""
         self.store.secret_key = ""
         self.store.beta_start_at = ""
+
+    @staticmethod
+    def response(status, data=None):
+        body = b"{}" if data is not None else b""
+        response = Mock(status_code=status, content=body)
+        response.json.return_value = data or {}
+        return response
+
+    @staticmethod
+    def jwt_with_exp(exp):
+        payload = base64.urlsafe_b64encode(
+            json.dumps({"exp": exp}).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+        return f"header.{payload}.signature"
 
     @patch("src.cloud_store.requests.request")
     def test_email_verification_keeps_supabase_expiry_fields(self, request):
@@ -30,6 +48,28 @@ class CloudStoreTests(unittest.TestCase):
 
         self.assertEqual(user.expires_at, 2_000_003_600)
         self.assertEqual(user.expires_in, 3600)
+        self.assertEqual(user.expiry_source, "expires_at")
+
+    @patch("src.cloud_store.time.time", return_value=2_000_000_000)
+    @patch("src.cloud_store.requests.request")
+    def test_expiry_falls_back_to_expires_in_then_jwt_then_unknown(self, request, _time):
+        base = {
+            "user": {"id": "user-a", "email": "a@example.com"},
+            "refresh_token": "refresh-token",
+        }
+        request.side_effect = [
+            self.response(200, {**base, "access_token": "opaque", "expires_at": "bad", "expires_in": 3600}),
+            self.response(200, {**base, "access_token": self.jwt_with_exp(2_000_007_200)}),
+            self.response(200, {**base, "access_token": "opaque"}),
+        ]
+
+        from_duration = self.store.verify_email_code("a@example.com", "111111")
+        from_jwt = self.store.verify_email_code("a@example.com", "222222")
+        unknown = self.store.verify_email_code("a@example.com", "333333")
+
+        self.assertEqual((from_duration.expires_at, from_duration.expiry_source), (2_000_003_600, "expires_in"))
+        self.assertEqual((from_jwt.expires_at, from_jwt.expiry_source), (2_000_007_200, "jwt"))
+        self.assertEqual((unknown.expires_at, unknown.expiry_source), (0, "unknown"))
 
     @patch("src.cloud_store.requests.request")
     def test_refresh_rotates_token_without_putting_it_in_url_params(self, request):
@@ -58,6 +98,134 @@ class CloudStoreTests(unittest.TestCase):
 
         with self.assertRaises(CloudSessionExpiredError):
             self.store.refresh("invalid-secret")
+
+    @patch("src.cloud_store.requests.request")
+    def test_first_401_refreshes_persists_rotation_and_retries_once(self, request):
+        old = CloudUser("user-a", "a@example.com", "access-old", "refresh-old")
+        refreshed_data = {
+            "user": {"id": "user-a", "email": "a@example.com"},
+            "access_token": "access-new",
+            "refresh_token": "refresh-new",
+            "expires_at": 2_000_003_600,
+            "expires_in": 3600,
+        }
+        request.side_effect = [
+            self.response(401, {"message": "expired"}),
+            self.response(200, refreshed_data),
+            self.response(200, []),
+        ]
+        updated = Mock()
+        invalidated = Mock()
+        self.store.bind_auth_session(lambda: old, updated, invalidated)
+
+        self.assertEqual(self.store.list_grading_runs(old), [])
+
+        self.assertEqual(request.call_count, 3)
+        updated.assert_called_once()
+        self.assertEqual(updated.call_args.args[0].refresh_token, "refresh-new")
+        invalidated.assert_not_called()
+        self.assertEqual(
+            request.call_args_list[2].kwargs["headers"]["Authorization"],
+            "Bearer access-new",
+        )
+
+    @patch("src.cloud_store.requests.request")
+    def test_second_401_stops_without_refresh_loop(self, request):
+        old = CloudUser("user-a", "a@example.com", "access-old", "refresh-old")
+        request.side_effect = [
+            self.response(401, {"message": "expired"}),
+            self.response(200, {
+                "user": {"id": "user-a", "email": "a@example.com"},
+                "access_token": "access-new",
+                "refresh_token": "refresh-new",
+            }),
+            self.response(401, {"message": "still expired"}),
+        ]
+        updated = Mock()
+        invalidated = Mock()
+        self.store.bind_auth_session(lambda: old, updated, invalidated)
+
+        with self.assertRaises(CloudSessionExpiredError):
+            self.store.list_grading_runs(old)
+
+        self.assertEqual(request.call_count, 3)
+        updated.assert_called_once()
+        invalidated.assert_called_once()
+
+    @patch("src.cloud_store.requests.request")
+    def test_timeout_and_5xx_do_not_refresh_or_replay(self, request):
+        user = CloudUser("user-a", "a@example.com", "access", "refresh")
+        updated = Mock()
+        self.store.bind_auth_session(lambda: user, updated, Mock())
+        request.side_effect = requests.Timeout("offline")
+
+        with self.assertRaises(CloudStoreError):
+            self.store.get_grading_run(user, "run-1")
+        self.assertEqual(request.call_count, 1)
+        updated.assert_not_called()
+
+        request.reset_mock()
+        request.side_effect = None
+        request.return_value = self.response(429, {"message": "rate limited"})
+        with self.assertRaises(CloudStoreError):
+            self.store.get_grading_run(user, "run-1")
+        self.assertEqual(request.call_count, 1)
+        updated.assert_not_called()
+
+        request.reset_mock()
+        request.side_effect = None
+        request.return_value = self.response(503, {"message": "unavailable"})
+        with self.assertRaises(CloudStoreError):
+            self.store.save_draft_revision(
+                user,
+                essay_id="essay-1",
+                grading_run_id="run-1",
+                content="revision",
+                scores={},
+                report_json={},
+                report_markdown="",
+                progress_report="",
+                revised_grading_run_id="run-2",
+            )
+        self.assertEqual(request.call_count, 1)
+
+        request.reset_mock()
+        request.side_effect = None
+        request.return_value = self.response(503, {"message": "unavailable"})
+        with self.assertRaises(CloudStoreError):
+            self.store.get_grading_run(user, "run-1")
+        self.assertEqual(request.call_count, 1)
+        updated.assert_not_called()
+
+    @patch("src.cloud_store.requests.request")
+    def test_background_analytics_401_never_uses_session_callbacks(self, request):
+        user = CloudUser("user-a", "a@example.com", "access", "refresh")
+        getter = Mock(side_effect=AssertionError("must stay off background session state"))
+        updated = Mock()
+        invalidated = Mock()
+        self.store.bind_auth_session(getter, updated, invalidated)
+        request.return_value = self.response(401, {"message": "expired"})
+
+        with self.assertRaises(CloudStoreError):
+            self.store.record_analytics_event("report_viewed", "session", "dedupe", user=user)
+
+        self.assertEqual(request.call_count, 1)
+        getter.assert_not_called()
+        updated.assert_not_called()
+        invalidated.assert_not_called()
+
+    @patch("src.cloud_store.requests.request")
+    def test_official_logout_uses_authorization_header_not_url(self, request):
+        request.return_value = self.response(204)
+        user = CloudUser("user-a", "a@example.com", "access-secret", "refresh-secret")
+
+        self.store.sign_out(user)
+
+        self.assertTrue(request.call_args.args[1].endswith("/auth/v1/logout"))
+        self.assertNotIn("access-secret", request.call_args.args[1])
+        self.assertEqual(
+            request.call_args.kwargs["headers"]["Authorization"], "Bearer access-secret"
+        )
 
     @patch("src.cloud_store.requests.request")
     def test_user_token_is_used_for_row_level_security(self, request):
