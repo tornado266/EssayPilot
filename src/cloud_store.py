@@ -103,6 +103,8 @@ class SupabaseStore:
         self._auth_user_updated: Callable[[CloudUser], None] | None = None
         self._auth_user_invalidated: Callable[[CloudUser], None] | None = None
         self._runtime_user: CloudUser | None = None
+        self._auth_refresh_attempted_user_ids: set[str] = set()
+        self._auth_blocked_user_ids: set[str] = set()
 
     def bind_auth_session(
         self,
@@ -204,6 +206,10 @@ class SupabaseStore:
         **kwargs: Any,
     ) -> Any:
         """Retry exactly one explicit 401 after rotating the user's session."""
+        if user.id in self._auth_blocked_user_ids:
+            raise CloudSessionExpiredError(
+                "The saved login session has expired.", status_code=401
+            )
         active_user = user
         if allow_refresh:
             if self._auth_user_getter is not None:
@@ -224,16 +230,20 @@ class SupabaseStore:
             raise CloudSessionExpiredError(
                 "The saved login session has expired.", status_code=401
             )
+        if active_user.id in self._auth_refresh_attempted_user_ids:
+            self._invalidate_runtime_user(active_user)
+            raise CloudSessionExpiredError(
+                "The saved login session has expired.", status_code=401
+            )
+        self._auth_refresh_attempted_user_ids.add(active_user.id)
         try:
             refreshed = self.refresh(active_user.refresh_token)
         except CloudSessionExpiredError:
             self._invalidate_runtime_user(active_user)
             raise
         self._runtime_user = refreshed
-        if self._auth_user_updated is not None:
-            self._auth_user_updated(refreshed)
         try:
-            return self._request(
+            result = self._request(
                 method, path, access_token=refreshed.access_token, **kwargs
             )
         except CloudStoreError as exc:
@@ -243,9 +253,13 @@ class SupabaseStore:
                     "The saved login session has expired.", status_code=401
                 ) from exc
             raise
+        if self._auth_user_updated is not None:
+            self._auth_user_updated(refreshed)
+        return result
 
     def _invalidate_runtime_user(self, user: CloudUser) -> None:
         self._runtime_user = None
+        self._auth_blocked_user_ids.add(user.id)
         if self._auth_user_invalidated is not None:
             self._auth_user_invalidated(user)
 
@@ -424,11 +438,12 @@ class SupabaseStore:
         return self._auth_user(result, fallback_refresh_token=refresh_token)
 
     def sign_out(self, user: CloudUser) -> None:
-        """Best-effort official GoTrue logout; callers still clear local state on failure."""
+        """Best-effort current-session logout; callers still clear local state on failure."""
         self._request(
             "POST",
             "/auth/v1/logout",
             access_token=user.access_token,
+            params={"scope": "local"},
             timeout=5,
         )
 

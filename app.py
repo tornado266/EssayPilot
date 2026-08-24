@@ -28,16 +28,23 @@ from src.ai_grader import (
 from src.admin_dashboard import is_admin_request, render_admin_dashboard
 from src.auth_session import (
     AUTH_BROWSER_COMMAND_KEY,
+    AUTH_BROWSER_RECOVERY_KEY,
     AUTH_BROWSER_VERSION_KEY,
+    AUTH_LISTENER_RERUN_KEY,
     AUTH_LOGOUT_PENDING_KEY,
     AUTH_RECOVERY_STATE_KEY,
+    AUTH_REQUEST_RERUN_KEY,
     AUTH_USER_VERSION_KEY,
     acknowledge_browser_command,
     begin_logout,
+    browser_ack_needs_listener_rerun,
+    browser_bootstrap_transition,
     browser_signaled_logout,
     browser_refresh_session,
     cloud_user_from_state,
     cloud_user_to_state,
+    consume_auth_request_rerun,
+    mark_browser_listener_stable,
     parse_persisted_refresh_session,
     queue_refresh_token_clear,
     queue_refresh_token_write,
@@ -215,12 +222,18 @@ def session_cloud_user() -> CloudUser | None:
     return cloud_user_from_state(st.session_state.get("cloud_user"))
 
 
-def write_cloud_user_state(user: CloudUser, *, persist: bool) -> None:
+def write_cloud_user_state(
+    user: CloudUser, *, persist: bool, request_rerun: bool = False
+) -> None:
     """Update login state without running first-login product side effects."""
     st.session_state.cloud_user = cloud_user_to_state(user)
     st.session_state.user_id = user.id
     if persist:
-        queue_refresh_token_write(st.session_state, user.refresh_token)
+        queue_refresh_token_write(
+            st.session_state,
+            user.refresh_token,
+            request_rerun=request_rerun,
+        )
 
 
 def finish_local_logout(*, reason: str) -> None:
@@ -231,8 +244,11 @@ def finish_local_logout(*, reason: str) -> None:
         AUTH_USER_VERSION_KEY,
         AUTH_BROWSER_VERSION_KEY,
         AUTH_BROWSER_COMMAND_KEY,
+        AUTH_BROWSER_RECOVERY_KEY,
+        AUTH_LISTENER_RERUN_KEY,
         AUTH_LOGOUT_PENDING_KEY,
         AUTH_RECOVERY_STATE_KEY,
+        AUTH_REQUEST_RERUN_KEY,
     ):
         st.session_state.pop(key, None)
     st.session_state.user_id = str(uuid.uuid4())
@@ -280,6 +296,7 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
     command = take_browser_command(st.session_state)
     browser_value = browser_refresh_session(command)
     ack = acknowledge_browser_command(st.session_state, browser_value)
+    current_user = session_cloud_user()
 
     logout_pending = st.session_state.get(AUTH_LOGOUT_PENDING_KEY)
     if isinstance(logout_pending, dict):
@@ -306,9 +323,29 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
                 if retries <= 1:
                     st.rerun()
         if isinstance(st.session_state.get(AUTH_LOGOUT_PENDING_KEY), dict):
+            bootstrap = browser_bootstrap_transition(st.session_state, browser_value)
+            if bootstrap == "retry":
+                st.info("正在退出登录…")
+                st.rerun()
             _render_auth_wait("正在退出登录…", retry_label="重试退出")
 
-    if browser_signaled_logout(browser_value):
+    if browser_ack_needs_listener_rerun(st.session_state, ack):
+        st.rerun()
+    mark_browser_listener_stable(st.session_state, command, browser_value)
+
+    bootstrap = browser_bootstrap_transition(st.session_state, browser_value)
+    if bootstrap == "wait":
+        st.info("正在恢复登录…")
+        st.stop()
+    if bootstrap == "retry":
+        st.info("正在恢复登录…")
+        st.rerun()
+    if bootstrap == "degraded":
+        st.warning("浏览器暂时无法保存登录状态，本次会话仍可继续使用。")
+
+    if browser_signaled_logout(
+        browser_value, has_current_user=current_user is not None
+    ):
         finish_local_logout(reason="user")
         st.rerun()
 
@@ -327,7 +364,6 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
             and browser_value.get("source") == "storage"
         ):
             _render_auth_wait("正在恢复登录…", retry_label="重试恢复")
-    current_user = session_cloud_user()
     resolution = resolve_auth_session(
         store,
         current_user,
@@ -358,6 +394,11 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
         st.session_state.user_id = str(uuid.uuid4())
     elif resolution.user is not None and resolution.state_changed:
         write_cloud_user_state(resolution.user, persist=resolution.persist_refresh)
+    if resolution.user is not None and resolution.browser_version:
+        st.session_state[AUTH_USER_VERSION_KEY] = max(
+            int(st.session_state.get(AUTH_USER_VERSION_KEY) or 0),
+            resolution.browser_version,
+        )
     if resolution.state_changed:
         st.rerun()
     return resolution.user
@@ -3698,7 +3739,9 @@ def render_product_route(store: SupabaseStore, user: CloudUser | None) -> None:
 cloud_store = SupabaseStore()
 cloud_store.bind_auth_session(
     session_cloud_user,
-    lambda refreshed: write_cloud_user_state(refreshed, persist=True),
+    lambda refreshed: write_cloud_user_state(
+        refreshed, persist=True, request_rerun=True
+    ),
     mark_cloud_session_invalid,
 )
 cloud_user = restore_cloud_user_session(cloud_store)
@@ -3737,4 +3780,6 @@ elif st.session_state.page_mode not in APP_ROUTES:
     st.session_state.page_mode = "home"
 ensure_run_context(cloud_store, cloud_user)
 render_product_route(cloud_store, cloud_user)
+if consume_auth_request_rerun(st.session_state):
+    st.rerun()
 st.stop()

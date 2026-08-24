@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Callable, MutableMapping
 
 import streamlit as st
@@ -23,6 +24,9 @@ AUTH_BROWSER_VERSION_KEY = "auth_browser_version"
 AUTH_USER_VERSION_KEY = "auth_user_version"
 AUTH_LOGOUT_PENDING_KEY = "auth_logout_pending"
 AUTH_RECOVERY_STATE_KEY = "auth_recovery_state"
+AUTH_BROWSER_RECOVERY_KEY = "auth_browser_recovery"
+AUTH_LISTENER_RERUN_KEY = "auth_listener_rerun"
+AUTH_REQUEST_RERUN_KEY = "auth_request_rerun"
 AUTH_RETENTION_SECONDS = 7 * 24 * 60 * 60
 ACCESS_REFRESH_SKEW_SECONDS = 5 * 60
 _MAX_REFRESH_TOKEN_LENGTH = 8192
@@ -40,16 +44,20 @@ _AUTH_COMPONENT = st.components.v2.component(
 
       const parseRecord = (raw) => {{
         if (!raw) return null;
-        const stored = JSON.parse(raw);
-        const refreshToken = String(stored?.refresh_token || "");
-        const savedAt = Number(stored?.saved_at || 0);
-        const version = Number(stored?.version || 0);
-        if (
-          !refreshToken || refreshToken.length > maxTokenLength ||
-          !Number.isFinite(savedAt) || savedAt <= 0 ||
-          !Number.isFinite(version) || version < 0
-        ) return null;
-        return {{ refresh_token: refreshToken, saved_at: savedAt, version }};
+        try {{
+          const stored = JSON.parse(raw);
+          const refreshToken = String(stored?.refresh_token || "");
+          const savedAt = Number(stored?.saved_at || 0);
+          const version = Number(stored?.version || 0);
+          if (
+            !refreshToken || refreshToken.length > maxTokenLength ||
+            !Number.isFinite(savedAt) || savedAt <= 0 ||
+            !Number.isFinite(version) || version < 0
+          ) return null;
+          return {{ refresh_token: refreshToken, saved_at: savedAt, version }};
+        }} catch (_) {{
+          return null;
+        }}
       }};
 
       const currentRecord = () => parseRecord(window.localStorage.getItem(key));
@@ -136,7 +144,10 @@ _AUTH_COMPONENT = st.components.v2.component(
         }} else {{
           const stored = currentRecord();
           const now = Date.now() / 1000;
-          if (!stored || stored.saved_at > now + 300 || now - stored.saved_at >= retentionSeconds) {{
+          if (!stored) {{
+            window.localStorage.removeItem(key);
+            setStateValue("auth_session", {{ status: "invalid", version: 0 }});
+          }} else if (stored.saved_at > now + 300 || now - stored.saved_at >= retentionSeconds) {{
             const expiredVersion = Number(stored?.version || 0);
             window.localStorage.removeItem(key);
             setStateValue("auth_session", {{ status: "expired", version: expiredVersion }});
@@ -157,6 +168,7 @@ _AUTH_COMPONENT = st.components.v2.component(
               emitRecord(newer, "loaded", {{ source: "storage" }});
             }} else {{
               const previous = parseRecord(event.oldValue);
+              if (event.newValue) window.localStorage.removeItem(key);
               setStateValue("auth_session", {{
                 status: "storage_cleared",
                 source: "storage",
@@ -245,7 +257,13 @@ def queue_refresh_token_write(
     refresh_token: str,
     *,
     now: float | None = None,
+    request_rerun: bool = False,
 ) -> int:
+    pending = state.get(AUTH_BROWSER_COMMAND_KEY)
+    if isinstance(state.get(AUTH_LOGOUT_PENDING_KEY), dict) or (
+        isinstance(pending, dict) and pending.get("action") == "clear"
+    ):
+        return int(state.get(AUTH_USER_VERSION_KEY) or 0)
     if not refresh_token:
         queue_refresh_token_clear(state)
         return 0
@@ -260,6 +278,8 @@ def queue_refresh_token_write(
         "expected_version": int(state.get(AUTH_BROWSER_VERSION_KEY) or 0),
     }
     state[AUTH_USER_VERSION_KEY] = version
+    if request_rerun:
+        state[AUTH_REQUEST_RERUN_KEY] = True
     return version
 
 
@@ -312,7 +332,7 @@ def parse_persisted_refresh_session(
     status = str(value.get("status", ""))
     if status in {"", "loading", "empty", "cleared", "storage_cleared", "unavailable"}:
         return None, False
-    if status == "expired":
+    if status in {"expired", "invalid"}:
         return None, True
     if status not in {"loaded", "written", "skipped_newer"}:
         return None, False
@@ -362,7 +382,58 @@ def acknowledge_browser_command(
     return BrowserAck(status, dict(pending), record)
 
 
-def browser_signaled_logout(value: object) -> bool:
+def browser_bootstrap_transition(
+    state: MutableMapping[str, Any], value: object
+) -> str:
+    """Return a bounded browser bootstrap action: wait, retry, degraded, or ready."""
+    status = str(value.get("status") or "") if isinstance(value, dict) else ""
+    if status in {"", "loading"}:
+        return "wait"
+    if status == "unavailable":
+        recovery = state.setdefault(AUTH_BROWSER_RECOVERY_KEY, {"attempts": 0})
+        attempts = int(recovery.get("attempts") or 0)
+        if attempts < 1:
+            recovery["attempts"] = attempts + 1
+            return "retry"
+        recovery["degraded"] = True
+        return "degraded"
+    state.pop(AUTH_BROWSER_RECOVERY_KEY, None)
+    return "ready"
+
+
+def browser_ack_needs_listener_rerun(
+    state: MutableMapping[str, Any], ack: BrowserAck | None
+) -> bool:
+    """Request exactly one rerun after an ACK whose component did not mount listeners."""
+    if ack is None or ack.status not in {"written", "skipped_newer"}:
+        return False
+    command_id = str(ack.command.get("command_id") or "")
+    if not command_id or state.get(AUTH_LISTENER_RERUN_KEY) == command_id:
+        return False
+    state[AUTH_LISTENER_RERUN_KEY] = command_id
+    state.pop(AUTH_REQUEST_RERUN_KEY, None)
+    return True
+
+
+def mark_browser_listener_stable(
+    state: MutableMapping[str, Any], command: object, value: object
+) -> bool:
+    """Mark the read-mode component stable after it has produced a browser result."""
+    if not isinstance(command, dict) or command.get("action") != "read":
+        return False
+    status = str(value.get("status") or "") if isinstance(value, dict) else ""
+    if status in {"", "loading", "unavailable"}:
+        return False
+    state.pop(AUTH_LISTENER_RERUN_KEY, None)
+    return True
+
+
+def consume_auth_request_rerun(state: MutableMapping[str, Any]) -> bool:
+    """Consume the one-shot rerun queued after a successful 401 recovery."""
+    return bool(state.pop(AUTH_REQUEST_RERUN_KEY, False))
+
+
+def browser_signaled_logout(value: object, *, has_current_user: bool = False) -> bool:
     return bool(
         isinstance(value, dict)
         and (
@@ -371,6 +442,7 @@ def browser_signaled_logout(value: object) -> bool:
                 and value.get("source") == "storage"
             )
             or value.get("status") == "skipped_cleared"
+            or (has_current_user and value.get("status") == "empty")
         )
     )
 
@@ -393,18 +465,29 @@ def start_logout_with_remote_best_effort(
     remote_logout: Callable[[CloudUser], None],
     *,
     expected_version: int,
+    remote_runner: Callable[[Callable[[], None]], None] | None = None,
 ) -> None:
     """Remote revocation may fail, but the ACK-backed local logout always starts."""
-    if user is not None:
-        try:
-            remote_logout(user)
-        except CloudStoreError:
-            pass
     begin_logout(
         state,
         reason="user",
         expected_version=expected_version,
     )
+    if user is not None:
+
+        def revoke_current_session() -> None:
+            try:
+                remote_logout(user)
+            except CloudStoreError:
+                pass
+
+        runner = remote_runner or (
+            lambda task: threading.Thread(target=task, daemon=True).start()
+        )
+        try:
+            runner(revoke_current_session)
+        except (RuntimeError, OSError):
+            pass
 
 
 def apply_browser_command_to_record(
@@ -486,6 +569,13 @@ def resolve_auth_session(
 ) -> AuthResolution:
     """Resolve with at most one primary refresh and one newer-token fallback."""
     persisted, should_clear = parse_persisted_refresh_session(browser_value, now=now)
+    if should_clear and current_user is not None and current_user.refresh_token:
+        return AuthResolution(
+            current_user,
+            persist_refresh=True,
+            state_changed=True,
+            browser_version=current_version,
+        )
     if should_clear:
         return AuthResolution(
             current_user,
@@ -501,6 +591,13 @@ def resolve_auth_session(
             and (persisted.version > current_version or (persisted.version == current_version == 0))
         )
         if browser_is_newer and persisted is not None:
+            synced_user = replace(current_user, refresh_token=persisted.refresh_token)
+            if not access_token_needs_refresh(synced_user, now=now):
+                return AuthResolution(
+                    synced_user,
+                    state_changed=True,
+                    browser_version=persisted.version,
+                )
             refreshed, outcome = _refresh_candidate(store, persisted.refresh_token)
             if outcome == "ok" and refreshed is not None:
                 return AuthResolution(

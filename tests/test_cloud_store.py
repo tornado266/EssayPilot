@@ -6,6 +6,18 @@ from unittest.mock import Mock, patch
 
 import requests
 
+from src.auth_session import (
+    AUTH_BROWSER_COMMAND_KEY,
+    AUTH_BROWSER_VERSION_KEY,
+    AUTH_LOGOUT_PENDING_KEY,
+    AUTH_REQUEST_RERUN_KEY,
+    acknowledge_browser_command,
+    apply_browser_command_to_record,
+    begin_logout,
+    PersistedRefreshSession,
+    queue_refresh_token_write,
+    take_browser_command,
+)
 from src.cloud_store import CloudSessionExpiredError, CloudStoreError, CloudUser, SupabaseStore
 
 
@@ -130,6 +142,42 @@ class CloudStoreTests(unittest.TestCase):
         )
 
     @patch("src.cloud_store.requests.request")
+    def test_401_retry_success_queues_write_and_matching_ack_completes_it(self, request):
+        old = CloudUser("user-a", "a@example.com", "access-old", "refresh-old")
+        refreshed_data = {
+            "user": {"id": "user-a", "email": "a@example.com"},
+            "access_token": "access-new",
+            "refresh_token": "refresh-new",
+            "expires_in": 3600,
+        }
+        request.side_effect = [
+            self.response(401, {"message": "expired"}),
+            self.response(200, refreshed_data),
+            self.response(200, []),
+        ]
+        state = {AUTH_BROWSER_VERSION_KEY: 7}
+        current = {"user": old}
+
+        def updated(user):
+            current["user"] = user
+            queue_refresh_token_write(
+                state, user.refresh_token, now=2_000_000_000, request_rerun=True
+            )
+
+        self.store.bind_auth_session(lambda: current["user"], updated, Mock())
+
+        self.assertEqual(self.store.list_grading_runs(old), [])
+        command = take_browser_command(state)
+        self.assertEqual(command["action"], "write")
+        self.assertEqual(command["refresh_token"], "refresh-new")
+        self.assertTrue(state[AUTH_REQUEST_RERUN_KEY])
+        existing = PersistedRefreshSession("refresh-old", 1_999_999_900, 7)
+        _record, browser_value = apply_browser_command_to_record(existing, command)
+        ack = acknowledge_browser_command(state, browser_value, now=2_000_000_000)
+        self.assertEqual(ack.status, "written")
+        self.assertNotIn(AUTH_BROWSER_COMMAND_KEY, state)
+
+    @patch("src.cloud_store.requests.request")
     def test_second_401_stops_without_refresh_loop(self, request):
         old = CloudUser("user-a", "a@example.com", "access-old", "refresh-old")
         request.side_effect = [
@@ -149,8 +197,44 @@ class CloudStoreTests(unittest.TestCase):
             self.store.list_grading_runs(old)
 
         self.assertEqual(request.call_count, 3)
-        updated.assert_called_once()
+        updated.assert_not_called()
         invalidated.assert_called_once()
+
+        with self.assertRaises(CloudSessionExpiredError):
+            self.store.list_grading_runs(old)
+        self.assertEqual(request.call_count, 3)
+
+    @patch("src.cloud_store.requests.request")
+    def test_second_401_clear_blocks_late_write_and_all_followup_requests(self, request):
+        old = CloudUser("user-a", "a@example.com", "access-old", "refresh-old")
+        request.side_effect = [
+            self.response(401, {"message": "expired"}),
+            self.response(200, {
+                "user": {"id": "user-a", "email": "a@example.com"},
+                "access_token": "access-new",
+                "refresh_token": "refresh-new",
+            }),
+            self.response(401, {"message": "still expired"}),
+        ]
+        state = {AUTH_BROWSER_VERSION_KEY: 12}
+
+        def invalidated(_user):
+            begin_logout(state, reason="invalid", expected_version=12)
+
+        self.store.bind_auth_session(lambda: old, Mock(), invalidated)
+        with self.assertRaises(CloudSessionExpiredError):
+            self.store.list_grading_runs(old)
+
+        clear_command = take_browser_command(state)
+        self.assertEqual(clear_command["action"], "clear")
+        self.assertIn(AUTH_LOGOUT_PENDING_KEY, state)
+        queue_refresh_token_write(
+            state, "late-refresh", now=2_000_000_000, request_rerun=True
+        )
+        self.assertEqual(take_browser_command(state), clear_command)
+        with self.assertRaises(CloudSessionExpiredError):
+            self.store.get_grading_run(old, "run-2")
+        self.assertEqual(request.call_count, 3)
 
     @patch("src.cloud_store.requests.request")
     def test_timeout_and_5xx_do_not_refresh_or_replay(self, request):
@@ -226,6 +310,7 @@ class CloudStoreTests(unittest.TestCase):
         self.assertEqual(
             request.call_args.kwargs["headers"]["Authorization"], "Bearer access-secret"
         )
+        self.assertEqual(request.call_args.kwargs["params"], {"scope": "local"})
 
     @patch("src.cloud_store.requests.request")
     def test_user_token_is_used_for_row_level_security(self, request):
