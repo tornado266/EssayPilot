@@ -527,10 +527,25 @@ def take_browser_command(state: MutableMapping[str, Any]) -> dict[str, Any]:
     return {"action": "read", "read_epoch": read_epoch}
 
 
+def _browser_component_key(command: dict[str, Any]) -> str:
+    """Mount each browser command separately without exposing its payload."""
+    action = str(command.get("action") or "read")
+    identity = str(
+        command.get("command_id")
+        if action in {"write", "clear"}
+        else command.get("read_epoch")
+        or "missing"
+    )
+    opaque_identity = uuid.uuid5(
+        uuid.NAMESPACE_OID, f"{action}:{identity}"
+    ).hex
+    return f"essaypilot_auth_session_{action}_{opaque_identity}"
+
+
 def browser_refresh_session(command: dict[str, Any]) -> dict[str, Any]:
     result = _AUTH_COMPONENT(
         data=command,
-        key="essaypilot_auth_session",
+        key=_browser_component_key(command),
         default={"auth_session": {"status": "loading"}, "auth_wake": 0},
         on_auth_session_change=lambda: None,
         on_auth_wake_change=lambda: None,

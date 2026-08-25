@@ -22,6 +22,7 @@ from src.auth_session import (
     AUTH_USER_VERSION_KEY,
     AUTH_RETENTION_SECONDS,
     PersistedRefreshSession,
+    _browser_component_key,
     acknowledge_browser_command,
     apply_browser_command_to_record,
     begin_logout,
@@ -668,6 +669,38 @@ class AuthSessionTests(unittest.TestCase):
             "action": "clear", "command_id": "clear-1", "expected_version": 0
         })
         self.assertEqual(value["command_id"], "clear-1")
+        self.assertEqual(
+            component.call_args.kwargs["key"],
+            _browser_component_key({"action": "clear", "command_id": "clear-1"}),
+        )
+
+    def test_component_key_remounts_between_read_and_write_but_not_write_retry(self):
+        state = {}
+        read = take_browser_command(state)
+        read_key = _browser_component_key(read)
+        self.assertEqual(read_key, _browser_component_key(dict(read)))
+
+        queue_refresh_token_write(state, "refresh-secret", now=self.now)
+        write = take_browser_command(state)
+        write_key = _browser_component_key(write)
+
+        self.assertNotEqual(read_key, write_key)
+        self.assertEqual(write_key, _browser_component_key(dict(write)))
+        self.assertNotIn("refresh-secret", write_key)
+
+        acknowledge_browser_command(
+            state,
+            {
+                "status": "written",
+                "command_id": write["command_id"],
+                "refresh_token": write["refresh_token"],
+                "saved_at": write["saved_at"],
+                "version": write["version"],
+            },
+            now=self.now,
+        )
+        listener = take_browser_command(state)
+        self.assertNotEqual(write_key, _browser_component_key(listener))
 
     def test_browser_record_validation_supports_legacy_version(self):
         legacy = self.browser_value()
