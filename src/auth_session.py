@@ -48,6 +48,21 @@ _AUTH_COMPONENT = st.components.v2.component(
       const action = data?.action || "read";
       const commandId = String(data?.command_id || "");
       const readEpoch = String(data?.read_epoch || "");
+      const storage = (() => {{
+        const candidates = [
+          () => window.top?.localStorage,
+          () => window.localStorage,
+        ];
+        for (const candidate of candidates) {{
+          try {{
+            const resolved = candidate();
+            if (resolved) return resolved;
+          }} catch (_) {{
+            // Continue to the same-frame fallback.
+          }}
+        }}
+        return null;
+      }})();
 
       const parseRecord = (raw) => {{
         if (!raw) return null;
@@ -67,7 +82,7 @@ _AUTH_COMPONENT = st.components.v2.component(
         }}
       }};
 
-      const currentRecord = () => parseRecord(window.localStorage.getItem(key));
+      const currentRecord = () => parseRecord(storage.getItem(key));
       const parseTombstones = (raw) => {{
         const now = Date.now() / 1000;
         let stored = [];
@@ -97,13 +112,13 @@ _AUTH_COMPONENT = st.components.v2.component(
           .slice(-maxTombstones);
       }};
       const currentTombstones = () => {{
-        const raw = window.localStorage.getItem(tombstoneKey);
+        const raw = storage.getItem(tombstoneKey);
         const active = parseTombstones(raw);
         const serialized = JSON.stringify(active);
         if (active.length > 0 && raw !== serialized) {{
-          window.localStorage.setItem(tombstoneKey, serialized);
+          storage.setItem(tombstoneKey, serialized);
         }} else if (active.length === 0 && raw) {{
-          window.localStorage.removeItem(tombstoneKey);
+          storage.removeItem(tombstoneKey);
         }}
         return active;
       }};
@@ -122,7 +137,7 @@ _AUTH_COMPONENT = st.components.v2.component(
         }}))
           .sort((left, right) => left.expires_at - right.expires_at)
           .slice(-maxTombstones);
-        window.localStorage.setItem(tombstoneKey, JSON.stringify(active));
+        storage.setItem(tombstoneKey, JSON.stringify(active));
         return active.map((item) => item.version);
       }};
       const currentTombstoneVersions = () =>
@@ -211,7 +226,7 @@ _AUTH_COMPONENT = st.components.v2.component(
             }});
             return;
           }}
-          window.localStorage.setItem(key, JSON.stringify(requested));
+          storage.setItem(key, JSON.stringify(requested));
           emitRecord(requested, "written", {{
             command_id: commandId, ...tombstoneExtra
           }});
@@ -238,7 +253,7 @@ _AUTH_COMPONENT = st.components.v2.component(
             }});
             return;
           }}
-          window.localStorage.removeItem(key);
+          storage.removeItem(key);
           setStateValue("auth_session", {{
             status: "cleared",
             command_id: commandId,
@@ -249,7 +264,7 @@ _AUTH_COMPONENT = st.components.v2.component(
         }}
 
         const tombstoneVersions = currentTombstoneVersions();
-        const raw = window.localStorage.getItem(key);
+        const raw = storage.getItem(key);
         if (!raw) {{
           setStateValue("auth_session", {{
             status: "empty", source: "read", read_epoch: readEpoch,
@@ -259,14 +274,14 @@ _AUTH_COMPONENT = st.components.v2.component(
           const stored = currentRecord();
           const now = Date.now() / 1000;
           if (!stored) {{
-            window.localStorage.removeItem(key);
+            storage.removeItem(key);
             setStateValue("auth_session", {{
               status: "invalid", source: "read", read_epoch: readEpoch, version: 0,
               tombstone_versions: tombstoneVersions,
             }});
           }} else if (stored.saved_at > now + 300 || now - stored.saved_at >= retentionSeconds) {{
             const expiredVersion = Number(stored?.version || 0);
-            window.localStorage.removeItem(key);
+            storage.removeItem(key);
             setStateValue("auth_session", {{
               status: "expired", source: "read",
               read_epoch: readEpoch, version: expiredVersion,
@@ -296,7 +311,7 @@ _AUTH_COMPONENT = st.components.v2.component(
               }});
             }} else {{
               const previous = parseRecord(event.oldValue);
-              if (event.newValue) window.localStorage.removeItem(key);
+              if (event.newValue) storage.removeItem(key);
               setStateValue("auth_session", {{
                 status: "storage_cleared",
                 source: "storage",
