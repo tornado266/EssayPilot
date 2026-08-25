@@ -367,6 +367,14 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
     if bootstrap == "degraded":
         st.warning("浏览器暂时无法保存登录状态，本次会话仍可继续使用。")
 
+    if (
+        bootstrap != "degraded"
+        and isinstance(command, dict)
+        and command.get("action") == "write"
+        and ack is None
+    ):
+        st.info("正在保存登录状态…")
+        st.stop()
     if st.session_state.get(AUTH_PERSIST_WARNING_KEY):
         st.warning("本次登录无法持久保存；关闭此页面后可能需要重新登录。")
     if browser_signaled_logout(

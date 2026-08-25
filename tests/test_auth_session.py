@@ -932,6 +932,81 @@ class AuthSessionTests(unittest.TestCase):
             persistence_failed=state[AUTH_PERSIST_WARNING_KEY],
         ))
 
+    def test_app_restore_rotated_token_is_written_before_page_render(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        now = time.time()
+        restored = CloudUser(
+            "user-a",
+            "person@example.com",
+            "access-new",
+            "refresh-new",
+            int(now + 3600),
+            3600,
+            "expires_at",
+        )
+        browser = {
+            "record": PersistedRefreshSession("refresh-old", now, 10),
+            "tombstones": [],
+        }
+        component_actions = []
+        render_tokens = []
+
+        def auth_component(*_args, **kwargs):
+            data = kwargs["data"]
+            action = str(data.get("action") or "read")
+            component_actions.append(action)
+            if action == "write":
+                browser["record"], value = apply_browser_command_to_record(
+                    browser["record"],
+                    data,
+                    tombstone_versions=browser["tombstones"],
+                )
+                value["tombstone_versions"] = browser["tombstones"]
+            else:
+                record = browser["record"]
+                value = {
+                    "status": "loaded",
+                    "source": "read",
+                    "read_epoch": data["read_epoch"],
+                    "refresh_token": record.refresh_token,
+                    "saved_at": record.saved_at,
+                    "version": record.version,
+                    "tombstone_versions": browser["tombstones"],
+                }
+            return SimpleNamespace(auth_session=value, auth_wake=0)
+
+        def visitor_id():
+            render_tokens.append(browser["record"].refresh_token)
+            return ""
+        with (
+            patch("src.auth_session._AUTH_COMPONENT", side_effect=auth_component),
+            patch("src.cloud_store._setting", return_value=""),
+            patch.object(SupabaseStore, "refresh", return_value=restored) as refresh,
+            patch("src.ai_grader.grade_essay_package") as grade,
+            patch("src.storage.save_markdown_record") as local_save,
+            patch("src.error_book.append_error_book") as error_save,
+            patch.object(SupabaseStore, "save_grading_cycle") as cloud_save,
+            patch("src.product_analytics.record_event_safely", return_value=None),
+            patch("src.visitor_identity.browser_visitor_id", side_effect=visitor_id),
+        ):
+            app.run()
+
+        self.assertEqual(len(app.exception), 0)
+        refresh.assert_called_once_with("refresh-old")
+        self.assertTrue(render_tokens)
+        self.assertEqual(render_tokens[0], "refresh-new")
+        self.assertGreaterEqual(len(component_actions), 3)
+        self.assertEqual(component_actions[:3], ["read", "write", "read"])
+        self.assertEqual(browser["record"].refresh_token, "refresh-new")
+        self.assertEqual(
+            app.session_state["cloud_user"]["refresh_token"], "refresh-new"
+        )
+        self.assertNotIn(AUTH_BROWSER_COMMAND_KEY, app.session_state)
+        grade.assert_not_called()
+        local_save.assert_not_called()
+        error_save.assert_not_called()
+        cloud_save.assert_not_called()
+
     def test_app_stale_clear_signals_do_not_logout_new_user(self):
         now = time.time()
         user = CloudUser(
@@ -1031,6 +1106,10 @@ class AuthSessionTests(unittest.TestCase):
         )
         self.assertNotIn(AUTH_LOGOUT_PENDING_KEY, app.session_state)
 
+        self.assertIn(
+            "正在保存登录状态…",
+            [item.value for item in app.info],
+        )
     def test_app_unavailable_storage_logout_leaves_waiting_state(self):
         app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
         now = time.time()
