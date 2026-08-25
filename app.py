@@ -298,6 +298,50 @@ def _render_auth_wait(message: str, *, retry_label: str) -> None:
     st.stop()
 
 
+def _render_auth_debug(
+    command: object,
+    browser_value: object,
+    ack: object,
+    current_user: CloudUser | None,
+) -> None:
+    """Show a bounded, token-free auth trace only when explicitly requested."""
+    if str(st.query_params.get("auth_debug", "") or "") != "1":
+        return
+    command_data = command if isinstance(command, dict) else {}
+    browser_data = browser_value if isinstance(browser_value, dict) else {}
+    pending = st.session_state.get(AUTH_BROWSER_COMMAND_KEY)
+    pending_data = pending if isinstance(pending, dict) else {}
+    action = str(command_data.get("action") or "")
+    snapshot = {
+        "command": action,
+        "browser_status": str(browser_data.get("status") or ""),
+        "browser_source": str(browser_data.get("source") or ""),
+        "ack": str(getattr(ack, "status", "") or ""),
+        "pending": str(pending_data.get("action") or ""),
+        "current_user": current_user is not None,
+        "persist_warning": bool(st.session_state.get(AUTH_PERSIST_WARNING_KEY)),
+        "logout_pending": isinstance(
+            st.session_state.get(AUTH_LOGOUT_PENDING_KEY), dict
+        ),
+        "command_matches": bool(
+            action in {"write", "clear"}
+            and browser_data.get("command_id")
+            and browser_data.get("command_id") == command_data.get("command_id")
+        ),
+        "read_matches": bool(
+            action == "read"
+            and browser_data.get("read_epoch")
+            and browser_data.get("read_epoch") == command_data.get("read_epoch")
+        ),
+    }
+    history = st.session_state.setdefault("_auth_debug_history", [])
+    if not history or history[-1] != snapshot:
+        history.append(snapshot)
+        del history[:-8]
+    st.caption("登录诊断（不包含令牌）")
+    st.json({"build": "auth-state-v1", "history": list(history)})
+
+
 def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
     """Restore or rotate one auth session without changing the product route."""
     command = take_browser_command(st.session_state)
@@ -353,6 +397,7 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
                 return None
             _render_auth_wait("正在退出登录…", retry_label="重试退出")
 
+    _render_auth_debug(command, browser_value, ack, current_user)
     if browser_ack_needs_listener_rerun(st.session_state, ack):
         st.rerun()
     listener_stable = mark_browser_listener_stable(st.session_state, command, browser_value)

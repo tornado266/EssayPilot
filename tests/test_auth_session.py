@@ -462,6 +462,14 @@ class AuthSessionTests(unittest.TestCase):
         self.assertIn("正在恢复登录…", [item.value for item in app.info])
         self.assertNotIn("邮箱", [item.label for item in app.text_input])
 
+    def test_auth_debug_trace_is_opt_in_and_token_free(self):
+        source = function_source("_render_auth_debug")
+        self.assertIn('st.query_params.get("auth_debug"', source)
+        self.assertIn('"auth-state-v1"', source)
+        self.assertNotIn("refresh_token", source)
+        self.assertNotIn("access_token", source)
+        self.assertNotIn("saved_at", source)
+
     def test_unavailable_storage_keeps_logout_clear_but_does_not_retry_forever(self):
         state = {AUTH_BROWSER_VERSION_KEY: 10}
         begin_logout(state, reason="user", expected_version=10)
