@@ -1,351 +1,257 @@
-# EssayPilot｜雅思写作训练
+# EssayPilot｜雅思写作训练与二稿提升
 
-### 从作文诊断到二稿提升
+<p align="center">
+  <strong>把一次 AI 批改，变成真正能迁移到下一篇作文的训练。</strong>
+</p>
 
-[访问 EssayPilot 官网](https://essaypilot.cn/) | [进入雅思写作训练工具](https://xbz4ydgw2t6cm2ytkh79vq.streamlit.app/) | [查看代码仓库](https://github.com/tornado266/EssayPilot)
+<p align="center">
+  <a href="https://essaypilot.cn/">产品官网</a> ·
+  <a href="https://xbz4ydgw2t6cm2ytkh79vq.streamlit.app/">在线体验</a> ·
+  <a href="https://github.com/tornado266/EssayPilot">GitHub 仓库</a>
+</p>
 
-`essaypilot.cn` 是 EssayPilot 的品牌官网与写作指南入口；Streamlit 地址是实际训练应用，用于作文诊断、专项练习、第二稿与学习档案。
+![EssayPilot 产品导览封面](screenshots/walkthrough-01-cover.jpg)
 
-EssayPilot is a Streamlit learning workspace for IELTS Writing Task 2. It uses a fixed `gpt-5.4-mini` examiner, deterministic band calculation, evidence-based feedback, guided rewriting, second-draft comparison, and an optional cloud learning profile.
+EssayPilot 是一个面向中文学习者的 **IELTS Writing Task 2** 学习工作台。它不止返回一个估分或一篇“标准答案”，而是把完整学习过程串成一条清晰路径：
 
-EssayPilot supports a private developer dashboard for the public-beta learning funnel. Access is protected by `ADMIN_PASSWORD`; its service-role query returns anonymous counts only and never returns email addresses, essay text, or reports.
+> 提交初稿 → 查看评分与原文证据 → 找到最影响提分的问题 → 完成单句和逻辑训练 → 写第二稿 → 对比进步 → 沉淀学习档案
 
-> EssayPilot is a practice tool, not an official IELTS score report.
+当前版本固定使用 `gpt-5.4-mini` 进行评分与教学反馈，以减少频繁切换模型带来的标准漂移。所有分数均为 AI 练习估分，**不是 IELTS 官方成绩**。
 
-![EssayPilot writing workspace](screenshots/dashboard.png)
+## 为什么做 EssayPilot
 
-## Product Highlights
+很多写作批改工具停在“指出问题”这一步：学生看懂了反馈，却不知道下一步该练什么，也很难确认第二稿是否真的进步。
 
-- **Four-criterion scoring** for Task Response, Coherence and Cohesion, Lexical Resource, and Grammatical Range and Accuracy.
-- **Strength-and-weakness evidence** for every criterion, grounded in the student's own writing.
-- **Active rewriting practice** at both sentence and paragraph-logic level; students write before receiving feedback.
-- **Chinese coaching feedback** that explains what improved, what remains weak, and how to reach Band 6.5+.
-- **Band 7 reference material** including improved language, useful expressions, and model rewrites.
-- **Markdown and polished PDF export** containing the question, original essay, score, and complete feedback.
-- **Progress tracking** with a fixed 3-9 IELTS band chart for recent saved attempts.
+EssayPilot 把重点放在反馈之后：
 
-## Product Tour
+- **先找最大阻点**：按 TR、CC、LR、GRA 四项维度评分，并优先呈现最影响下一档分数的问题。
+- **每条判断都有证据**：从评分维度回到原文中的具体句子，不用泛泛的模板化建议代替诊断。
+- **把问题直接变成练习**：针对单句表达、段落逻辑和整篇第二稿分别训练。
+- **用第二稿验证反馈**：比较两稿分数、已经改善的问题、仍然存在的问题和下一轮优先级。
+- **留下可复习的资产**：保存批改记录、错题、表达练习和二稿变化，逐步形成个人学习档案。
 
-### 1. Score overview
+## 核心能力
 
-The report begins with the estimated overall band and a separate score card for each IELTS criterion.
+| 模块 | 你会得到什么 |
+| --- | --- |
+| 四维评分 | Task Response、Coherence & Cohesion、Lexical Resource、Grammatical Range & Accuracy 四项估分与依据 |
+| 重点诊断 | 本轮最值得优先解决的 1–2 个问题，以及可执行的修改方向 |
+| 原文问题地图 | 把语法、词汇、衔接和表达问题定位回原文，保留上下文证据 |
+| 学习词典式讲解 | 针对问题节点解释替换词、搭配和更自然的表达，而不是只给答案 |
+| 专项训练 | 单句改写、逻辑展开和反馈后的再次修改 |
+| 第二稿对比 | 对照两稿的四项分数、已改善问题、残留问题与下一轮训练重点 |
+| 学习档案 | 汇总历史批改、错题本、表达库、二稿记录和进步趋势 |
+| 报告导出 | 登录后可下载 Markdown 与排版后的中文 PDF 报告 |
 
-![Overall band and IELTS criteria](screenshots/report-overview.png)
+## 第一次怎么用
 
-### 2. Criterion-level diagnosis
+1. 在“写作批改”中粘贴完整的 Task 2 英文题目和作文原文。
+2. 提交批改，先看 Overall 与四项分数，再看最影响提分的问题。
+3. 打开“原文问题地图”，确认每条反馈对应的原句和具体证据。
+4. 进入“专项训练”，先改句子、补逻辑，再独立完成整篇第二稿。
+5. 提交第二稿，查看两稿变化和下一轮优先级。
+6. 在“学习档案”中复习反复出现的错误、积累表达并追踪进步。
 
-Each IELTS criterion can be expanded independently. The dashboard separates evidence that helps the score from the main issue that limits the next band.
+在线版允许访客先完成一次体验；登录后可以继续训练、下载报告，并在不同设备间保存学习记录。本地运行时，数据也可以只保存在当前电脑。
 
-![Criterion strengths and weaknesses](screenshots/criteria-details.png)
+## 完整产品导览
 
-### 3. Full examiner feedback
+<details>
+<summary><strong>01–03｜从第一次使用到个人学习首页</strong></summary>
 
-Detailed feedback is kept in a collapsible report so the dashboard remains easy to scan while preserving the complete analysis.
+### 六步完成一次训练
 
-![Detailed examiner feedback](screenshots/detailed-feedback.png)
+![第一次使用流程](screenshots/walkthrough-02-getting-started.jpg)
 
-### 4. A workspace that moves from report to practice
+### 每次打开都知道下一步练什么
 
-The report, sentence practice, logic check, and score history are separate collapsible areas. Students can focus on one learning task at a time while the progress chart keeps recent attempts comparable on a fixed 3-9 band scale.
+![学习首页](screenshots/walkthrough-03-dashboard.jpg)
 
-![Practice modules and IELTS band history](screenshots/history-and-modules.png)
+</details>
 
-### 5. Sentence-level score improvement
+<details>
+<summary><strong>04–06｜从分数回到原文证据</strong></summary>
 
-EssayPilot extracts weak sentences and asks the student to rewrite them. A reference answer is available, but the main workflow encourages the student to attempt the correction first.
+### 不只给分，先找最影响提分的问题
 
-![Sentence rewriting practice](screenshots/sentence-practice.png)
+![评分与优先级](screenshots/walkthrough-04-score-priority.jpg)
 
-After submission, the AI gives concise Chinese feedback, an estimated level, a more natural Band 6.5-7 version, and reusable language patterns.
+### 从评分维度定位到原文中的问题
 
-![AI review of a sentence rewrite](screenshots/sentence-feedback.png)
+![原文问题地图](screenshots/walkthrough-05-evidence-map.jpg)
 
-### 6. Logic and paragraph development
+### 把一次批改变成可复用的表达学习
 
-The logic check targets higher-level problems such as vague claims, shallow explanation, unsupported examples, and weak paragraph progression. Each task includes the original passage and a concrete rewriting constraint.
+![问题节点详解](screenshots/walkthrough-06-deep-dive.jpg)
 
-![Paragraph logic rewriting task](screenshots/logic-practice.png)
+</details>
 
-The comparison step checks whether the rewrite is clearer and closer to Band 6.5+. If the student submits an incomplete rewrite, the system explains why the logic cannot yet be evaluated.
+<details>
+<summary><strong>07–09｜专项训练、二稿验证与长期记录</strong></summary>
 
-![Logic comparison feedback](screenshots/logic-feedback-summary.png)
+### 把报告里的问题直接变成练习
 
-It then converts the weakness into a practical rewrite plan: retain the claim, deepen the explanation, strengthen the example, and reconnect the paragraph to the position.
+![专项训练](screenshots/walkthrough-07-focused-practice.jpg)
 
-![Detailed logic improvement guidance](screenshots/logic-feedback-guidance.png)
+### 用真实第二稿检查是否进步
 
-### 7. Downloadable learning record
+![两稿对比](screenshots/walkthrough-08-draft-comparison.jpg)
 
-Every completed correction can be exported as Markdown or as a styled, bilingual PDF report.
+### 把每次修改留在学习档案里
 
-![Markdown and PDF report downloads](screenshots/report-downloads.png)
+![学习档案](screenshots/walkthrough-09-learning-record.jpg)
 
-## How It Works
+</details>
+
+## 工作原理
 
 ```mermaid
 flowchart LR
-    A[Essay question and response] --> B[IELTS examiner prompt]
-    B --> C[Fixed gpt-5.4-mini examiner]
-    C --> D[Band scores and evidence]
-    D --> E[Sentence rewrite]
-    D --> F[Logic rewrite]
-    E --> G[Chinese AI review]
-    F --> G
-    G --> H[Next revision]
-    D --> I[Markdown and PDF]
-    D --> J[Progress history]
+    A[题目与初稿] --> B[结构化四维评分]
+    B --> C[原文证据与优先级]
+    C --> D[单句与逻辑训练]
+    D --> E[独立完成第二稿]
+    E --> F[两稿对比]
+    F --> G[学习档案]
+    C --> H[Markdown / PDF 报告]
 ```
 
-The examiner must satisfy a strict JSON schema. EssayPilot verifies exact essay evidence, calculates the overall band from the four whole-band criteria, and saves a report only after validation succeeds.
+评分阶段和教学反馈阶段相互分离：模型先按固定结构返回评分决定，程序再校验证据、字段和分数计算；验证通过后才生成中文诊断与训练内容。相同题目和作文可以复用已有结果，避免重复消耗 Token。
 
-## Feedback Workflow
+## 技术栈
 
-1. Paste the IELTS Writing Task 2 question.
-2. Paste the student's essay and review the word count.
-3. Run the fixed Task 2 examiner.
-4. Review the overall band and four criterion scores.
-5. Expand criterion details to compare strengths with the main score-limiting issue.
-6. Read the full report for evidence, corrections, and improvement priorities.
-7. Rewrite selected weak sentences and request targeted Chinese feedback.
-8. Rewrite a key paragraph to improve claim, explanation, example, and progression.
-9. Review the comparison feedback and revise again when needed.
-10. Export the complete learning record as Markdown or PDF.
-
-## Learning Design
-
-EssayPilot follows a short deliberate-practice loop:
-
-1. **Diagnose:** identify the criterion and the exact sentence or paragraph holding the score back.
-2. **Rewrite:** require the student to produce a new version instead of passively reading corrections.
-3. **Compare:** evaluate the rewrite against the original and a Band 6.5-7 target.
-4. **Transfer:** extract a reusable sentence pattern or paragraph strategy for the next essay.
-
-This keeps the examiner report useful without turning the product into a one-click essay replacement tool.
-
-## Tech Stack
-
-| Layer | Technology |
+| 层级 | 技术 |
 | --- | --- |
-| UI | Streamlit |
-| AI provider | OpenAI `gpt-5.4-mini` (fixed for scoring consistency) |
-| Provider client | OpenAI Python SDK with configurable base URL |
-| Charts | Altair and pandas |
-| Report export | ReportLab with an embedded Noto Sans SC font |
-| Persistence | Supabase Auth/Postgres, with local Markdown/JSON fallback |
+| 界面 | Streamlit |
+| AI | OpenAI Python SDK + 固定 `gpt-5.4-mini` 模型快照 |
+| 数据可视化 | Altair、pandas |
+| 报告导出 | ReportLab + 内置 Noto Sans SC 字体 |
+| 云端账户与数据 | Supabase Auth / Postgres / Row Level Security |
+| 本地存储 | Markdown、JSON 文件 |
 
-## Kaggle Task 2 Skill Data Audit
+## 本地运行
 
-Kaggle learner data is training and audit material, never an official scoring reference. Raw text and generated corpora stay in ignored local directories. The public split manifest contains only case IDs, content hashes, counts, and score distributions.
-
-```powershell
-# Zero-cost profile; writes nothing.
-python scripts/build_kaggle_training_library.py --input data/raw/kaggle_ielts/ielts-writing-scored-essays-dataset.zip --dry-run
-
-# Build clean data and the fixed 42/8/12 examiner-claimed split.
-python scripts/build_kaggle_training_library.py --input data/raw/kaggle_ielts/ielts-writing-scored-essays-dataset.zip --source-url https://www.kaggle.com/datasets/mazlumi/ielts-writing-scored-essays-dataset
-
-# Aggregate official and development-only rule support without source text.
-python scripts/build_skill_rule_audit.py
-
-# Refresh weak labels without changing any frozen split membership.
-python scripts/refresh_kaggle_feedback_labels.py --unlock-holdout --write
-
-# Paid annotation stays a dry run unless --execute is supplied; maximum 20 cases.
-python scripts/annotate_kaggle_cases.py --dry-run
-
-# Evaluation is dry-run by default. The registered candidate is DeepSeek V4 Pro
-# with thinking disabled. Holdout additionally requires --unlock-holdout.
-python scripts/run_feedback_skill_eval.py --split validation
-python scripts/run_feedback_skill_eval.py --split holdout --unlock-holdout
-python scripts/run_kaggle_scoring_holdout.py --provider DeepSeek --model deepseek-v4-pro --reasoning-effort none --unlock-holdout
-```
-
-The 12-case holdout stays under `.private/kaggle_ielts/`. A successful final evaluation writes a consumed sentinel, preventing silent reuse for prompt tuning. Kaggle score metrics remain separate from official calibration metrics. These commands do not change the production model automatically; a candidate must pass the official and locked gates first.
-
-## Quick Start
-
-### 1. Clone the repository
+### 1. 克隆仓库
 
 ```bash
 git clone https://github.com/tornado266/EssayPilot.git
 cd EssayPilot
 ```
 
-### 2. Create and activate a virtual environment
+### 2. 创建虚拟环境
 
-Windows PowerShell:
+Windows PowerShell：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-macOS or Linux:
+macOS / Linux：
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Install dependencies
+### 3. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure scoring and optional cloud profiles
+### 4. 配置环境变量
 
-Create a local `.env` file:
+复制 `.env.example` 为 `.env`，至少填写 OpenAI API Key：
 
 ```dotenv
 OPENAI_API_KEY=your_openai_api_key
-# Optional: required only for private DeepSeek V4 calibration runs
-DEEPSEEK_API_KEY=your_deepseek_api_key
-
-# Optional: enables email-code login and cross-device records
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_ANON_KEY=your_publishable_anon_key
-
-# Optional: enables the private aggregate dashboard (use one server-only key)
-SUPABASE_SECRET_KEY=your_private_secret_key
-# SUPABASE_SERVICE_ROLE_KEY=your_legacy_private_service_role_key
-BETA_START_AT=2026-08-09T17:00:00+08:00
-ADMIN_EMAILS=admin@example.com
-ADMIN_PASSWORD=choose_a_private_dashboard_password
 ```
 
-The app reads Streamlit Secrets first and falls back to environment variables for local development.
-The aggregate product dashboard is available at `?admin=1`. `ADMIN_EMAILS` is the
-preferred comma-separated allowlist for signed-in administrators; `ADMIN_PASSWORD`
-is used only when no allowlist is configured. Never expose the service-role key.
-For cloud profiles, create a Supabase project and run `supabase/schema.sql` once in its SQL editor. Row-level security restricts every essay, report, practice attempt, draft revision, and learning item to its owner.
+如果只在本地使用，到这里就可以启动。若需要邮箱验证码登录、跨设备同步和云端学习档案，再配置：
 
-If the original schema was already installed, run only `supabase/migrations/20260809_learning_items.sql` to enable the cloud error book and reusable learning assets. New projects can run the complete `supabase/schema.sql` directly.
+```dotenv
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your_publishable_anon_key
+```
 
-For the privacy-safe product dashboard, run
-`supabase/migrations/20260821_product_analytics.sql` after the base schema. It creates
-the private deduplicated event table, aggregate-only dashboard RPC, and a reliable
-one-time mapping of the older minimal lifecycle events when present.
+随后在 Supabase SQL Editor 中运行 `supabase/schema.sql`。应用会优先读取 Streamlit Secrets，再回退到本地环境变量。
 
-For the topic-based expression library upgrade, existing projects must also run
-`supabase/migrations/20260809_expression_library.sql`. It makes catalog expressions
-optional personal assets, adds favorites and topic/function metadata, and creates the
-RLS-protected expression-attempt history. Static catalog browsing never writes rows or
-calls the model.
-
-### 5. Run EssayPilot
+### 5. 启动应用
 
 ```bash
 streamlit run app.py
 ```
 
-Then open `http://localhost:8501`.
+浏览器打开 `http://localhost:8501`。
 
-## Deploy on Streamlit Community Cloud
+## 可选配置
 
-1. Fork or push the repository to GitHub.
-2. Create a new app in [Streamlit Community Cloud](https://share.streamlit.io/).
-3. Select the `main` branch and `app.py` entrypoint.
-4. Add provider credentials under **App settings > Secrets**:
+| 变量 | 是否必需 | 用途 |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | 是 | 作文评分、训练反馈与二稿对比 |
+| `SUPABASE_URL` | 否 | Supabase 项目地址 |
+| `SUPABASE_ANON_KEY` | 否 | 登录与用户侧数据访问 |
+| `SUPABASE_SECRET_KEY` | 否 | 服务端聚合数据接口；必须仅保存在服务端 |
+| `ADMIN_EMAILS` | 否 | 管理员邮箱白名单，多个邮箱用逗号分隔 |
+| `ADMIN_PASSWORD` | 否 | 未配置邮箱白名单时的管理页备用验证 |
+| `BETA_START_AT` | 否 | 公测统计的起始时间 |
 
-```toml
-OPENAI_API_KEY = "your_openai_api_key"
-# Optional: required only if DeepSeek becomes the validated scoring provider
-DEEPSEEK_API_KEY = "your_deepseek_api_key"
-SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_ANON_KEY = "your_publishable_anon_key"
-SUPABASE_SECRET_KEY = "your_private_secret_key"
-# SUPABASE_SERVICE_ROLE_KEY = "your_legacy_private_service_role_key"
-BETA_START_AT = "2026-08-09T17:00:00+08:00"
-ADMIN_PASSWORD = "choose_a_private_dashboard_password"
-ADMIN_EMAILS = "admin@example.com"
-```
+不要提交 `.env` 或 `.streamlit/secrets.toml`，也不要把 Supabase 服务端密钥暴露给浏览器。
 
-Never commit `.env` or `.streamlit/secrets.toml`. `SUPABASE_SERVICE_ROLE_KEY` must stay server-side. The dashboard is available at `?admin=1` and remains disabled without its private key; normal grading is unaffected.
+## 部署到 Streamlit Community Cloud
 
-## Project Structure
+1. Fork 本仓库，或把代码推送到自己的 GitHub 仓库。
+2. 在 Streamlit Community Cloud 新建应用。
+3. 选择 `main` 分支，并把入口文件设为 `app.py`。
+4. 在应用的 Secrets 中配置 `OPENAI_API_KEY`；需要云端学习档案时，再加入 Supabase 变量。
+5. 部署后完成一篇测试作文，检查评分、专项训练、二稿与下载流程。
+
+## 项目结构
 
 ```text
 EssayPilot/
-|-- app.py                    # Streamlit presentation layer
-|-- requirements.txt
-|-- assets/                   # Background and embedded PDF font
-|-- screenshots/              # README product screenshots
-|-- records/                  # Local correction history
-|-- supabase/schema.sql       # Cloud tables, transaction function, and RLS policies
-|-- tests/                    # Offline scoring-contract tests
-`-- src/
-    |-- ai_grader.py          # Provider configuration and requests
-    |-- prompts.py            # IELTS examiner and rewrite prompts
-    |-- result_parser.py      # Defensive structured parsing
-    |-- storage.py            # Markdown, JSON, and PDF exports
-    |-- error_book.py         # Error-book generation
-    `-- text_utils.py
+├─ app.py                  # 页面路由与主要交互
+├─ src/                    # 评分、报告、训练、存储与学习资产
+├─ ui/                     # 可复用界面组件
+├─ styles/                 # 页面样式
+├─ skills/ielts-writing/   # IELTS 评分与反馈规则
+├─ data/                   # 示例报告、题库与公开校准元数据
+├─ supabase/               # 数据库结构和迁移脚本
+├─ screenshots/            # README 产品图片
+├─ tests/                  # 离线测试
+├─ requirements.txt
+└─ .env.example
 ```
 
-## Data and Deployment Notes
+## 测试与评分校准
 
-- API keys are loaded from Streamlit Secrets or local environment variables and are never written into report files.
-- Local fallback records on Streamlit Community Cloud are ephemeral and may be cleared when the app restarts.
-- When Supabase is configured, authenticated learning records persist across restarts and devices. Existing local records are never uploaded automatically.
-- AI scoring is probabilistic. Use repeated practice and criterion trends rather than treating one result as an official score.
-
-## Scoring calibration
-
-Offline contract tests never call the API:
+离线测试不会调用模型 API：
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-The repeatability runner uses paid API calls. Candidate screening is score-only by default, so it does not pay for or wait for teaching feedback:
+需要真实 API 的重复性校准必须显式执行，并会产生费用：
 
 ```bash
 python -m scripts.run_calibration --repeats 3 --provider OpenAI --model gpt-5.4-mini-2026-03-17
 ```
 
-Private official transcripts and run artifacts must stay under
-`.private/calibration/`, which is ignored by Git. Import and validate a
-structured internal transcript before making any paid calls:
+私有校准作文、运行结果和 Kaggle 原始数据应始终放在已忽略的 `.private/` 或本地原始数据目录中。公开仓库只保留必要的案例 ID、哈希、数量和分数分布，不应包含私有作文正文。
 
-```bash
-python scripts/import_calibration_docx.py --docx PATH_TO_PRIVATE_TRANSCRIPT.docx --out .private/calibration/official_task2.json
-python scripts/run_calibration.py --dataset .private/calibration/official_task2-expanded.json --split-manifest .private/calibration/splits.json --subset development --mode gold --repeats 3 --label mini-development --provider OpenAI --model gpt-5.4-mini-2026-03-17 --dry-run
-```
+## 数据与隐私
 
-After configuring `OPENAI_API_KEY`, remove `--dry-run`. Gold runs default to
-three repeats with `reasoning_effort=none`; use `--reasoning-effort low` only
-for a complete preregistered comparison, never to cherry-pick one response.
-Each paid run writes a private JSON audit record, per-call CSV, per-case CSV,
-and Markdown summary. Use `--full-package` only for the final winning model's
-production smoke test. DeepSeek V4 candidates use `--provider DeepSeek` with
-`deepseek-v4-flash` or `deepseek-v4-pro` and require a local
-`DEEPSEEK_API_KEY`. Invalid JSON, schema, empty content, or evidence is retried
-once with the same model, the invalid response, and the precise validation
-error; individual failures are recorded without aborting the batch.
-The
-grader receives only the task prompt and candidate response; official bands,
-case identifiers, source metadata, and examiner comments remain in the eval
-process and are never included in model messages.
+- API Key 只从 Streamlit Secrets 或环境变量读取，不会写入批改报告。
+- 未配置 Supabase 时，记录保存在本机；部署在 Streamlit Community Cloud 上的本地文件可能随实例重启而清除。
+- 配置 Supabase 后，作文、报告、练习和二稿记录受行级安全策略保护，仅对应用户可访问。
+- 私有管理页只返回匿名聚合数据，不返回邮箱、作文正文或报告内容。
+- AI 评分存在波动，更适合观察多次练习的趋势，而不是替代官方考试成绩。
 
-Compare locked runs without copying private essays into the report:
+## 当前范围
 
-```bash
-python scripts/compare_calibration.py --baseline PATH_TO_BASELINE_RUN_JSON --candidate PATH_TO_NONE_RUN_JSON --alternative PATH_TO_LOW_RUN_JSON --output .private/calibration/comparison.md
-```
+- 当前仅支持 **IELTS Writing Task 2**，Task 1 尚未开放。
+- 产品面向学习与自我训练，不提供官方 IELTS 成绩认证。
+- 仓库中的 Noto Sans SC 字体遵循 SIL Open Font License 1.1，详见 `assets/fonts/README.md`。
 
-The comparison checks the accuracy and spread acceptance targets plus the
-reasoning-adoption gate. Run artifacts include model snapshot, reasoning,
-prompt/skill/schema versions, production file hashes, stage latency, Token
-usage, and cost under the supplied runtime price configuration.
-
-After development and holdout runs exist, choose only among models that pass
-both quality gates and do not worsen the low-band segment:
-
-```bash
-python scripts/select_scoring_model.py --baseline-development PATH_TO_BASELINE_RUN_JSON --candidate mini=PATH_TO_MINI_DEV,PATH_TO_MINI_HOLDOUT --candidate flash=PATH_TO_FLASH_DEV,PATH_TO_FLASH_HOLDOUT --output .private/calibration/model-selection.json
-```
-
-## License
-
-This repository is intended for learning, portfolio demonstration, and IELTS writing practice. The bundled Noto Sans SC font is distributed under the SIL Open Font License 1.1.
+如果 EssayPilot 对你的写作训练有帮助，欢迎提交 Issue、改进建议或 Pull Request。
