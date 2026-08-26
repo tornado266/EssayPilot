@@ -7,6 +7,7 @@ from unittest.mock import Mock
 from src.admin_dashboard import (
     _funnel_table,
     admin_access_allowed,
+    is_production_runtime,
     parse_admin_emails,
     period_delta,
     visible_group_rows,
@@ -263,6 +264,8 @@ class ProductAnalyticsTests(unittest.TestCase):
         self.assertTrue(admin_access_allowed(password="right", expected_password="right"))
         self.assertFalse(admin_access_allowed(password="wrong", expected_password="right"))
         self.assertFalse(admin_access_allowed())
+        self.assertTrue(is_production_runtime("essaypilot.streamlit.app"))
+        self.assertFalse(is_production_runtime("localhost"))
 
     def test_migration_is_private_minimal_and_aggregate_only(self):
         sql = MIGRATION.read_text(encoding="utf-8").lower()

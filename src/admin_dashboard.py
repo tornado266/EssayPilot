@@ -104,6 +104,18 @@ def admin_access_allowed(
     return bool(expected_password and password and hmac.compare_digest(password, expected_password))
 
 
+def is_production_runtime(hostname: str = "") -> bool:
+    """Require email allowlisting on hosted deployments; passwords stay local-only."""
+    host = hostname.strip().lower()
+    if not host:
+        try:
+            host = str(urlsplit(st.context.url).hostname or "").lower()
+        except (AttributeError, TypeError, ValueError):
+            host = ""
+    configured_environment = str(os.getenv("APP_ENV", "")).strip().casefold()
+    return configured_environment == "production" or host.endswith(".streamlit.app")
+
+
 def _authorize_admin() -> bool:
     allowlist = parse_admin_emails(_setting("ADMIN_EMAILS"))
     cloud_user = st.session_state.get("cloud_user")
@@ -112,6 +124,9 @@ def _authorize_admin() -> bool:
         if admin_access_allowed(email=email, configured_admin_emails=allowlist):
             return True
         st.error("无权访问统计后台。请先用管理员白名单邮箱登录普通应用。")
+        return False
+    if is_production_runtime():
+        st.error("生产环境必须配置 ADMIN_EMAILS 白名单；共享密码入口已禁用。")
         return False
     expected_password = _setting("ADMIN_PASSWORD")
     if not expected_password:
