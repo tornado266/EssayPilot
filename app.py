@@ -6,6 +6,7 @@ import html
 import json
 import logging
 import re
+import time
 import uuid
 from collections import Counter
 from dataclasses import replace
@@ -89,6 +90,7 @@ from src.product_analytics import (
     record_event_safely,
     sanitize_metadata,
 )
+from src.product_feedback import render_product_feedback
 from src.vocabulary_cards import build_vocabulary_cards_html, report_vocabulary_items
 from src.storage import markdown_to_pdf, save_markdown_record
 from src.report_schema import (
@@ -495,31 +497,13 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
     return resolution.user
 
 
-def record_lifecycle_event(
-    store: SupabaseStore,
-    event_name: str,
-    *,
-    user: CloudUser | None = None,
-    flow_id: str = "",
-) -> None:
-    """Best-effort anonymous analytics that can never block learning."""
-    hashed = str(st.session_state.get("visitor_hash") or "")
-    event_flow = flow_id or str(st.session_state.get("flow_id") or "")
-    if not store.enabled or not hashed or not event_flow:
-        return
-    record_event_safely(
-        lambda: store.record_product_event(event_name, hashed, event_flow, user=user),
-        asynchronous=True,
-        logger=LOGGER,
-    )
-
-
 def record_usage_event(
     store: SupabaseStore,
     event_name: str,
     *,
     user: CloudUser | None = None,
     run_id: str = "",
+    attempt_id: str = "",
     occurrence_key: str = "",
     metadata: dict[str, object] | None = None,
 ) -> None:
@@ -530,10 +514,12 @@ def record_usage_event(
         return
     try:
         normalized_run_id = str(uuid.UUID(run_id)) if run_id else ""
+        normalized_attempt_id = str(uuid.UUID(attempt_id)) if attempt_id else ""
         dedupe_key = build_dedupe_key(
             event_name,
             session_id,
             run_id=normalized_run_id,
+            attempt_id=normalized_attempt_id,
             occurrence_key=occurrence_key,
         )
     except (ValueError, TypeError, AttributeError):
@@ -543,7 +529,9 @@ def record_usage_event(
     if dedupe_key in recorded:
         return
     recorded.add(dedupe_key)
-    clean_metadata = sanitize_metadata(metadata)
+    event_metadata = dict(metadata or {})
+    event_metadata["identity_type"] = "authenticated" if user is not None else "anonymous"
+    clean_metadata = sanitize_metadata(event_metadata)
     record_event_safely(
         lambda: store.record_analytics_event(
             event_name,
@@ -551,10 +539,12 @@ def record_usage_event(
             dedupe_key,
             anonymous_user_id=anonymous_id,
             run_id=normalized_run_id,
+            attempt_id=normalized_attempt_id,
             metadata=clean_metadata,
             user=user,
         ),
         asynchronous=True,
+        max_retries=2,
         logger=LOGGER,
     )
 
@@ -595,7 +585,12 @@ def claim_guest_result(store: SupabaseStore, user: CloudUser) -> bool:
 def complete_login(store: SupabaseStore, user: CloudUser) -> None:
     write_cloud_user_state(user, persist=True)
     claim_guest_result(store, user)
-    record_lifecycle_event(store, "login_completed", user=user)
+    record_usage_event(
+        store,
+        "login_completed",
+        user=user,
+        attempt_id=str(st.session_state.get("latest_grading_attempt_id") or ""),
+    )
     route = str(st.session_state.pop("login_return_route", "home") or "home")
     mode = str(st.session_state.pop("login_return_mode", "") or "")
     navigate(route, str(st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", "")), mode)
@@ -726,10 +721,6 @@ if "flow_id" not in st.session_state:
 user_id = st.session_state.user_id
 
 inject_alpine_theme()
-
-if is_admin_request():
-    render_admin_dashboard()
-    st.stop()
 
 
 def show_markdown_file(path: Path) -> None:
@@ -993,12 +984,15 @@ def render_draft_2_training(
             st.warning("第二稿与第一稿完全相同，请根据反馈完成修改后再提交。")
         else:
             draft_2_attempt_id = str(uuid.uuid4())
+            draft_2_started_at = time.perf_counter()
+            st.session_state.pop("draft_2_result", None)
             if cloud_store is not None:
                 record_usage_event(
                     cloud_store,
                     "second_draft_submitted",
                     user=cloud_user,
                     run_id=str(draft_1.get("grading_run_id") or ""),
+                    attempt_id=draft_2_attempt_id,
                     occurrence_key=draft_2_attempt_id,
                     metadata={"draft_number": 2},
                 )
@@ -1090,13 +1084,53 @@ def render_draft_2_training(
                         "path": training_path,
                         "text": draft_2_text,
                         "grading_run_id": str(linked_ids.get("grading_run_id") or ""),
+                        "attempt_id": draft_2_attempt_id,
                     }
-                    if cloud_store is not None and cloud_user is not None:
-                        record_lifecycle_event(cloud_store, "second_draft_completed", user=cloud_user)
+                    if cloud_store is not None:
+                        record_usage_event(
+                            cloud_store,
+                            "second_draft_generated",
+                            user=cloud_user,
+                            run_id=str(draft_1.get("grading_run_id") or ""),
+                            attempt_id=draft_2_attempt_id,
+                            occurrence_key=draft_2_attempt_id,
+                            metadata={
+                                "draft_number": 2,
+                                "duration_ms": int((time.perf_counter() - draft_2_started_at) * 1000),
+                            },
+                        )
                 except AIGraderError as exc:
+                    if cloud_store is not None:
+                        record_usage_event(
+                            cloud_store,
+                            "second_draft_generation_failed",
+                            user=cloud_user,
+                            run_id=str(draft_1.get("grading_run_id") or ""),
+                            attempt_id=draft_2_attempt_id,
+                            occurrence_key=draft_2_attempt_id,
+                            metadata={
+                                "draft_number": 2,
+                                "failure_type": type(exc).__name__,
+                                "duration_ms": int((time.perf_counter() - draft_2_started_at) * 1000),
+                            },
+                        )
                     st.error("第二稿评分失败。完整诊断信息如下。")
                     st.code(str(exc), language="text")
                 except Exception as exc:
+                    if cloud_store is not None:
+                        record_usage_event(
+                            cloud_store,
+                            "second_draft_generation_failed",
+                            user=cloud_user,
+                            run_id=str(draft_1.get("grading_run_id") or ""),
+                            attempt_id=draft_2_attempt_id,
+                            occurrence_key=draft_2_attempt_id,
+                            metadata={
+                                "draft_number": 2,
+                                "failure_type": type(exc).__name__,
+                                "duration_ms": int((time.perf_counter() - draft_2_started_at) * 1000),
+                            },
+                        )
                     st.error("第二稿训练出现意外错误。")
                     st.code(f"{type(exc).__name__}: {exc}", language="text")
 
@@ -1108,7 +1142,10 @@ def render_draft_2_training(
                 "diff_viewed",
                 user=cloud_user,
                 run_id=str(draft_1.get("grading_run_id") or ""),
-                occurrence_key=str(result.get("grading_run_id") or "current-result"),
+                attempt_id=str(result.get("attempt_id") or ""),
+                occurrence_key=str(
+                    result.get("attempt_id") or result.get("grading_run_id") or "current-result"
+                ),
                 metadata={"source": "second_draft_result"},
             )
         st.divider()
@@ -1134,6 +1171,14 @@ def render_draft_2_training(
         st.markdown(result["progress_report"])
         with st.expander("查看第二稿完整评分", expanded=False):
             st.markdown(result["report"])
+        if cloud_store is not None:
+            render_product_feedback(
+                cloud_store,
+                cloud_user,
+                touchpoint="second_draft",
+                run_id=str(draft_1.get("grading_run_id") or ""),
+                attempt_id=str(result.get("attempt_id") or ""),
+            )
 
 
 def extract_criteria_details(markdown: str) -> dict[str, dict[str, str]]:
@@ -1614,6 +1659,7 @@ def render_sentence_practice(
                                 occurrence_key=f"sentence-{index}",
                                 metadata={"item_index": index, "task_kind": "sentence"},
                             )
+                        st.session_state.pending_training_feedback_run_id = grading_run_id
                         st.success("已掌握。本次改写会计入你的学习档案。")
 
 
@@ -1775,6 +1821,16 @@ def render_logic_practice(
                                 )
                             except CloudStoreError as exc:
                                 st.warning(f"已完成练习，但云端同步失败：{exc}")
+                        if cloud_store is not None:
+                            record_usage_event(
+                                cloud_store,
+                                "logic_training_completed",
+                                user=cloud_user,
+                                run_id=grading_run_id,
+                                occurrence_key=f"logic-{index}",
+                                metadata={"item_index": index, "task_kind": "logic"},
+                            )
+                        st.session_state.pending_training_feedback_run_id = grading_run_id
                         st.success("已掌握。这次逻辑重写已加入学习档案。")
 
 
@@ -2767,25 +2823,27 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                     st.button("登录 / 保存学习档案", type="primary", on_click=open_cloud_login, args=("write",), use_container_width=True)
                     return
             grading_attempt_id = str(uuid.uuid4())
+            st.session_state.latest_grading_attempt_id = grading_attempt_id
+            grading_started_at = time.perf_counter()
             record_usage_event(
                 store,
                 "first_draft_submitted",
                 user=user,
+                attempt_id=grading_attempt_id,
                 occurrence_key=grading_attempt_id,
                 metadata={"draft_number": 1},
             )
-            record_lifecycle_event(store, "grading_started", user=user, flow_id=flow_id)
             with st.spinner("正在评分、核对原文证据并生成训练任务……"):
                 render_scoring_loader()
                 try:
                     grade_submission(store, user, topic=topic, essay=essay)
+                    grading_duration_ms = int((time.perf_counter() - grading_started_at) * 1000)
                     if guest_reserved:
                         try:
                             store.complete_guest_trial(hashed, flow_id)
                         except CloudStoreError:
                             # The paid result already exists in this session. Never discard it or call the model again.
                             st.session_state.guest_trial_completion_warning = True
-                    record_lifecycle_event(store, "grading_completed", user=user, flow_id=flow_id)
                     generated_run_id = str(
                         st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", "")
                     )
@@ -2794,11 +2852,16 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                         "report_generated",
                         user=user,
                         run_id=generated_run_id,
+                        attempt_id=grading_attempt_id,
                         occurrence_key=grading_attempt_id,
-                        metadata={"cached": bool(st.session_state.get("reused_result_notice"))},
+                        metadata={
+                            "cached": bool(st.session_state.get("reused_result_notice")),
+                            "duration_ms": grading_duration_ms,
+                        },
                     )
                     st.rerun()
                 except AIGraderError as exc:
+                    grading_duration_ms = int((time.perf_counter() - grading_started_at) * 1000)
                     if guest_reserved:
                         try:
                             store.release_guest_trial(hashed, flow_id)
@@ -2809,13 +2872,18 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                         store,
                         "report_generation_failed",
                         user=user,
+                        attempt_id=grading_attempt_id,
                         occurrence_key=grading_attempt_id,
-                        metadata={"failure_type": type(exc).__name__},
+                        metadata={
+                            "failure_type": type(exc).__name__,
+                            "duration_ms": grading_duration_ms,
+                        },
                     )
                     st.error("评分服务暂时不可用。题目和作文已经保留，可以直接重试。")
                     with st.expander("查看技术诊断"):
                         st.code(str(exc), language="text")
                 except CloudStoreError as exc:
+                    grading_duration_ms = int((time.perf_counter() - grading_started_at) * 1000)
                     if guest_reserved:
                         try:
                             store.release_guest_trial(hashed, flow_id)
@@ -2826,11 +2894,16 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                         store,
                         "report_generation_failed",
                         user=user,
+                        attempt_id=grading_attempt_id,
                         occurrence_key=grading_attempt_id,
-                        metadata={"failure_type": type(exc).__name__},
+                        metadata={
+                            "failure_type": type(exc).__name__,
+                            "duration_ms": grading_duration_ms,
+                        },
                     )
                     st.error(f"云端保存失败，题目和作文未清空：{exc}")
                 except Exception as exc:
+                    grading_duration_ms = int((time.perf_counter() - grading_started_at) * 1000)
                     if guest_reserved:
                         try:
                             store.release_guest_trial(hashed, flow_id)
@@ -2841,8 +2914,12 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                         store,
                         "report_generation_failed",
                         user=user,
+                        attempt_id=grading_attempt_id,
                         occurrence_key=grading_attempt_id,
-                        metadata={"failure_type": type(exc).__name__},
+                        metadata={
+                            "failure_type": type(exc).__name__,
+                            "duration_ms": grading_duration_ms,
+                        },
                     )
                     st.error("评分没有完成，没有产生半份记录。请稍后重试。")
                     with st.expander("查看技术诊断"):
@@ -2989,12 +3066,18 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
         return
     report = learner_safe_report_markdown(report, structured.get("overall_band"))
     ensure_learning_assets(store, user)
-    record_lifecycle_event(store, "report_viewed", user=user)
     run_id = str(
         st.session_state.get("active_run_id")
         or st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", "")
     )
-    record_usage_event(store, "report_viewed", user=user, run_id=run_id)
+    latest_run_id = str(st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
+    attempt_id = (
+        str(st.session_state.get("latest_grading_attempt_id") or "")
+        if not run_id or run_id == latest_run_id else ""
+    )
+    record_usage_event(
+        store, "report_viewed", user=user, run_id=run_id, attempt_id=attempt_id
+    )
     st.markdown('<div class="section-kicker">批改报告</div>', unsafe_allow_html=True)
     st.title("先看最影响提分的问题")
     render_training_stepper(active=2)
@@ -3191,17 +3274,23 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                 args=("report", ""),
             )
 
+    render_product_feedback(
+        store,
+        user,
+        touchpoint="report",
+        run_id=run_id,
+        attempt_id=attempt_id,
+    )
+
     st.markdown("### 下一步：用第二稿验证这次反馈")
     primary_col, practice_col = st.columns([1.25, 1])
     if user is None:
         with primary_col:
             if st.button("登录并开始第二稿训练", type="primary", use_container_width=True):
-                record_lifecycle_event(store, "report_training_clicked", user=user)
                 open_cloud_login("training", "draft")
                 st.rerun()
         with practice_col:
             if st.button("登录后先做专项训练", use_container_width=True):
-                record_lifecycle_event(store, "report_training_clicked", user=user)
                 open_cloud_login("training", "practice")
                 st.rerun()
         if st.button("练习本篇表达", key="guest_report_expressions", use_container_width=True):
@@ -3210,12 +3299,10 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
     else:
         with primary_col:
             if st.button("开始第二稿训练", type="primary", use_container_width=True):
-                record_lifecycle_event(store, "report_training_clicked", user=user)
                 navigate("training", run_id, "draft")
                 st.rerun()
         with practice_col:
             if st.button("先做专项训练", use_container_width=True):
-                record_lifecycle_event(store, "report_training_clicked", user=user)
                 navigate("training", run_id, "practice")
                 st.rerun()
         auxiliary_col, expression_col = st.columns(2)
@@ -3313,6 +3400,14 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
         )
     if st.session_state.pop("learning_assets_sync_error", False):
         st.caption("训练已保存；错题掌握状态将在数据库升级后自动联动。")
+    feedback_run_id = str(st.session_state.get("pending_training_feedback_run_id") or "")
+    if feedback_run_id and feedback_run_id == run_id:
+        render_product_feedback(
+            store,
+            user,
+            touchpoint="training",
+            run_id=run_id,
+        )
 
 
 def _normalise_expression(item: dict[str, object]) -> dict[str, object]:
@@ -3839,6 +3934,14 @@ cloud_store.bind_auth_session(
 )
 cloud_user = restore_cloud_user_session(cloud_store)
 
+if is_admin_request():
+    if cloud_user is None:
+        st.session_state.login_return_route = "home"
+        render_login_page(cloud_store)
+    else:
+        render_admin_dashboard()
+    st.stop()
+
 if st.session_state.page_mode == "demo":
     demo_visitor_id = browser_visitor_id()
     if demo_visitor_id:
@@ -3857,9 +3960,6 @@ raw_visitor_id = browser_visitor_id()
 if raw_visitor_id:
     st.session_state.visitor_hash = visitor_hash(raw_visitor_id)
     record_usage_event(cloud_store, "session_started", user=cloud_user)
-    if not st.session_state.get("visitor_opened_recorded"):
-        record_lifecycle_event(cloud_store, "visitor_opened", user=cloud_user)
-        st.session_state.visitor_opened_recorded = True
 
 if requested_page == "login" and cloud_user is None:
     render_login_page(cloud_store)

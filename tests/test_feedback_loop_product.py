@@ -67,7 +67,9 @@ class FeedbackLoopProductTests(unittest.TestCase):
         self.assertIn("登录并开始第二稿训练", source)
         self.assertIn("开始第二稿训练", source)
         self.assertIn('default_tab = "第二稿验证" if training_mode == "draft"', source)
-        self.assertIn('"second_draft_completed", user=cloud_user', source)
+        self.assertIn('"second_draft_generated"', source)
+        self.assertIn('"second_draft_generation_failed"', source)
+        self.assertNotIn("record_product_event(", source)
 
     def test_all_required_events_exist_in_the_server_contract(self):
         sql = MIGRATION.read_text(encoding="utf-8")

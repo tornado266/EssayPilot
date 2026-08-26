@@ -364,41 +364,71 @@ class SupabaseStore:
         *,
         anonymous_user_id: str = "",
         run_id: str = "",
+        attempt_id: str = "",
         metadata: dict[str, object] | None = None,
         user: CloudUser | None = None,
         event_id: str = "",
     ) -> bool:
-        """Record one deduplicated event through the narrow analytics RPC."""
+        """Record one deduplicated V2 event through the narrow analytics RPC."""
+        payload = {
+            "p_event_id": event_id or str(uuid.uuid4()),
+            "p_session_id": session_id,
+            "p_attempt_id": attempt_id or None,
+            "p_run_id": run_id or None,
+            "p_event_name": event_name,
+            "p_metadata_json": metadata or {},
+            "p_dedupe_key": dedupe_key,
+            "p_anonymous_user_id": anonymous_user_id or None,
+        }
         if user is None:
             return bool(self._request(
-                "POST",
-                "/rest/v1/rpc/record_analytics_event",
-                payload={
-                    "p_event_id": event_id or str(uuid.uuid4()),
-                    "p_session_id": session_id,
-                    "p_run_id": run_id or None,
-                    "p_event_name": event_name,
-                    "p_metadata_json": metadata or {},
-                    "p_dedupe_key": dedupe_key,
-                    "p_anonymous_user_id": anonymous_user_id or None,
-                },
-                timeout=2,
+                "POST", "/rest/v1/rpc/record_analytics_event_v2",
+                payload=payload, timeout=2,
             ))
         return bool(self._authenticated_request(
             user,
             "POST",
-            "/rest/v1/rpc/record_analytics_event",
+            "/rest/v1/rpc/record_analytics_event_v2",
             allow_refresh=False,
-            payload={
-                "p_event_id": event_id or str(uuid.uuid4()),
-                "p_session_id": session_id,
-                "p_run_id": run_id or None,
-                "p_event_name": event_name,
-                "p_metadata_json": metadata or {},
-                "p_dedupe_key": dedupe_key,
-                "p_anonymous_user_id": anonymous_user_id or None,
-            },
+            payload=payload,
             timeout=2,
+        ))
+
+    def record_product_feedback(
+        self,
+        touchpoint: str,
+        session_id: str,
+        helpful: bool,
+        reason_codes: list[str],
+        dedupe_key: str,
+        *,
+        anonymous_user_id: str = "",
+        run_id: str = "",
+        attempt_id: str = "",
+        user: CloudUser | None = None,
+        feedback_id: str = "",
+    ) -> bool:
+        """Persist structured feedback without essay text, email, or free text."""
+        payload = {
+            "p_feedback_id": feedback_id or str(uuid.uuid4()),
+            "p_session_id": session_id,
+            "p_attempt_id": attempt_id or None,
+            "p_run_id": run_id or None,
+            "p_touchpoint": touchpoint,
+            "p_helpful": helpful,
+            "p_reason_codes": reason_codes,
+            "p_dedupe_key": dedupe_key,
+            "p_anonymous_user_id": anonymous_user_id or None,
+        }
+        if user is None:
+            return bool(self._request(
+                "POST", "/rest/v1/rpc/record_product_feedback",
+                payload=payload, timeout=2,
+            ))
+        return bool(self._authenticated_request(
+            user,
+            "POST", "/rest/v1/rpc/record_product_feedback",
+            allow_refresh=False, payload=payload, timeout=2,
         ))
 
     def get_analytics_dashboard(self, since: str | None = None) -> dict[str, Any]:
@@ -414,6 +444,26 @@ class SupabaseStore:
             access_token="" if self.server_key.startswith("sb_secret_") else self.server_key,
             api_key=self.server_key,
             payload={"p_since": since},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def get_analytics_dashboard_v2(
+        self,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the decision dashboard contract using a server-only credential."""
+        if not self.analytics_enabled:
+            raise CloudStoreError(
+                "Product analytics require SUPABASE_SECRET_KEY (or the legacy "
+                "SUPABASE_SERVICE_ROLE_KEY)."
+            )
+        result = self._request(
+            "POST",
+            "/rest/v1/rpc/get_analytics_dashboard_v2",
+            access_token="" if self.server_key.startswith("sb_secret_") else self.server_key,
+            api_key=self.server_key,
+            payload={"p_since": since, "p_until": until},
         )
         return result if isinstance(result, dict) else {}
 

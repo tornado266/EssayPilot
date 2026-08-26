@@ -6,23 +6,50 @@ import hmac
 import os
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
 
 from src.cloud_store import CloudStoreError, SupabaseStore
-from src.product_analytics import EVENT_NAMES, range_start
+from src.product_analytics import (
+    EVENT_NAMES,
+    build_optimization_recommendations,
+    range_start,
+)
 
 
 EVENT_LABELS = {
     "session_started": "会话开始", "first_draft_submitted": "提交初稿",
+    "login_completed": "完成登录",
     "report_generated": "报告生成成功", "report_generation_failed": "报告生成失败",
     "report_viewed": "查看报告", "tutorial_clicked": "点击教程 / 范文",
     "problem_map_viewed": "查看问题地图", "training_started": "进入训练页",
     "sentence_training_started": "开始单句训练",
-    "sentence_training_completed": "完成单句训练", "mistake_saved": "保存错题",
+    "sentence_training_completed": "完成单句训练",
+    "logic_training_completed": "完成逻辑训练", "mistake_saved": "保存错题",
     "archive_viewed": "查看学习档案", "second_draft_submitted": "提交二稿",
+    "second_draft_generated": "二稿生成成功",
+    "second_draft_generation_failed": "二稿生成失败",
     "diff_viewed": "查看两稿差异", "dictionary_opened": "打开学习词典",
+}
+
+FEEDBACK_LABELS = {
+    "report": "批改报告",
+    "training": "专项训练",
+    "second_draft": "二稿对比",
+}
+
+REASON_LABELS = {
+    "inaccurate": "结果不准确",
+    "too_generic": "建议太泛",
+    "unclear": "说明不清楚",
+    "not_actionable": "不知道下一步怎么做",
+    "too_slow": "等待时间太长",
+    "too_long": "内容或流程太长",
+    "difficulty_mismatch": "训练难度不合适",
+    "progress_unclear": "进步不明显",
+    "other": "其他",
 }
 
 
@@ -189,9 +216,266 @@ def _render_historical(data: dict[str, object]) -> None:
                f"二稿记录 {int(historical.get('second_drafts') or 0)}")
 
 
+def period_delta(current: float, previous: float | None, *, rate: bool = False) -> str | None:
+    """Return an honest previous-period delta; all-time callers pass ``None``."""
+    if previous is None:
+        return None
+    difference = current - previous
+    if rate:
+        return f"{difference:+.1%} vs 上期"
+    if float(difference).is_integer():
+        return f"{int(difference):+d} vs 上期"
+    return f"{difference:+.2f} vs 上期"
+
+
+def visible_group_rows(
+    rows: object, *, count_key: str = "count", minimum: int = 5
+) -> list[dict[str, object]]:
+    """Apply the dashboard's last-line small-sample suppression in Python too."""
+    return [
+        row for row in (rows or [])
+        if isinstance(row, dict) and int(row.get(count_key) or 0) >= minimum
+    ]
+
+
+def _mapping(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _rows(value: object) -> list[dict[str, object]]:
+    return [item for item in (value or []) if isinstance(item, dict)]
+
+
+def _duration(value: object) -> str:
+    try:
+        milliseconds = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return "—"
+    return f"{milliseconds / 1000:.1f} 秒" if milliseconds >= 1000 else f"{milliseconds} 毫秒"
+
+
+def _shanghai_time(value: object) -> str:
+    if not value:
+        return "尚无精确事件"
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _render_priorities(data: dict[str, object]) -> None:
+    st.subheader("下一步优先优化")
+    recommendations = build_optimization_recommendations(data)
+    if not recommendations:
+        st.info("当前没有满足样本量≥5的确定性建议；继续收集后会自动排序。")
+        return
+    for index, item in enumerate(recommendations, start=1):
+        with st.container(border=True):
+            st.markdown(f"**{index}. {item['title']}**")
+            st.write(str(item["detail"]))
+            st.caption(f"建议动作：{item['action']}")
+
+
+def _render_summary_v2(data: dict[str, object], *, compare: bool) -> None:
+    summary = _mapping(data.get("summary"))
+    previous = _mapping(data.get("previous_summary")) if compare else {}
+
+    def count(key: str) -> int:
+        return int(summary.get(key) or 0)
+
+    def delta(key: str) -> str | None:
+        return period_delta(
+            count(key), int(previous.get(key) or 0) if compare else None
+        )
+
+    st.subheader("用户与使用规模")
+    first_row = st.columns(4)
+    first_row[0].metric("注册账户总数", count("registered_users_total"), delta("registered_users_total"))
+    first_row[1].metric("期间新增注册", count("registered_users_new"), delta("registered_users_new"))
+    first_row[2].metric("登录活跃用户", count("authenticated_active_users"), delta("authenticated_active_users"))
+    first_row[3].metric("匿名活跃访客", count("anonymous_active_visitors"), delta("anonymous_active_visitors"))
+    second_row = st.columns(4)
+    second_row[0].metric("全部活跃主体", count("active_users"), delta("active_users"))
+    second_row[1].metric("会话数", count("sessions"), delta("sessions"))
+    second_row[2].metric("初稿尝试", count("first_draft_attempts"), delta("first_draft_attempts"))
+    second_row[3].metric("二稿尝试", count("second_draft_attempts"), delta("second_draft_attempts"))
+
+
+def _funnel_table(rows: object) -> list[dict[str, object]]:
+    stages = _rows(rows)
+    rendered: list[dict[str, object]] = []
+    for index, stage in enumerate(stages):
+        users = int(stage.get("users") or 0)
+        denominator = users if index == 0 else int(stages[index - 1].get("users") or 0)
+        conversion = _rate(users, denominator)
+        rendered.append({
+            "阶段": str(stage.get("label") or stage.get("stage") or ""),
+            "用户数": users,
+            "上一步转化率": "100.0%" if index == 0 else (f"{conversion:.1%}" if denominator else "—"),
+            "流失人数": 0 if index == 0 else max(0, denominator - users),
+            "流失率": "—" if index == 0 or not denominator else f"{max(0.0, 1 - conversion):.1%}",
+        })
+    return rendered
+
+
+def _render_funnels(data: dict[str, object]) -> None:
+    st.subheader("两条决策漏斗")
+    experience_tab, learning_tab = st.tabs(["体验漏斗", "学习闭环"])
+    with experience_tab:
+        st.caption("先按同一会话关联访问与提交，再按同一 attempt_id 关联生成和查看。")
+        st.dataframe(_funnel_table(data.get("experience_funnel")), hide_index=True, width="stretch")
+        guest_login = _mapping(data.get("guest_report_login"))
+        eligible = int(guest_login.get("eligible_users") or 0)
+        converted = int(guest_login.get("converted_users") or 0)
+        st.metric(
+            "游客报告后登录转化",
+            f"{_rate(converted, eligible):.1%}" if eligible else "—",
+            f"{converted} / {eligible}",
+        )
+    with learning_tab:
+        st.caption("按同一初稿 run_id 关联报告、训练、二稿和对比，不跨作文拼接。")
+        st.dataframe(_funnel_table(data.get("learning_funnel")), hide_index=True, width="stretch")
+
+
+def _quality_card(label: str, item: dict[str, object]) -> None:
+    attempts = int(item.get("attempts") or 0)
+    successes = int(item.get("successes") or 0)
+    failures = int(item.get("failures") or 0)
+    with st.container(border=True):
+        st.markdown(f"**{label}**")
+        columns = st.columns(3)
+        columns[0].metric("生成成功率", f"{_rate(successes, attempts):.1%}" if attempts else "—", f"{successes} / {attempts}")
+        columns[1].metric("P50 耗时", _duration(item.get("p50_duration_ms")))
+        columns[2].metric("P95 耗时", _duration(item.get("p95_duration_ms")))
+        st.caption(f"成功 {successes} 次 · 失败 {failures} 次")
+        failure_rows = visible_group_rows(item.get("failure_types"))
+        if failure_rows:
+            st.dataframe([
+                {"失败类型": str(row.get("failure_type") or "unknown"), "次数": int(row.get("count") or 0)}
+                for row in failure_rows
+            ], hide_index=True, width="stretch")
+        elif failures:
+            st.caption("各失败类型样本均少于 5，已隐藏具体分布。")
+
+
+def _render_quality(data: dict[str, object]) -> None:
+    st.subheader("生成质量与学习结果")
+    quality = _mapping(data.get("quality"))
+    report_col, second_col = st.columns(2)
+    with report_col:
+        _quality_card("初稿报告", _mapping(quality.get("report")))
+    with second_col:
+        _quality_card("二稿报告", _mapping(quality.get("second_draft")))
+
+    training = _mapping(quality.get("training"))
+    outcomes = _mapping(quality.get("draft_outcomes"))
+    started = int(training.get("started_users") or 0)
+    completed = int(training.get("completed_users") or 0)
+    eligible = int(outcomes.get("eligible_users") or 0)
+    improved = int(outcomes.get("improved_users") or 0)
+    metrics = st.columns(4)
+    metrics[0].metric("训练掌握率", f"{_rate(completed, started):.1%}" if started else "—", f"{completed} / {started}")
+    if eligible >= 5:
+        metrics[1].metric("二稿提分人数占比", f"{_rate(improved, eligible):.1%}", f"{improved} / {eligible}")
+        metrics[2].metric("二稿平均分差", f"{float(outcomes.get('average_band_delta') or 0):+.2f}")
+        metrics[3].metric("未提分人数", max(0, eligible - improved))
+    else:
+        metrics[1].metric("二稿提分人数占比", "样本不足")
+        metrics[2].metric("二稿平均分差", "—")
+        metrics[3].metric("有效二稿样本", eligible)
+
+
+def _render_feedback(data: dict[str, object]) -> None:
+    st.subheader("三个关键节点反馈")
+    feedback = {str(row.get("touchpoint") or ""): row for row in _rows(data.get("feedback"))}
+    for column, touchpoint in zip(st.columns(3), ("report", "training", "second_draft"), strict=False):
+        row = _mapping(feedback.get(touchpoint))
+        responses = int(row.get("responses") or 0)
+        respondent_users = int(row.get("respondent_users") or 0)
+        helpful = int(row.get("helpful") or 0)
+        eligible = int(row.get("eligible_users") or 0)
+        with column:
+            with st.container(border=True):
+                st.markdown(f"**{FEEDBACK_LABELS[touchpoint]}**")
+                st.metric("反馈回收率", f"{_rate(respondent_users, eligible):.1%}" if eligible else "—", f"{responses} 份")
+                if responses >= 5:
+                    st.metric("有帮助率", f"{_rate(helpful, responses):.1%}", f"{helpful} / {responses}")
+                    reasons = visible_group_rows(row.get("reason_counts"))
+                    if reasons:
+                        st.caption("主要负向原因")
+                        for reason in reasons[:3]:
+                            code = str(reason.get("reason_code") or "other")
+                            st.write(f"· {REASON_LABELS.get(code, code)}：{int(reason.get('count') or 0)}")
+                else:
+                    st.caption("样本少于 5，不展示满意度和原因分布。")
+
+
+def _render_learning_needs(data: dict[str, object]) -> None:
+    st.subheader("用户最需要解决什么")
+    needs = _mapping(data.get("learning_needs"))
+    st.caption("来自已登录用户的聚合报告结果；任一分组少于 5 时隐藏。")
+    groups = (
+        ("主要薄弱维度", "criteria"),
+        ("主要改进动作", "action_types"),
+        ("主要题材分布", "topics"),
+    )
+    for column, (label, key) in zip(st.columns(3), groups, strict=False):
+        rows = visible_group_rows(needs.get(key))
+        with column:
+            st.markdown(f"**{label}**")
+            if rows:
+                st.dataframe([
+                    {"分组": str(row.get("key") or "未分类"), "人次": int(row.get("count") or 0)}
+                    for row in rows[:8]
+                ], hide_index=True, width="stretch")
+            else:
+                st.caption("尚无样本量≥5的分组。")
+
+
+def _render_trends_and_retention(data: dict[str, object]) -> None:
+    st.subheader("趋势与留存")
+    daily = _rows(data.get("daily"))
+    if daily:
+        frame = pd.DataFrame(daily).rename(columns={
+            "day": "日期", "active_users": "活跃主体", "reports": "成功报告", "failures": "生成失败",
+        })
+        st.line_chart(frame, x="日期", y=["活跃主体", "成功报告", "生成失败"])
+    else:
+        st.info("所选范围内还没有新版埋点数据。")
+    retention = _mapping(data.get("retention"))
+    columns = st.columns(2)
+    for column, key, label in zip(columns, ("day_1", "day_7"), ("次日留存", "7 日留存"), strict=False):
+        item = _mapping(retention.get(key))
+        eligible = int(item.get("eligible_users") or 0)
+        retained = int(item.get("retained_users") or 0)
+        column.metric(label, f"{_rate(retained, eligible):.1%}" if eligible else "—", f"{retained} / {eligible} 个成熟 cohort")
+
+
+def _render_history_and_health(data: dict[str, object]) -> None:
+    with st.expander("历史业务量（不与新版精确漏斗混用）"):
+        historical = _mapping(data.get("historical"))
+        columns = st.columns(4)
+        columns[0].metric("历史批改用户", int(historical.get("unique_users") or 0))
+        columns[1].metric("历史成功报告", int(historical.get("successful_reports") or 0))
+        columns[2].metric("历史训练开始用户", int(historical.get("training_started_users") or 0))
+        columns[3].metric("历史二稿用户", int(historical.get("second_draft_users") or 0))
+        st.caption("历史表只回溯可验证的业务量，不补造浏览、失败、反馈或精确漏斗。")
+    with st.expander("数据健康"):
+        health = _mapping(data.get("data_quality"))
+        columns = st.columns(4)
+        columns[0].metric("范围内事件", int(health.get("events_total") or 0))
+        columns[1].metric("带尝试编号事件", int(health.get("attempt_linked_events") or 0))
+        columns[2].metric("未关联尝试编号的事件", int(health.get("events_without_attempt_id") or 0))
+        columns[3].metric("缺失 attempt_id 的结果事件", int(health.get("missing_attempt_outcomes") or 0))
+        st.caption(f"尝试编号精确统计启用时间：{_shanghai_time(data.get('attempt_tracking_enabled_at'))}（Asia/Shanghai）")
+
+
 def render_admin_dashboard() -> None:
     """Render the authorized aggregate-only product dashboard."""
-    st.title("EssayPilot 产品数据")
+    st.title("EssayPilot 产品决策中心")
     if not _authorize_admin():
         return
     store = SupabaseStore()
@@ -205,15 +489,44 @@ def render_admin_dashboard() -> None:
         "时间范围", ["近7天", "近30天", "全部"], default="近30天", key="analytics_range"
     ) or "近30天"
     days = {"近7天": 7, "近30天": 30, "全部": None}[selected_range]
-    since = range_start(days, datetime.now(timezone.utc))
+    until = datetime.now(timezone.utc)
+    since = range_start(days, until)
     try:
-        data = store.get_analytics_dashboard(since.isoformat() if since else None)
+        data = store.get_analytics_dashboard_v2(
+            since.isoformat() if since else None,
+            until.isoformat(),
+        )
     except CloudStoreError as exc:
-        st.error(f"暂时无法读取聚合统计：{exc}")
+        st.warning(f"新版聚合接口暂不可用，已回退到旧版业务量视图：{exc}")
+        try:
+            legacy = store.get_analytics_dashboard(since.isoformat() if since else None)
+        except CloudStoreError as legacy_exc:
+            st.error(f"暂时无法读取聚合统计：{legacy_exc}")
+            return
+        _render_tracking_metrics(legacy)
+        st.divider()
+        _render_historical(legacy)
         return
-    tracking_started = str(data.get("tracking_enabled_at") or "")
-    st.caption(f"当前范围：{selected_range} · 埋点启用：{tracking_started[:19].replace('T', ' ') or '尚无事件'} · 默认仅展示聚合结果")
-    st.subheader("埋点启用后数据")
-    _render_tracking_metrics(data)
+    if int(data.get("schema_version") or 0) < 2:
+        st.error("统计接口版本不匹配，请先应用 20260826 决策统计迁移。")
+        return
+    st.caption(
+        f"当前范围：{selected_range} · 时区：Asia/Shanghai · "
+        f"埋点启用：{_shanghai_time(data.get('tracking_enabled_at'))} · "
+        "仅展示匿名聚合结果"
+    )
+    _render_priorities(data)
     st.divider()
-    _render_historical(data)
+    _render_summary_v2(data, compare=days is not None)
+    st.divider()
+    _render_funnels(data)
+    st.divider()
+    _render_quality(data)
+    st.divider()
+    _render_feedback(data)
+    st.divider()
+    _render_learning_needs(data)
+    st.divider()
+    _render_trends_and_retention(data)
+    st.divider()
+    _render_history_and_health(data)

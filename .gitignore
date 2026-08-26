@@ -6,6 +6,7 @@ __pycache__/
 .streamlit/*
 !.streamlit/config.toml
 streamlit.*.log
+supabase/.temp/
 records/*.md
 !records/.gitkeep
 data/raw/kaggle_ielts/
