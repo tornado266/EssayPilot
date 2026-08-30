@@ -18,6 +18,7 @@ QUESTION_TYPE_LABELS = {
     "advantages_disadvantages": "利弊分析题",
     "problems_solutions": "问题解决题",
     "two_part": "两问类",
+    "positive_negative": "正负发展题",
 }
 
 
@@ -34,7 +35,15 @@ def validate_topic_bank(data: object) -> list[dict[str, str]]:
 
     seen_ids: set[str] = set()
     validated: list[dict[str, str]] = []
-    required_fields = ("id", "topic_category", "question_type", "question", "practice_focus")
+    required_fields = (
+        "id",
+        "topic_category",
+        "question_type",
+        "question",
+        "practice_focus",
+        "source_book",
+        "source_test",
+    )
     for index, raw_item in enumerate(data, start=1):
         if not isinstance(raw_item, Mapping):
             raise TopicBankError(f"第 {index} 条题目格式无效。")
@@ -57,6 +66,8 @@ def validate_topic_bank(data: object) -> list[dict[str, str]]:
             raise TopicBankError(f"题目 {item['id']} 的英文题目为空。")
         if not item["practice_focus"]:
             raise TopicBankError(f"题目 {item['id']} 的练习重点为空。")
+        if not item["source_book"] or not item["source_test"]:
+            raise TopicBankError(f"题目 {item['id']} 的来源信息为空。")
 
         seen_ids.add(item["id"])
         validated.append(item)

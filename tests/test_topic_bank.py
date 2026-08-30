@@ -22,19 +22,36 @@ class TopicBankTests(unittest.TestCase):
     def setUpClass(cls):
         cls.topics = load_topic_bank()
 
-    def test_bank_has_three_unique_topics_in_each_existing_category(self):
+    def test_bank_has_twenty_unique_cambridge_topics_across_all_categories(self):
         counts = Counter(item["topic_category"] for item in self.topics)
-        self.assertEqual(len(self.topics), 30)
-        self.assertEqual(counts, Counter({category: 3 for category in TOPIC_LABELS}))
-        self.assertEqual(len({item["id"] for item in self.topics}), 30)
+        self.assertEqual(len(self.topics), 20)
+        self.assertEqual(set(counts), set(TOPIC_LABELS))
+        self.assertTrue(all(counts[category] >= 1 for category in TOPIC_LABELS))
+        self.assertEqual(len({item["id"] for item in self.topics}), 20)
         self.assertEqual(
             {item["question_type"] for item in self.topics},
-            set(QUESTION_TYPE_LABELS),
+            {
+                "agree_disagree",
+                "discuss_both_views",
+                "advantages_disadvantages",
+                "two_part",
+                "positive_negative",
+            },
         )
+        self.assertEqual(
+            [item["id"] for item in self.topics],
+            [
+                f"cambridge_{book}_test_{test}"
+                for book in range(20, 15, -1)
+                for test in range(1, 5)
+            ],
+        )
+        self.assertTrue(all(item["source_book"] for item in self.topics))
+        self.assertTrue(all(item["source_test"] for item in self.topics))
 
     def test_filter_returns_only_the_requested_category(self):
         education = filter_topics_by_category(self.topics, "education")
-        self.assertEqual(len(education), 3)
+        self.assertEqual(len(education), 2)
         self.assertTrue(all(item["topic_category"] == "education" for item in education))
         with self.assertRaises(TopicBankError):
             filter_topics_by_category(self.topics, "not_a_topic")
@@ -46,6 +63,7 @@ class TopicBankTests(unittest.TestCase):
             "type": [{**valid, "question_type": "invalid"}],
             "question": [{**valid, "question": "   "}],
             "null_question": [{**valid, "question": None}],
+            "source": [{**valid, "source_book": "   "}],
             "duplicate": [valid, copy.deepcopy(valid)],
             "empty_bank": [],
         }
@@ -111,6 +129,8 @@ class TopicBankTests(unittest.TestCase):
         self.assertIn("打开主题题库 →", app_source)
         self.assertIn("从主题题库选题", app_source)
         self.assertIn("用这题开始写", app_source)
+        self.assertIn("Cambridge IELTS 16–20 Academic", app_source)
+        self.assertIn("item['source_book']", app_source)
         self.assertIn("load_expression_catalog()", app_source)
         write_page_source = app_source.split("def render_write_page", 1)[1].split(
             "def render_correction_original", 1

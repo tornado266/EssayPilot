@@ -1,212 +1,182 @@
 [
   {
-    "id": "education_01",
-    "topic_category": "education",
-    "question_type": "agree_disagree",
-    "question": "Schools should spend more time teaching practical life skills than teaching traditional academic subjects. To what extent do you agree or disagree?",
-    "practice_focus": "比较生活技能与学科知识的长期价值，并明确立场。"
-  },
-  {
-    "id": "education_02",
-    "topic_category": "education",
-    "question_type": "discuss_both_views",
-    "question": "Some people believe university students should study a broad range of subjects, while others think they should specialise in one field. Discuss both views and give your own opinion.",
-    "practice_focus": "练习双边论证，并用课程深度与就业适应力作比较。"
-  },
-  {
-    "id": "education_03",
-    "topic_category": "education",
-    "question_type": "problems_solutions",
-    "question": "In many places, children from rural or low-income families have less access to high-quality education. What problems does this cause, and what measures could improve the situation?",
-    "practice_focus": "建立教育不平等的后果链，并提出可执行的资源方案。"
-  },
-  {
-    "id": "technology_01",
-    "topic_category": "technology",
-    "question_type": "agree_disagree",
-    "question": "Digital communication has improved the quality of people's personal relationships. To what extent do you agree or disagree?",
-    "practice_focus": "区分联系频率与关系质量，避免把两者简单等同。"
-  },
-  {
-    "id": "technology_02",
-    "topic_category": "technology",
-    "question_type": "discuss_both_views",
-    "question": "Some people accept that online services collect personal data because this makes daily life more convenient. Others believe such collection should be strictly limited. Discuss both views and give your own opinion.",
-    "practice_focus": "平衡便利与隐私风险，并提出有条件的立场。"
-  },
-  {
-    "id": "technology_03",
-    "topic_category": "technology",
-    "question_type": "advantages_disadvantages",
-    "question": "More routine tasks in the workplace are being performed by automated systems. Do the advantages of this development outweigh the disadvantages?",
-    "practice_focus": "围绕效率、岗位变化与再培训比较利弊权重。"
-  },
-  {
-    "id": "environment_01",
-    "topic_category": "environment",
-    "question_type": "agree_disagree",
-    "question": "Environmental problems can only be solved if governments and large companies take action; changes made by individuals have little effect. To what extent do you agree or disagree?",
-    "practice_focus": "区分制度性影响与个人选择的累积作用。"
-  },
-  {
-    "id": "environment_02",
-    "topic_category": "environment",
-    "question_type": "advantages_disadvantages",
-    "question": "Some countries are considering strict limits on leisure air travel to reduce carbon emissions. Do the advantages of such limits outweigh the disadvantages?",
-    "practice_focus": "比较减排收益与经济、出行自由方面的代价。"
-  },
-  {
-    "id": "environment_03",
-    "topic_category": "environment",
-    "question_type": "problems_solutions",
-    "question": "Large amounts of edible food are thrown away by households. What are the main causes of this waste, and what solutions could reduce it?",
-    "practice_focus": "从消费习惯和零售环境追溯原因，匹配对应方案。"
-  },
-  {
-    "id": "health_01",
-    "topic_category": "health",
-    "question_type": "agree_disagree",
-    "question": "Governments should spend more public money on preventing illness than on treating people who are already ill. To what extent do you agree or disagree?",
-    "practice_focus": "比较预防与治疗的成本效益，同时处理医疗公平。"
-  },
-  {
-    "id": "health_02",
-    "topic_category": "health",
-    "question_type": "discuss_both_views",
-    "question": "Some people think maintaining good health is mainly an individual's responsibility, while others believe governments should create healthier living conditions. Discuss both views and give your own opinion.",
-    "practice_focus": "划分个人选择与公共环境各自能承担的责任。"
-  },
-  {
-    "id": "health_03",
-    "topic_category": "health",
-    "question_type": "two_part",
-    "question": "In many countries, young adults are doing less physical exercise than previous generations. Why is this happening? How can young adults be encouraged to exercise more?",
-    "practice_focus": "用原因与措施一一对应的结构回答两个问题。"
-  },
-  {
-    "id": "society_family_01",
-    "topic_category": "society_family",
-    "question_type": "agree_disagree",
-    "question": "The growing tendency for older and younger family members to live separately is weakening society. To what extent do you agree or disagree?",
-    "practice_focus": "讨论家庭支持、独立生活与社区关系之间的联系。"
-  },
-  {
-    "id": "society_family_02",
-    "topic_category": "society_family",
-    "question_type": "discuss_both_views",
-    "question": "Some people believe young children should be cared for mainly by relatives, while others prefer professional childcare centres. Discuss both views and give your own opinion.",
-    "practice_focus": "比较情感照护、专业教育与家庭现实条件。"
-  },
-  {
-    "id": "society_family_03",
-    "topic_category": "society_family",
-    "question_type": "advantages_disadvantages",
-    "question": "In some societies, several generations of a family are choosing to live in the same home. Do the advantages of this arrangement outweigh the disadvantages?",
-    "practice_focus": "权衡互助、住房成本、隐私和代际冲突。"
-  },
-  {
-    "id": "work_economy_01",
-    "topic_category": "work_economy",
-    "question_type": "discuss_both_views",
-    "question": "Some people choose a job mainly for security and income, while others consider job satisfaction more important. Discuss both views and give your own opinion.",
-    "practice_focus": "比较物质稳定与内在动力，并避免绝对化结论。"
-  },
-  {
-    "id": "work_economy_02",
-    "topic_category": "work_economy",
-    "question_type": "advantages_disadvantages",
-    "question": "An increasing number of employers are introducing a four-day working week without reducing employees' total pay. Do the advantages of this policy outweigh the disadvantages?",
-    "practice_focus": "从生产率、员工福祉和企业成本比较净影响。"
-  },
-  {
-    "id": "work_economy_03",
-    "topic_category": "work_economy",
-    "question_type": "two_part",
-    "question": "More people now change careers several times during their working lives. Why has this become more common? Is it a positive or negative development?",
-    "practice_focus": "先解释趋势成因，再用清晰标准评价其影响。"
-  },
-  {
-    "id": "government_policy_01",
-    "topic_category": "government_policy",
-    "question_type": "agree_disagree",
-    "question": "Public funding for the arts should be reduced so that more money can be spent on essential public services. To what extent do you agree or disagree?",
-    "practice_focus": "界定公共服务优先级，并评估艺术的公共价值。"
-  },
-  {
-    "id": "government_policy_02",
-    "topic_category": "government_policy",
-    "question_type": "discuss_both_views",
-    "question": "Some people believe national governments should make most important public decisions, while others think local communities should have greater control. Discuss both views and give your own opinion.",
-    "practice_focus": "比较统一协调与地方信息优势，形成条件式判断。"
-  },
-  {
-    "id": "government_policy_03",
-    "topic_category": "government_policy",
-    "question_type": "problems_solutions",
-    "question": "In many countries, few citizens take part in local public decision-making. What problems can this cause, and how can participation be increased?",
-    "practice_focus": "说明低参与如何影响代表性，并提出低门槛参与机制。"
-  },
-  {
-    "id": "media_culture_01",
-    "topic_category": "media_culture",
-    "question_type": "agree_disagree",
-    "question": "The replacement of professionally edited news by information shared on social media is a harmful development. To what extent do you agree or disagree?",
-    "practice_focus": "围绕速度、可信度和信息把关建立评价标准。"
-  },
-  {
-    "id": "media_culture_02",
-    "topic_category": "media_culture",
-    "question_type": "discuss_both_views",
-    "question": "Some people prefer films and television programmes from other countries, while others believe locally produced entertainment should receive more support. Discuss both views and give your own opinion.",
-    "practice_focus": "比较文化多样性、产业质量与本土认同。"
-  },
-  {
-    "id": "media_culture_03",
-    "topic_category": "media_culture",
-    "question_type": "two_part",
-    "question": "Children are increasingly influenced by online celebrities. Why are these figures so influential? What effects can this influence have on children?",
-    "practice_focus": "分别解释影响力来源及其正负后果。"
-  },
-  {
-    "id": "crime_law_01",
+    "id": "cambridge_20_test_1",
     "topic_category": "crime_law",
     "question_type": "agree_disagree",
-    "question": "The main purpose of prison should be to rehabilitate offenders rather than to punish them. To what extent do you agree or disagree?",
-    "practice_focus": "比较惩罚、威慑与降低再犯率的政策目标。"
+    "question": "Access to clean water is a basic human right. Therefore every home should have a water supply that is provided free of charge.\n\nDo you agree or disagree?",
+    "practice_focus": "围绕基本权利、公共财政和免费供给的可行性建立清晰立场。",
+    "source_book": "Cambridge IELTS 20 Academic",
+    "source_test": "Test 1"
   },
   {
-    "id": "crime_law_02",
-    "topic_category": "crime_law",
-    "question_type": "discuss_both_views",
-    "question": "Some people believe short prison sentences are appropriate for minor crimes, while others think community service is more effective. Discuss both views and give your own opinion.",
-    "practice_focus": "用公共安全、改造效果和社会成本比较两种处罚。"
+    "id": "cambridge_20_test_2",
+    "topic_category": "education",
+    "question_type": "two_part",
+    "question": "In many countries, primary and secondary schools close for two months or more in the summer holidays.\n\nWhat is the value of long school holidays?\n\nWhat are the arguments in favour of shorter school holidays?",
+    "practice_focus": "分别论证长假价值与缩短假期的理由，保持两问篇幅平衡。",
+    "source_book": "Cambridge IELTS 20 Academic",
+    "source_test": "Test 2"
   },
   {
-    "id": "crime_law_03",
-    "topic_category": "crime_law",
-    "question_type": "problems_solutions",
-    "question": "Cybercrime is becoming more common as everyday activities move online. What problems does cybercrime create for individuals and society, and what measures can reduce it?",
-    "practice_focus": "区分个人与社会层面的危害，并提出多主体方案。"
+    "id": "cambridge_20_test_3",
+    "topic_category": "environment",
+    "question_type": "advantages_disadvantages",
+    "question": "Some people have decided to reduce the number of times they fly every year or to stop flying altogether.\n\nDo you think the environmental benefits of this development outweigh the disadvantages for individuals and businesses?",
+    "practice_focus": "比较减飞带来的环境收益与个人、企业承担的成本。",
+    "source_book": "Cambridge IELTS 20 Academic",
+    "source_test": "Test 3"
   },
   {
-    "id": "cities_transport_01",
-    "topic_category": "cities_transport",
+    "id": "cambridge_20_test_4",
+    "topic_category": "media_culture",
+    "question_type": "two_part",
+    "question": "Many aspects of the way people dress today are influenced by global fashion trends.\n\nHow has global fashion become such a strong influence on people’s lives?\n\nDo you think this is a positive or negative development?",
+    "practice_focus": "先解释全球时尚影响扩大的原因，再评价其文化与消费影响。",
+    "source_book": "Cambridge IELTS 20 Academic",
+    "source_test": "Test 4"
+  },
+  {
+    "id": "cambridge_19_test_1",
+    "topic_category": "work_economy",
     "question_type": "agree_disagree",
-    "question": "Private cars should be restricted in city centres, even if this makes travel less convenient for some people. To what extent do you agree or disagree?",
-    "practice_focus": "权衡公共环境收益与个人便利、公平问题。"
+    "question": "The working week should be shorter and workers should have a longer weekend.\n\nDo you agree or disagree?",
+    "practice_focus": "从生产率、员工福祉和企业成本三方面论证工作周长度。",
+    "source_book": "Cambridge IELTS 19 Academic",
+    "source_test": "Test 1"
   },
   {
-    "id": "cities_transport_02",
+    "id": "cambridge_19_test_2",
+    "topic_category": "society_family",
+    "question_type": "discuss_both_views",
+    "question": "Some people think that competition at work, at school and in daily life is a good thing. Others believe that we should try to cooperate more, rather than competing against each other.\n\nDiscuss both these views and give your own opinion.",
+    "practice_focus": "比较竞争与合作的激励作用，并给出适用条件明确的观点。",
+    "source_book": "Cambridge IELTS 19 Academic",
+    "source_test": "Test 2"
+  },
+  {
+    "id": "cambridge_19_test_3",
+    "topic_category": "work_economy",
+    "question_type": "agree_disagree",
+    "question": "It is important for everyone, including young people, to save money for their future.\n\nTo what extent do you agree or disagree with this statement?",
+    "practice_focus": "权衡储蓄的长期安全感与年轻人的当前发展投入。",
+    "source_book": "Cambridge IELTS 19 Academic",
+    "source_test": "Test 3"
+  },
+  {
+    "id": "cambridge_19_test_4",
+    "topic_category": "environment",
+    "question_type": "positive_negative",
+    "question": "In many countries nowadays, consumers can go to a supermarket and buy food produced all over the world.\n\nDo you think this is a positive or negative development?",
+    "practice_focus": "评价全球食品贸易对选择、价格、本地农业和环境的影响。",
+    "source_book": "Cambridge IELTS 19 Academic",
+    "source_test": "Test 4"
+  },
+  {
+    "id": "cambridge_18_test_1",
+    "topic_category": "technology",
+    "question_type": "agree_disagree",
+    "question": "The most important aim of science should be to improve people’s lives.\n\nTo what extent do you agree or disagree with this statement?",
+    "practice_focus": "界定科学的首要目标，并讨论基础研究与现实效用的关系。",
+    "source_book": "Cambridge IELTS 18 Academic",
+    "source_test": "Test 1"
+  },
+  {
+    "id": "cambridge_18_test_2",
+    "topic_category": "education",
+    "question_type": "discuss_both_views",
+    "question": "Some university students want to learn about other subjects in addition to their main subjects. Others believe it is more important to give all their time and attention to studying for a qualification.\n\nDiscuss both these views and give your own opinion.",
+    "practice_focus": "比较跨学科学习与专业深度，并形成有条件的教育立场。",
+    "source_book": "Cambridge IELTS 18 Academic",
+    "source_test": "Test 2"
+  },
+  {
+    "id": "cambridge_18_test_3",
+    "topic_category": "cities_transport",
+    "question_type": "positive_negative",
+    "question": "In many countries around the world, rural people are moving to cities, so the population in the countryside is decreasing.\n\nDo you think this is a positive or a negative development?",
+    "practice_focus": "评价人口城市化对就业、公共服务和乡村社区的综合影响。",
+    "source_book": "Cambridge IELTS 18 Academic",
+    "source_test": "Test 3"
+  },
+  {
+    "id": "cambridge_18_test_4",
+    "topic_category": "society_family",
+    "question_type": "advantages_disadvantages",
+    "question": "In many countries, people are now living longer than ever before. Some people say an ageing population creates problems for governments. Other people think there are benefits if society has more elderly people.\n\nTo what extent do the advantages of having an ageing population outweigh the disadvantages?",
+    "practice_focus": "比较老龄化带来的社会经验价值与财政、照护压力。",
+    "source_book": "Cambridge IELTS 18 Academic",
+    "source_test": "Test 4"
+  },
+  {
+    "id": "cambridge_17_test_1",
+    "topic_category": "work_economy",
+    "question_type": "advantages_disadvantages",
+    "question": "It is important for people to take risks, both in their professional lives and their personal lives.\n\nDo you think the advantages of taking risks outweigh the disadvantages?",
+    "practice_focus": "区分职业与个人风险，比较成长机会和失败成本。",
+    "source_book": "Cambridge IELTS 17 Academic",
+    "source_test": "Test 1"
+  },
+  {
+    "id": "cambridge_17_test_2",
+    "topic_category": "technology",
+    "question_type": "two_part",
+    "question": "Some children spend hours every day on their smartphones.\n\nWhy is this the case? Do you think this is a positive or a negative development?",
+    "practice_focus": "解释儿童长时间使用手机的原因，并评价其发展影响。",
+    "source_book": "Cambridge IELTS 17 Academic",
+    "source_test": "Test 2"
+  },
+  {
+    "id": "cambridge_17_test_3",
+    "topic_category": "government_policy",
+    "question_type": "discuss_both_views",
+    "question": "Some people believe that professionals, such as doctors and engineers, should be required to work in the country where they did their training. Others believe they should be free to work in another country if they wish.\n\nDiscuss both these views and give your own opinion.",
+    "practice_focus": "比较公共培训投入、人才短缺与个人职业流动自由。",
+    "source_book": "Cambridge IELTS 17 Academic",
+    "source_test": "Test 3"
+  },
+  {
+    "id": "cambridge_17_test_4",
+    "topic_category": "health",
+    "question_type": "positive_negative",
+    "question": "Nowadays, a growing number of people with health problems are trying alternative medicines and treatments instead of visiting their usual doctor.\n\nDo you think this is a positive or a negative development?",
+    "practice_focus": "评价替代疗法在可及性、证据、安全性和监管方面的影响。",
+    "source_book": "Cambridge IELTS 17 Academic",
+    "source_test": "Test 4"
+  },
+  {
+    "id": "cambridge_16_test_1",
+    "topic_category": "media_culture",
+    "question_type": "two_part",
+    "question": "In some countries, more and more people are becoming interested in finding out about the history of the house or building they live in.\n\nWhat are the reasons for this?\n\nHow can people research this?",
+    "practice_focus": "分别分析建筑历史兴趣的来源和可靠的调查途径。",
+    "source_book": "Cambridge IELTS 16 Academic",
+    "source_test": "Test 1"
+  },
+  {
+    "id": "cambridge_16_test_2",
+    "topic_category": "media_culture",
+    "question_type": "two_part",
+    "question": "In their advertising, businesses nowadays usually emphasise that their products are new in some way.\n\nWhy is this? Do you think it is a positive or negative development?",
+    "practice_focus": "解释广告强调创新的商业动机，并评价其消费与社会影响。",
+    "source_book": "Cambridge IELTS 16 Academic",
+    "source_test": "Test 2"
+  },
+  {
+    "id": "cambridge_16_test_3",
+    "topic_category": "health",
+    "question_type": "agree_disagree",
+    "question": "Many manufactured food and drink products contain high levels of sugar, which causes many health problems. Sugary products should be made more expensive to encourage people to consume less sugar.\n\nDo you agree or disagree?",
+    "practice_focus": "论证价格干预能否有效降低糖摄入，并考虑公平性与替代措施。",
+    "source_book": "Cambridge IELTS 16 Academic",
+    "source_test": "Test 3"
+  },
+  {
+    "id": "cambridge_16_test_4",
     "topic_category": "cities_transport",
     "question_type": "advantages_disadvantages",
-    "question": "Many cities are encouraging high-density housing close to public transport. Do the advantages of this approach outweigh the disadvantages?",
-    "practice_focus": "比较土地效率、通勤便利与居住品质。"
-  },
-  {
-    "id": "cities_transport_03",
-    "topic_category": "cities_transport",
-    "question_type": "two_part",
-    "question": "Many urban residents spend a large amount of time travelling to and from work. Why are commuting times increasing? What can cities do to reduce them?",
-    "practice_focus": "连接城市扩张、住房与交通原因，并匹配规划方案。"
+    "question": "In the future all cars, buses and trucks will be driverless. The only people travelling inside these vehicles will be passengers.\n\nDo you think the advantages of driverless vehicles outweigh the disadvantages?",
+    "practice_focus": "比较无人驾驶在安全、效率、就业和责任归属上的利弊。",
+    "source_book": "Cambridge IELTS 16 Academic",
+    "source_test": "Test 4"
   }
 ]

@@ -2696,8 +2696,8 @@ def render_topic_bank_picker() -> None:
         with st.expander("从主题题库选题", expanded=topics_expanded):
             st.markdown("### 主题连练")
             st.info(
-                "按 IELTS Task 2 常见题材整理，均为 EssayPilot 原创练习题，"
-                "不代表官方真题或考题预测。"
+                "收录 Cambridge IELTS 16–20 Academic Writing Test 1–4，"
+                "按 IELTS Task 2 常见题材整理，仅供练习，不代表考题预测。"
             )
             try:
                 topic_bank = load_topic_bank()
@@ -2744,6 +2744,9 @@ def render_topic_bank_picker() -> None:
                             unsafe_allow_html=True,
                         )
                         st.markdown(f"**{item['question']}**")
+                        st.caption(
+                            f"来源：{item['source_book']} · {item['source_test']}"
+                        )
                         st.caption(f"练习重点：{item['practice_focus']}")
                         st.button(
                             "用这题开始写",
