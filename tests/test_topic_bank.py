@@ -125,8 +125,9 @@ class TopicBankTests(unittest.TestCase):
 
         self.assertIn('== "topics"', app_source)
         self.assertIn('?page=write&amp;mode=topics', home_source)
-        self.assertIn('class="ep-topic-home-entry"', app_source)
-        self.assertIn("打开主题题库 →", app_source)
+        self.assertIn('primary_href="?page=write&mode=topics"', app_source)
+        self.assertIn('("从剑雅真题选题", "?page=write&mode=topics")', app_source)
+        self.assertNotIn('class="ep-topic-home-entry"', app_source)
         self.assertIn("从主题题库选题", app_source)
         self.assertIn("用这题开始写", app_source)
         self.assertIn("Cambridge IELTS 16–20 Academic", app_source)

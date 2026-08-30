@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Sequence
 
 import streamlit as st
 
@@ -218,6 +219,95 @@ def render_feature_bento() -> None:
                 <p>保存批改中的典型错误和可迁移表达，通过复习与造句把反馈带到下一篇作文。</p>
                 <a class="ep-bento__action" href="?page=growth&amp;mode=expressions">打开表达库</a>
             </article>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_home_heading(
+    *,
+    title: str = "学习首页",
+    subtitle: str = "今天只做最值得推进的一步。",
+    eyebrow: str = "ESSAYPILOT",
+) -> None:
+    """Render the compact heading used by the action-first signed-in home page."""
+    st.markdown(
+        f"""
+        <header class="ep-home-heading">
+            <span>{html.escape(str(eyebrow))}</span>
+            <h1>{html.escape(str(title))}</h1>
+            <p>{html.escape(str(subtitle))}</p>
+        </header>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_home_action_card(
+    *,
+    eyebrow: str,
+    title: str,
+    body: str,
+    primary_label: str,
+    primary_href: str,
+    secondary_actions: Sequence[tuple[str, str]] = (),
+    facts: Sequence[tuple[str, str]] = (),
+    aria_label: str = "今天的练习",
+) -> None:
+    """Render one prominent home action with optional context and route links."""
+    fact_items = "".join(
+        '<div class="ep-home-action__fact">'
+        f'<span>{html.escape(str(label))}</span>'
+        f'<strong>{html.escape(str(value))}</strong>'
+        "</div>"
+        for label, value in facts
+    )
+    facts_html = f'<div class="ep-home-action__facts">{fact_items}</div>' if fact_items else ""
+    secondary_items = "".join(
+        f'<a class="ep-home-action__link ep-home-action__link--secondary" '
+        f'href="{html.escape(str(href), quote=True)}">{html.escape(str(label))}</a>'
+        for label, href in secondary_actions
+    )
+    st.markdown(
+        f"""
+        <section class="ep-home-action" aria-label="{html.escape(str(aria_label), quote=True)}">
+            <div class="ep-home-action__copy">
+                <span class="ep-home-action__eyebrow">{html.escape(str(eyebrow))}</span>
+                <h2>{html.escape(str(title))}</h2>
+                <p>{html.escape(str(body))}</p>
+            </div>
+            {facts_html}
+            <nav class="ep-home-action__actions" aria-label="可用操作">
+                <a class="ep-home-action__link ep-home-action__link--primary"
+                   href="{html.escape(str(primary_href), quote=True)}">{html.escape(str(primary_label))}</a>
+                {secondary_items}
+            </nav>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_guest_home_intro(
+    *,
+    title: str = "先完成一篇，再决定练什么",
+    body: str = "提交 IELTS Writing Task 2 作文，获得四项评分、原文证据和下一步训练。",
+    steps: Sequence[str] = ("提交作文", "找到核心问题", "针对修改", "完成第二稿"),
+) -> None:
+    """Render the lean visitor value proposition above Streamlit action buttons."""
+    steps_html = "".join(
+        f'<li><span>{index}</span>{html.escape(str(label))}</li>'
+        for index, label in enumerate(steps, start=1)
+    )
+    steps_block = f"<ol>{steps_html}</ol>" if steps_html else ""
+    st.markdown(
+        f"""
+        <section class="ep-home-welcome" aria-label="EssayPilot 写作训练流程">
+            <span class="ep-home-welcome__eyebrow">IELTS WRITING · ESSAYPILOT</span>
+            <h1>{html.escape(str(title))}</h1>
+            <p>{html.escape(str(body))}</p>
+            {steps_block}
         </section>
         """,
         unsafe_allow_html=True,

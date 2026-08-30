@@ -11,6 +11,7 @@ import uuid
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlencode
 
 import altair as alt
 import pandas as pd
@@ -82,6 +83,7 @@ from src.issue_map import (
     report_essay_from_state,
 )
 from src.expression_catalog import FUNCTION_LABELS, TOPIC_LABELS, load_expression_catalog
+from src.home_dashboard import build_home_summary
 from src.share_card import build_result_card_svg
 from src.problem_spans import contextual_collocation, highlight_problem_text
 from src.product_analytics import (
@@ -115,7 +117,9 @@ from src.topic_bank import (
 from src.visitor_identity import browser_visitor_id, visitor_hash
 from ui.alpine import (
     inject_alpine_theme,
-    render_feature_bento,
+    render_guest_home_intro,
+    render_home_action_card,
+    render_home_heading,
     render_hero as render_alpine_hero,
     render_scoring_loader,
     paragraph_diff_html,
@@ -1902,206 +1906,63 @@ def render_history(user_id: str) -> None:
 
 
 def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
-    """Render cloud-backed continuity, priorities, and multidimensional progress."""
+    """Render the action-first signed-in home page from a minimal cloud snapshot."""
     try:
-        runs = store.list_grading_runs(user)
-        pending = store.list_pending_practice(user)
-        revisions = store.list_draft_revisions(user)
+        runs = store.list_grading_runs(user, limit=2)
+        pending = store.list_pending_practice(user, limit=1)
     except CloudStoreError as exc:
         st.warning(f"云端学习档案暂时不可用：{exc}")
-        return False
+        render_home_heading(
+            title="学习首页",
+            subtitle="暂时无法读取上次进度，你仍可正常开始新的写作练习。",
+        )
+        render_home_action_card(
+            eyebrow="继续练习",
+            title="先选一道剑雅真题开始",
+            body="题库与写作输入不依赖学习档案，当前内容不会被自动覆盖。",
+            primary_label="从剑雅真题开始",
+            primary_href="?page=write&mode=topics",
+            secondary_actions=(("粘贴自己的题目", "?page=write"),),
+        )
+        return True
 
-    if not runs:
+    summary = build_home_summary(runs, pending)
+    if not summary.has_history:
         return False
 
     render_anchor("learning-dashboard")
-    st.markdown('<div class="section-kicker">学习档案</div>', unsafe_allow_html=True)
-    st.subheader("今天从最需要提高的地方继续")
-    st.markdown(
-        """
-        <section class="ep-topic-home-entry" aria-label="主题连练入口">
-            <div>
-                <span>高频题材专项练习</span>
-                <h3>主题连练</h3>
-                <p>围绕同一题材连续练习，把观点和表达真正练熟</p>
-            </div>
-            <a href="?page=write&amp;mode=topics">打开主题题库 →</a>
-        </section>
-        """,
-        unsafe_allow_html=True,
+    render_home_heading(
+        title="学习首页",
+        subtitle="继续未完成的训练，或从剑雅真题开始下一篇。",
     )
-    try:
-        learning_items = store.list_learning_items(user)
-    except (CloudStoreError, AttributeError):
-        learning_items = []
-    expression_items = [item for item in learning_items if item.get("item_type") == "expression"]
-    mastered_expressions = [item for item in expression_items if item.get("status") == "mastered"]
-    topic_counts = Counter(str(item.get("topic_category") or "society_family") for item in expression_items)
-    focus_topic = TOPIC_LABELS.get(topic_counts.most_common(1)[0][0], "尚未形成") if topic_counts else "尚未形成"
-    latest = runs[0]
-    previous = runs[1] if len(runs) > 1 else None
-    latest_score = float(latest.get("overall_band") or 0)
-    previous_score = float(previous.get("overall_band") or 0) if previous else None
-    criteria = latest.get("criteria") if isinstance(latest.get("criteria"), list) else []
-    ranked = sorted(
-        [item for item in criteria if isinstance(item, dict) and isinstance(item.get("score"), (int, float))],
-        key=lambda item: (float(item["score"]), str(item.get("criterion", ""))),
-    )
-    weakest = (
-        CRITERION_COMPACT_NAMES.get(str(ranked[0].get("criterion")), str(ranked[0].get("criterion")))
-        if ranked
-        else "等待评分"
-    )
-    next_weakest = (
-        CRITERION_COMPACT_NAMES.get(str(ranked[1].get("criterion")), str(ranked[1].get("criterion")))
-        if len(ranked) > 1
-        else ""
-    )
-    delta = latest_score - previous_score if previous_score is not None else None
-    latest_revision_gain: float | None = None
-    if revisions:
-        revision_scores = revisions[0].get("score_snapshot") or {}
-        first_run = revisions[0].get("grading_runs") or {}
-        if isinstance(revision_scores, dict) and isinstance(first_run, dict):
-            revised = revision_scores.get("Overall Band")
-            original = first_run.get("overall_band")
-            if isinstance(revised, (int, float)) and isinstance(original, (int, float)):
-                latest_revision_gain = float(revised) - float(original)
-    render_dashboard_stats(
-        [
-            ("最新 Overall", format_overall_band(latest_score), "IELTS Task 2"),
-            ("当前薄弱项", weakest, f"下一优先：{next_weakest}" if next_weakest else "根据最新批改"),
-            ("较上一次", "已有新记录" if delta is not None else "暂无对比", "这是首篇记录" if delta is None else "请结合四项分观察变化"),
-            ("待完成训练", len(pending), "单句与逻辑任务"),
-            (
-                "最近第二稿提升",
-                "已完成验证" if latest_revision_gain is not None else "暂无",
-                "提交第二稿后显示" if latest_revision_gain is None else "与第一稿对比",
-            ),
-        ],
-        columns=5,
-    )
-    latest_structured = latest.get("report_json") if isinstance(latest.get("report_json"), dict) else {}
-    st.info(f"当前最高优先级：{_run_priority(latest_structured)}")
 
-    essay_data = latest.get("essays") if isinstance(latest.get("essays"), dict) else {}
-    latest_is_legacy = str(latest.get("prompt_version") or "") != REPORT_PROMPT_VERSION
-    if latest_is_legacy:
-        st.info("最近一份是旧版英文报告。它会继续保留，不会自动消耗 Token 重新生成。")
-    if st.button("继续上一次训练", type="primary", use_container_width=True):
-        st.session_state.latest_report = str(latest.get("report_markdown", ""))
-        st.session_state.latest_structured = latest.get("report_json") or {}
-        st.session_state.latest_prompt_version = str(latest.get("prompt_version") or "")
-        st.session_state.latest_cloud_ids = {
-            "essay_id": str(latest.get("essay_id", "")),
-            "grading_run_id": str(latest.get("id", "")),
-        }
-        st.session_state.topic_input = str(essay_data.get("question", ""))
-        st.session_state.essay_input = str(essay_data.get("content", ""))
-        st.session_state.draft_1_snapshot = {
-            "topic": st.session_state.topic_input,
-            "text": st.session_state.essay_input,
-            "feedback": st.session_state.latest_report,
-            "scores": score_snapshot(st.session_state.latest_structured),
-            "structured": st.session_state.latest_structured,
-            "essay_id": str(latest.get("essay_id", "")),
-            "grading_run_id": str(latest.get("id", "")),
-        }
-        navigate("training", str(latest.get("id", "")))
-        st.rerun()
-
-    st.markdown("#### 表达库进度")
-    render_dashboard_stats(
-        [
-            ("已收录表达", len(expression_items), "来自作文与题材精选"),
-            ("已完成表达练习", len(mastered_expressions), "已正确使用一次"),
-            ("当前重点题材", focus_topic, "继续巩固高频表达"),
-        ],
-        columns=3,
-    )
-    if expression_items and st.button("继续造句练习", use_container_width=True):
-        pending_expression = next(
-            (item for item in expression_items if item.get("status") != "mastered"), expression_items[0]
+    if summary.has_pending and summary.pending is not None:
+        title = "把上次没完成的一步做完"
+        body = summary.pending.summary
+        secondary_actions = (
+            ("从剑雅真题选题", "?page=write&mode=topics"),
+            ("查看学习档案", "?page=growth"),
         )
-        st.session_state.expression_practice_item = _normalise_expression(pending_expression)
-        st.session_state.expression_library_view = EXPRESSION_VIEW_PRACTICE
-        navigate("growth")
-        st.rerun()
-
-    if latest_is_legacy and st.button("将旧作文载入输入区，准备生成中文报告", use_container_width=True):
-        st.session_state.topic_input = str(essay_data.get("question", ""))
-        st.session_state.essay_input = str(essay_data.get("content", ""))
-        st.session_state.latest_report = ""
-        st.session_state.latest_structured = {}
-        navigate("write")
-        st.rerun()
-
-    chart_rows: list[dict[str, object]] = []
-    tag_counts: Counter[str] = Counter()
-    for run in reversed(runs):
-        created = str(run.get("created_at", ""))[:10]
-        for item in run.get("criteria") or []:
-            if isinstance(item, dict):
-                chart_rows.append({
-                    "练习日期": created,
-                    "能力维度": CRITERION_COMPACT_NAMES.get(str(item.get("criterion")), str(item.get("criterion"))),
-                    "分数": item.get("score"),
-                })
-        report_json = run.get("report_json") or {}
-        if isinstance(report_json, dict):
-            tag_counts.update(str(tag) for tag in report_json.get("error_tags", []))
-    if chart_rows:
-        chart = (
-            alt.Chart(pd.DataFrame(chart_rows))
-            .mark_line(
-                strokeWidth=3.5,
-                point=alt.OverlayMarkDef(filled=True, size=95, stroke="#FFFFFF", strokeWidth=1.5),
-            )
-            .encode(
-                x=alt.X("练习日期:N", title="练习日期", axis=alt.Axis(labelAngle=-35)),
-                y=alt.Y("分数:Q", scale=alt.Scale(domain=[3, 9]), title="分数"),
-                color=alt.Color(
-                    "能力维度:N",
-                    title="能力维度",
-                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_COLORS),
-                    legend=alt.Legend(labelLimit=180),
-                ),
-                strokeDash=alt.StrokeDash(
-                    "能力维度:N",
-                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_DASHES),
-                    legend=None,
-                ),
-                shape=alt.Shape(
-                    "能力维度:N",
-                    scale=alt.Scale(domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_SHAPES),
-                    legend=None,
-                ),
-                tooltip=["练习日期", "能力维度", "分数"],
-            )
-            .properties(height=280)
-            .configure_axis(
-                labelColor="#31485A", titleColor="#172B3A", labelFontSize=13,
-                titleFontSize=14, gridColor="#CCD9E2", domainColor="#91A8B8",
-            )
-            .configure_legend(
-                labelColor="#263F52", titleColor="#172B3A", labelFontSize=14,
-                titleFontSize=15, symbolSize=170, padding=12,
-            )
+        eyebrow = "继续当前训练"
+    else:
+        title = "选一道剑雅真题，开始下一篇"
+        body = "当前没有未完成训练，可以换一道题继续积累同题材观点与表达。"
+        latest_run_id = summary.latest_grading_run_id or ""
+        secondary_actions = (
+            ("粘贴自己的题目", "?page=write"),
+            ("查看上次报告", f"?{urlencode({'page': 'report', 'run_id': latest_run_id})}"),
         )
-        st.altair_chart(chart, use_container_width=True)
+        eyebrow = "开始下一轮"
 
-    structured = latest.get("report_json") if isinstance(latest.get("report_json"), dict) else {}
-    sentence_tasks = structured.get("sentence_training", []) if isinstance(structured, dict) else []
-    logic_tasks = structured.get("logic_training", []) if isinstance(structured, dict) else []
-    with st.expander("今日训练", expanded=True):
-        for item in sentence_tasks[:2]:
-            st.markdown(f"- **单句：** {item.get('goal', '改写薄弱句子')} — “{item.get('original', '')}”")
-        for item in logic_tasks[:1]:
-            st.markdown(f"- **逻辑：** {item.get('task', '完成段落重写')}")
-    if tag_counts:
-        common = " · ".join(f"{tag} × {count}" for tag, count in tag_counts.most_common(5))
-        st.caption(f"近期常见问题：{common}")
-    st.divider()
+    render_home_action_card(
+        eyebrow=eyebrow,
+        title=title,
+        body=body,
+        primary_label=summary.primary_label,
+        primary_href=summary.primary_href,
+        secondary_actions=secondary_actions,
+        facts=tuple((fact.label, fact.value) for fact in summary.facts),
+    )
     return True
 
 
@@ -2520,23 +2381,57 @@ def _run_priority(structured: dict[str, object]) -> str:
 
 
 def render_home_page(store: SupabaseStore, user: CloudUser | None) -> None:
-    if user is not None and render_learning_dashboard(store, user):
-        render_feature_bento()
+    if user is not None:
+        if render_learning_dashboard(store, user):
+            return
+        render_home_heading(
+            title="学习首页",
+            subtitle="先完成第一篇，再根据真实反馈安排下一步训练。",
+        )
+        render_home_action_card(
+            eyebrow="开始第一轮",
+            title="从一道剑雅真题开始",
+            body="选择题目只会带入写作区，不会自动生成作文、批改或调用模型。",
+            primary_label="从剑雅真题开始",
+            primary_href="?page=write&mode=topics",
+            secondary_actions=(("粘贴自己的题目", "?page=write"),),
+        )
+        st.button(
+            "查看零 Token 示例",
+            key="new_learner_demo",
+            use_container_width=True,
+            on_click=show_demo,
+        )
         return
-    render_product_hero()
-    action_start, action_demo, _ = st.columns([1.2, 1.4, 3.2])
-    with action_start:
-        st.button("开始一次完整体验", type="primary", use_container_width=True, on_click=navigate, args=("write",))
-    with action_demo:
-        st.button("查看零 Token 范文", use_container_width=True, on_click=show_demo)
-    st.markdown("### 今天只做四步")
-    render_dashboard_stats([
-        ("1", "提交作文", "保留原始段落"),
-        ("2", "找到核心问题", "分数与原文证据"),
-        ("3", "针对修改", "单句与逻辑训练"),
-        ("4", "完成第二稿", "验证是否真正改善"),
-    ], columns=4)
-    render_feature_bento()
+
+    render_guest_home_intro(
+        title="先完成一篇，再决定练什么",
+        body=(
+            "提交 IELTS Writing Task 2 作文，获得四项评分、原文证据和清楚的下一步。"
+            "流程：评分定位 → 针对训练 → 第二稿验证。"
+        ),
+        steps=(),
+    )
+    with st.container(key="guest_home_actions"):
+        write_col, topic_col, demo_col = st.columns(3)
+        write_col.button(
+            "开始批改",
+            type="primary",
+            use_container_width=True,
+            on_click=navigate,
+            args=("write",),
+        )
+        topic_col.button(
+            "从剑雅真题选题",
+            use_container_width=True,
+            on_click=navigate,
+            args=("write", "", "topics"),
+        )
+        demo_col.button(
+            "查看零 Token 示例",
+            use_container_width=True,
+            on_click=show_demo,
+        )
 
 
 def grade_submission(
@@ -3657,6 +3552,87 @@ def render_expression_library(
             st.info(f"优化句：{result.get('improved_sentence_en', '')}")
 
 
+def render_score_trend(runs: list[dict[str, object]]) -> None:
+    """Render a compact, optional score trend inside the learning archive."""
+    chart_rows: list[dict[str, object]] = []
+    practice_dates: set[str] = set()
+    for run in reversed(runs):
+        created = str(run.get("created_at") or "")[:10]
+        if not created:
+            continue
+        for item in run.get("criteria") or []:
+            if not isinstance(item, dict) or not isinstance(item.get("score"), (int, float)):
+                continue
+            practice_dates.add(created)
+            chart_rows.append(
+                {
+                    "练习日期": created,
+                    "能力维度": CRITERION_COMPACT_NAMES.get(
+                        str(item.get("criterion")), str(item.get("criterion"))
+                    ),
+                    "分数": item.get("score"),
+                }
+            )
+    if len(practice_dates) < 2 or not chart_rows:
+        return
+
+    with st.expander("成绩趋势", expanded=False):
+        chart = (
+            alt.Chart(pd.DataFrame(chart_rows))
+            .mark_line(
+                strokeWidth=3.5,
+                point=alt.OverlayMarkDef(
+                    filled=True, size=95, stroke="#FFFFFF", strokeWidth=1.5
+                ),
+            )
+            .encode(
+                x=alt.X("练习日期:N", title="练习日期", axis=alt.Axis(labelAngle=-35)),
+                y=alt.Y("分数:Q", scale=alt.Scale(domain=[3, 9]), title="分数"),
+                color=alt.Color(
+                    "能力维度:N",
+                    title="能力维度",
+                    scale=alt.Scale(
+                        domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_COLORS
+                    ),
+                    legend=alt.Legend(labelLimit=180, orient="bottom", columns=2),
+                ),
+                strokeDash=alt.StrokeDash(
+                    "能力维度:N",
+                    scale=alt.Scale(
+                        domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_DASHES
+                    ),
+                    legend=None,
+                ),
+                shape=alt.Shape(
+                    "能力维度:N",
+                    scale=alt.Scale(
+                        domain=CHART_CRITERION_DOMAIN, range=ALPINE_CHART_SHAPES
+                    ),
+                    legend=None,
+                ),
+                tooltip=["练习日期", "能力维度", "分数"],
+            )
+            .properties(height=250)
+            .configure_axis(
+                labelColor="#31485A",
+                titleColor="#172B3A",
+                labelFontSize=13,
+                titleFontSize=14,
+                gridColor="#CCD9E2",
+                domainColor="#91A8B8",
+            )
+            .configure_legend(
+                labelColor="#263F52",
+                titleColor="#172B3A",
+                labelFontSize=13,
+                titleFontSize=14,
+                symbolSize=150,
+                padding=8,
+            )
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+
 def _criterion_history_scores(run: dict[str, object]) -> dict[str, str]:
     scores = {"TR": "-", "CC": "-", "LR": "-", "GRA": "-"}
     aliases = {
@@ -3851,6 +3827,7 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
         key="growth_sections",
     )
     with history_tab:
+        render_score_trend(runs)
         render_correction_history(store, user, runs, revisions, has_more=has_more_runs)
     with error_tab:
         category_counts = Counter(str(item.get("category") or "grammar") for item in errors)
