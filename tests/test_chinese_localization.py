@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime
-from pathlib import Path
 
+from src.demo_package import load_demo_package
 from src.report_schema import PROMPT_VERSION
 from src.storage import build_markdown_record, markdown_to_pdf
 
@@ -11,7 +11,7 @@ class ChineseLocalizationTests(unittest.TestCase):
         self.assertIn("-zh-", PROMPT_VERSION)
 
     def test_static_demo_is_utf8_chinese_and_keeps_english_material(self):
-        report = (Path(__file__).parents[1] / "data" / "demo_report.md").read_text(encoding="utf-8")
+        report = load_demo_package().report
         self.assertIn("## 2. 四项评分", report)
         self.assertIn("## 7. Band 7.5 英文示范改写", report)
         self.assertIn("University study is demanding", report)

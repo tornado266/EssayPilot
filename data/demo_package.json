@@ -1,0 +1,435 @@
+{
+  "question": "Some university students want to learn about other subjects in addition to their main subjects. Others believe it is more important to give all their time and attention to studying for a qualification.\n\nDiscuss both these views and give your own opinion.",
+  "essay": "Nowadays, people have different opinions about whether university students should only study their major or also learn other subjects. Both ideas have some advantages, but I think there are more benefits if students focus mainly on their major.\n\nOn the one hand, studying only the main subject can help students learn better skills. University study is difficult and students already have a lot of work to do. For example, a medical student needs to spend a lot of time reading books and doing practice. If they also study other subjects, they may feel too busy and cannot understand their main subject well. Therefore, focusing on one subject can help students prepare for their future job.\n\nOn the other hand, learning other subjects can also be useful. Students can get more knowledge and become more interested in different areas. For example, a business student can learn some computer skills, which may help them in the future. However, not all students have enough time or energy to study many subjects at the same time.\n\nIn my opinion, students should mainly study their major because it is the most important part of university education. Other subjects can be optional, but they should not take too much time. This way, students can still focus on their main goal while learning some extra knowledge.\n\nIn conclusion, both views have some reasons, but I believe focusing on the major is more important for university students.",
+  "structured": {
+    "essay_topic_category": "education",
+    "summary": "文章完整讨论了两种观点并保持立场一致，段落结构清楚；当前最需要改善的是基础词汇重复和部分理由只展开一层。",
+    "criteria": [
+      {
+        "criterion": "Task Response",
+        "score": 7,
+        "reason": "双方观点均得到回应，作者立场从引言到结论保持一致，但个别理由停在概括性结果。",
+        "evidence": [
+          "Both ideas have some advantages, but I think there are more benefits if students focus mainly on their major.",
+          "Therefore, focusing on one subject can help students prepare for their future job."
+        ],
+        "positive_evidence": [
+          "Both ideas have some advantages, but I think there are more benefits if students focus mainly on their major."
+        ],
+        "limitation_evidence": [
+          "Therefore, focusing on one subject can help students prepare for their future job."
+        ],
+        "next_band_limit": "需要把专业学习如何转化为学业表现或职业能力再解释一层。"
+      },
+      {
+        "criterion": "Coherence and Cohesion",
+        "score": 6,
+        "reason": "整体推进容易理解，但段落衔接较依赖固定连接语，部分句子之间的因果关系没有充分展开。",
+        "evidence": [
+          "On the one hand, studying only the main subject can help students learn better skills.",
+          "However, not all students have enough time or energy to study many subjects at the same time."
+        ],
+        "positive_evidence": [
+          "On the one hand, studying only the main subject can help students learn better skills."
+        ],
+        "limitation_evidence": [
+          "However, not all students have enough time or energy to study many subjects at the same time."
+        ],
+        "next_band_limit": "需要减少公式化衔接，并让每个段落末句更明确地回扣中心观点。"
+      },
+      {
+        "criterion": "Lexical Resource",
+        "score": 6,
+        "reason": "词义基本准确，但 knowledge、subjects、study 等基础词重复，部分搭配不够自然。",
+        "evidence": [
+          "Students can get more knowledge and become more interested in different areas.",
+          "For example, a medical student needs to spend a lot of time reading books and doing practice."
+        ],
+        "positive_evidence": [
+          "For example, a business student can learn some computer skills, which may help them in the future."
+        ],
+        "limitation_evidence": [
+          "Students can get more knowledge and become more interested in different areas.",
+          "For example, a medical student needs to spend a lot of time reading books and doing practice."
+        ],
+        "next_band_limit": "需要用更自然的动词搭配和更准确的学术词组替换重复的基础表达。"
+      },
+      {
+        "criterion": "Grammatical Range and Accuracy",
+        "score": 7,
+        "reason": "能稳定控制复合句和条件句，整体错误较少，但句型变化仍可增加。",
+        "evidence": [
+          "If they also study other subjects, they may feel too busy and cannot understand their main subject well.",
+          "This way, students can still focus on their main goal while learning some extra knowledge."
+        ],
+        "positive_evidence": [
+          "If they also study other subjects, they may feel too busy and cannot understand their main subject well."
+        ],
+        "limitation_evidence": [
+          "This way, students can still focus on their main goal while learning some extra knowledge."
+        ],
+        "next_band_limit": "需要在保持准确性的同时增加更灵活的从句和名词短语。"
+      }
+    ],
+    "priorities": [
+      {
+        "title": "替换重复且不自然的基础搭配",
+        "evidence": "Students can get more knowledge and become more interested in different areas.",
+        "why": "意思清楚，但 get more knowledge 和 different areas 限制了词汇准确性与灵活度。",
+        "action": "把核心动词和名词组改为更自然的学术搭配，同时保留原意。",
+        "criterion": "LR",
+        "action_type": "replace",
+        "success_check": "改写后不再使用 get more knowledge，并且句意仍与原文一致。"
+      },
+      {
+        "title": "把就业理由补成完整因果链",
+        "evidence": "Therefore, focusing on one subject can help students prepare for their future job.",
+        "why": "结论合理，但没有说明专业深度怎样转化为具体的职业准备。",
+        "action": "在原句后补充一层机制和一个可观察的结果。",
+        "criterion": "TR",
+        "action_type": "develop",
+        "success_check": "段落能清楚回答为什么专业学习有助于就业，而不只是重复结论。"
+      }
+    ],
+    "problems": [
+      {
+        "title": "搭配不自然",
+        "evidence": "For example, a medical student needs to spend a lot of time reading books and doing practice.",
+        "why": "doing practice 不符合这里的自然英语搭配。",
+        "action": "根据医学学习语境改用 clinical practice 或 practising。",
+        "criterion": "LR",
+        "action_type": "replace",
+        "success_check": "改写后的搭配自然，并准确对应医学专业训练。"
+      },
+      {
+        "title": "表达过于笼统",
+        "evidence": "University study is difficult and students already have a lot of work to do.",
+        "why": "difficult 和 a lot of work 能传达意思，但缺少精确度。",
+        "action": "用 demanding 和 a heavy workload 准确描述学习压力。",
+        "criterion": "LR",
+        "action_type": "replace",
+        "success_check": "新句减少笼统词，同时没有夸大原意。"
+      },
+      {
+        "title": "段末没有回扣主要判断",
+        "evidence": "However, not all students have enough time or energy to study many subjects at the same time.",
+        "why": "该句指出时间限制，却没有说明它如何支持主修优先的立场。",
+        "action": "补一句说明跨学科课程应当补充而不是取代主修学习。",
+        "criterion": "CC",
+        "action_type": "develop",
+        "success_check": "读者能从时间限制自然过渡到作者的中心立场。"
+      }
+    ],
+    "sentence_corrections": [
+      {
+        "criterion": "LR",
+        "issue_type": "动词搭配不自然",
+        "original": "Students can get more knowledge and become more interested in different areas.",
+        "problem": "get more knowledge 和 different areas 较笼统且重复。",
+        "improved": "Students can broaden their knowledge and develop an interest in different fields.",
+        "problem_spans": ["get more knowledge", "different areas"],
+        "learning_replacements": [
+          {
+            "source": "get more knowledge",
+            "target": "broaden their knowledge",
+            "headword": "broaden",
+            "part_of_speech": "verb",
+            "meaning_zh": "拓宽、扩展",
+            "simple_definition": "to increase the range of what someone knows or understands",
+            "pattern": "broaden + possessive adjective + knowledge",
+            "collocations": ["broaden their knowledge", "broaden students' horizons"],
+            "usage_note_zh": "broaden knowledge 比 get knowledge 更自然，强调知识范围扩大。"
+          }
+        ]
+      },
+      {
+        "criterion": "LR",
+        "issue_type": "名词搭配不自然",
+        "original": "For example, a medical student needs to spend a lot of time reading books and doing practice.",
+        "problem": "doing practice 不能准确描述医学生的实践训练。",
+        "improved": "For example, a medical student needs to devote considerable time to reading and clinical practice.",
+        "problem_spans": ["spend a lot of time", "doing practice"],
+        "learning_replacements": [
+          {
+            "source": "doing practice",
+            "target": "clinical practice",
+            "headword": "practice",
+            "part_of_speech": "noun",
+            "meaning_zh": "临床实践",
+            "simple_definition": "practical training involving the care and treatment of patients",
+            "pattern": "clinical + practice",
+            "collocations": ["clinical practice", "supervised practice"],
+            "usage_note_zh": "描述医学专业实践时，clinical practice 比 doing practice 更准确。"
+          }
+        ]
+      },
+      {
+        "criterion": "LR",
+        "issue_type": "用词过于笼统",
+        "original": "University study is difficult and students already have a lot of work to do.",
+        "problem": "difficult 和 a lot of work 缺少具体、自然的学术表达。",
+        "improved": "University study is demanding, and students already have a heavy workload.",
+        "problem_spans": ["difficult", "a lot of work"],
+        "learning_replacements": [
+          {
+            "source": "a lot of work",
+            "target": "a heavy workload",
+            "headword": "workload",
+            "part_of_speech": "noun",
+            "meaning_zh": "繁重的工作量",
+            "simple_definition": "the amount of work that a person is expected to complete",
+            "pattern": "have + a heavy workload",
+            "collocations": ["a heavy workload", "manage a workload"],
+            "usage_note_zh": "workload 是可数名词，适合概括学生需要完成的大量任务。"
+          }
+        ]
+      },
+      {
+        "criterion": "LR",
+        "issue_type": "动词短语不够自然",
+        "original": "Other subjects can be optional, but they should not take too much time.",
+        "problem": "take too much time 没有明确说明课程占用学生课表。",
+        "improved": "Other subjects can be optional, but they should not take up too much of a student's timetable.",
+        "problem_spans": ["take too much time"],
+        "learning_replacements": [
+          {
+            "source": "take too much time",
+            "target": "take up too much of a student's timetable",
+            "headword": "take up",
+            "part_of_speech": "phrasal verb",
+            "meaning_zh": "占用过多时间或空间",
+            "simple_definition": "to use an amount of time, space, or attention",
+            "pattern": "take up + too much of + noun",
+            "collocations": ["take up time", "take up part of a timetable"],
+            "usage_note_zh": "take up 明确表达某件事占用有限时间，适合课程安排语境。"
+          }
+        ]
+      }
+    ],
+    "vocabulary_recommendations": [
+      {
+        "kind": "upgrade",
+        "source": "get more knowledge",
+        "target": "broaden their knowledge",
+        "headword": "broaden",
+        "part_of_speech": "verb",
+        "register": "academic",
+        "meaning_zh": "拓宽知识面",
+        "simple_definition": "to increase the range of knowledge someone has",
+        "pattern": "broaden + possessive adjective + knowledge",
+        "collocations": ["broaden their knowledge", "broaden students' horizons"],
+        "source_sentence": "Students can get more knowledge and become more interested in different areas.",
+        "reason_zh": "比 get more knowledge 更自然，也更能体现知识范围的扩大。",
+        "example_en": "Optional courses can broaden their knowledge of society and technology.",
+        "example_zh": "选修课可以拓宽他们对社会和科技的认识。"
+      },
+      {
+        "kind": "upgrade",
+        "source": "a lot of work",
+        "target": "a heavy workload",
+        "headword": "workload",
+        "part_of_speech": "noun",
+        "register": "formal",
+        "meaning_zh": "繁重的工作量",
+        "simple_definition": "the amount of work a person must complete",
+        "pattern": "have + a heavy workload",
+        "collocations": ["a heavy workload", "manage a workload"],
+        "source_sentence": "University study is difficult and students already have a lot of work to do.",
+        "reason_zh": "用一个准确名词替代笼统表达，适合描述学习负担。",
+        "example_en": "Students with a heavy workload may need to limit optional courses.",
+        "example_zh": "课业繁重的学生可能需要限制选修课程。"
+      },
+      {
+        "kind": "upgrade",
+        "source": "doing practice",
+        "target": "clinical practice",
+        "headword": "practice",
+        "part_of_speech": "noun",
+        "register": "technical",
+        "meaning_zh": "临床实践",
+        "simple_definition": "practical medical training involving patients",
+        "pattern": "clinical + practice",
+        "collocations": ["clinical practice", "supervised clinical practice"],
+        "source_sentence": "For example, a medical student needs to spend a lot of time reading books and doing practice.",
+        "reason_zh": "准确对应医学生的专业实践，不再使用不自然的 doing practice。",
+        "example_en": "Medical qualifications require both theoretical study and clinical practice.",
+        "example_zh": "医学资格既需要理论学习，也需要临床实践。"
+      },
+      {
+        "kind": "recommended",
+        "source": "focus mainly on their major",
+        "target": "focus mainly on their major",
+        "headword": "focus",
+        "part_of_speech": "verb phrase",
+        "register": "neutral",
+        "meaning_zh": "主要专注于自己的主修专业",
+        "simple_definition": "to give most attention to the main field of study",
+        "pattern": "focus mainly on + noun",
+        "collocations": ["focus on a major", "focus mainly on specialist study"],
+        "source_sentence": "Both ideas have some advantages, but I think there are more benefits if students focus mainly on their major.",
+        "reason_zh": "这是原文中清楚表达立场的核心搭配，可以保留。",
+        "example_en": "Students should focus mainly on their major while taking a small number of optional courses.",
+        "example_zh": "学生应主要专注于主修，同时修读少量选修课。"
+      },
+      {
+        "kind": "recommended",
+        "source": "computer skills",
+        "target": "computer skills",
+        "headword": "skills",
+        "part_of_speech": "noun phrase",
+        "register": "neutral",
+        "meaning_zh": "计算机技能",
+        "simple_definition": "practical abilities used to work with computers and digital tools",
+        "pattern": "develop/learn + computer skills",
+        "collocations": ["basic computer skills", "develop computer skills"],
+        "source_sentence": "For example, a business student can learn some computer skills, which may help them in the future.",
+        "reason_zh": "表达准确且与跨学科学习的例子直接相关。",
+        "example_en": "Business students can use computer skills to analyse market data.",
+        "example_zh": "商科学生可以利用计算机技能分析市场数据。"
+      },
+      {
+        "kind": "upgrade",
+        "source": "future job",
+        "target": "career preparation",
+        "headword": "preparation",
+        "part_of_speech": "noun phrase",
+        "register": "formal",
+        "meaning_zh": "职业准备",
+        "simple_definition": "the process of developing knowledge and skills for future employment",
+        "pattern": "contribute to + career preparation",
+        "collocations": ["career preparation", "effective career preparation"],
+        "source_sentence": "Therefore, focusing on one subject can help students prepare for their future job.",
+        "reason_zh": "career preparation 比 future job 更能概括学习与就业之间的准备过程。",
+        "example_en": "Specialist study is an important part of career preparation.",
+        "example_zh": "专业学习是职业准备的重要组成部分。"
+      }
+    ],
+    "paragraph_feedback": [
+      {
+        "paragraph": 1,
+        "strength": "准确概括双方观点并给出一致立场。",
+        "limitation": "立场句没有预告选择专业深度的核心理由。",
+        "improvement": "在立场句中简要说明专业能力与职业准备的联系。"
+      },
+      {
+        "paragraph": 2,
+        "strength": "医学生例子与主修学习直接相关。",
+        "limitation": "例子之后很快落到结论，因果链少一层解释。",
+        "improvement": "说明深度学习如何影响资格、实习或专业能力。"
+      },
+      {
+        "paragraph": 3,
+        "strength": "商科与计算机技能的例子具体。",
+        "limitation": "段末只强调时间不足，没有回扣作者立场。",
+        "improvement": "补充跨学科学习应当补充而不是取代主修。"
+      },
+      {
+        "paragraph": 4,
+        "strength": "作者观点明确，并对选修课保留了合理空间。",
+        "limitation": "take too much time 较口语化。",
+        "improvement": "用 take up too much of a student's timetable 提高准确性。"
+      },
+      {
+        "paragraph": 5,
+        "strength": "结论与引言立场一致。",
+        "limitation": "some reasons 含义过于模糊。",
+        "improvement": "简要重申知识广度有益，但专业深度更重要。"
+      }
+    ],
+    "band_75_rewrite": "Nowadays, university students are often encouraged either to specialise in their major or to explore subjects beyond it. Although studying other disciplines can broaden students' perspectives, I believe their main priority should be developing expertise in their chosen field.\n\nFocusing on a major allows students to build the specialist knowledge required for future employment. Medical students, for example, must devote considerable time to reading, laboratory work and clinical practice. If too much of their timetable is taken up by unrelated courses, they may struggle to master the core knowledge on which their qualifications depend.\n\nStudying other subjects can still be valuable because it exposes students to different ways of thinking. A business student who takes a psychology course may understand consumer behaviour more clearly. However, such courses should complement rather than replace the sustained study needed to become competent in the student's main discipline.\n\nIn conclusion, broader learning has clear benefits, but university students should give priority to their major because depth of knowledge is more directly connected to academic achievement and career preparation.",
+    "useful_expressions": [
+      {
+        "expression": "specialise in",
+        "meaning": "专攻某一领域",
+        "usage_note": "用于说明学生或从业者集中发展某一专业。",
+        "example": "Many students choose to specialise in engineering.",
+        "function_category": "core_collocation"
+      },
+      {
+        "expression": "broaden students' perspectives",
+        "meaning": "拓宽学生的视野",
+        "usage_note": "用于讨论跨学科学习或国际交流的好处。",
+        "example": "Optional courses can broaden students' perspectives.",
+        "function_category": "cause_effect"
+      },
+      {
+        "expression": "complement rather than replace",
+        "meaning": "补充而不是取代",
+        "usage_note": "用于比较两种安排，并限定次要事物的作用。",
+        "example": "Other subjects should complement rather than replace a student's major.",
+        "function_category": "contrast_concession"
+      },
+      {
+        "expression": "devote considerable time to",
+        "meaning": "投入大量时间做某事",
+        "usage_note": "to 后接名词或动名词。",
+        "example": "Medical students devote considerable time to clinical practice.",
+        "function_category": "core_collocation"
+      },
+      {
+        "expression": "build specialist knowledge",
+        "meaning": "建立专业知识",
+        "usage_note": "适用于教育、职业培训和技能发展题。",
+        "example": "A focused curriculum helps students build specialist knowledge.",
+        "function_category": "cause_effect"
+      },
+      {
+        "expression": "give priority to",
+        "meaning": "优先考虑",
+        "usage_note": "用于清楚表达取舍和作者立场。",
+        "example": "Universities should give priority to essential professional skills.",
+        "function_category": "evaluation_stance"
+      }
+    ],
+    "next_practice": {
+      "task": "Some people think university students should study whatever they like. Others believe they should only study subjects useful for future employment. Discuss both views and give your own opinion.",
+      "sentence_pattern": "Although X can broaden students' perspectives, Y should remain the priority because...",
+      "warning": "避免只列出好处；每个主体段都要说明理由如何产生具体结果。"
+    },
+    "sentence_training": [
+      {
+        "original": "Students can get more knowledge and become more interested in different areas.",
+        "goal": "使用更自然的动词搭配，并减少基础词重复。",
+        "reference": "Students can broaden their knowledge and develop an interest in different fields."
+      },
+      {
+        "original": "Therefore, focusing on one subject can help students prepare for their future job.",
+        "goal": "在不改变立场的前提下补足原因和结果。",
+        "reference": "Focusing on one discipline builds the specialist knowledge required for professional qualifications, which can make graduates better prepared for employment."
+      },
+      {
+        "original": "Other subjects can be optional, but they should not take too much time.",
+        "goal": "把口语化的时间表达改为更准确的课程安排表达。",
+        "reference": "Other subjects can be optional, but they should not take up too much of a student's timetable."
+      }
+    ],
+    "logic_training": [
+      {
+        "problem": "就业理由只有结论，没有解释专业深度产生作用的机制。",
+        "original": "Therefore, focusing on one subject can help students prepare for their future job.",
+        "task": "重写主体段结尾，把专业学习、资格能力和就业准备连接成完整因果链。",
+        "requirements": [
+          "保留作者支持主修优先的立场。",
+          "增加一层原因和一个具体结果。",
+          "让新增内容直接回应就业准备，不引入无关观点。"
+        ]
+      },
+      {
+        "problem": "时间限制没有回扣为什么主修应当优先。",
+        "original": "However, not all students have enough time or energy to study many subjects at the same time.",
+        "task": "补写一句段末判断，说明其他学科应补充而不是取代主修课程。",
+        "requirements": [
+          "保留承认跨学科学习有价值的让步。",
+          "明确次要课程与主修课程之间的关系。"
+        ]
+      }
+    ],
+    "error_tags": ["collocation", "idea_development", "repetition", "mechanical_cohesion"]
+  },
+  "draft_2": "Nowadays, university students are often encouraged either to specialise in their major or to explore subjects beyond it. Although studying other disciplines can broaden students' perspectives, I believe their main priority should be developing expertise in their chosen field.\n\nFocusing on a major allows students to build the specialist knowledge required for future employment. Medical students, for example, must devote considerable time to reading, laboratory work and clinical practice. If too much of their timetable is taken up by unrelated courses, they may struggle to master the core knowledge on which their qualifications depend.\n\nStudying other subjects can still be valuable because it exposes students to different ways of thinking. A business student who takes a psychology course may understand consumer behaviour more clearly. However, such courses should complement rather than replace the sustained study needed to become competent in the student's main discipline.\n\nIn conclusion, broader learning has clear benefits, but university students should give priority to their major because depth of knowledge is more directly connected to academic achievement and career preparation.",
+  "draft_changes": {
+    "retained": "保留原稿支持主修优先的立场，以及分别讨论两种观点的主体结构。",
+    "improved": "补足专业深度与职业准备之间的因果链，减少 study、subjects 和 knowledge 的重复，并替换不自然搭配。",
+    "next": "继续练习让步后的段末回扣，并在不牺牲准确性的情况下增加句型变化。"
+  }
+}

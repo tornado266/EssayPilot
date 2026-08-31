@@ -1,22 +1,53 @@
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from ui.alpine import CSS_PATH, render_home_action_card
+from streamlit.testing.v1 import AppTest
+
+from ui.alpine import (
+    CSS_PATH,
+    render_guest_home_intro,
+    render_home_action_card,
+    render_home_preview_link,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class HomePageUiTests(unittest.TestCase):
+    def test_guest_home_renders_actions_as_html_not_a_code_block(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        app.query_params["page"] = "home"
+
+        with patch(
+            "src.auth_session._AUTH_COMPONENT",
+            return_value=SimpleNamespace(
+                auth_session={"status": "empty"}, auth_wake=0
+            ),
+        ), patch(
+            "src.visitor_identity.browser_visitor_id", return_value=""
+        ):
+            app.run()
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(len(app.code), 0)
+        html_bodies = "\n".join(
+            str(getattr(item.proto, "body", "")) for item in app.get("html")
+        )
+        self.assertIn("开始批改", html_bodies)
+        self.assertIn("从剑雅真题选题", html_bodies)
+        self.assertIn("?page=demo", html_bodies)
+
     def test_action_card_escapes_copy_and_route_values(self):
         captured: dict[str, object] = {}
 
-        def fake_markdown(body: str, **kwargs: object) -> None:
+        def fake_html(body: str, **kwargs: object) -> None:
             captured["body"] = body
             captured["kwargs"] = kwargs
 
-        with patch("ui.alpine.st.markdown", side_effect=fake_markdown):
+        with patch("ui.alpine.st.html", side_effect=fake_html):
             render_home_action_card(
                 eyebrow="Today",
                 title="Continue <script>alert(1)</script>",
@@ -32,12 +63,12 @@ class HomePageUiTests(unittest.TestCase):
         self.assertNotIn("<script>", body)
         self.assertIn("?page=training&amp;run_id=a&amp;next=bad", body)
         self.assertIn("?page=write&amp;mode=topics", body)
-        self.assertTrue(captured["kwargs"]["unsafe_allow_html"])
+        self.assertEqual(captured["kwargs"], {})
 
     def test_signed_in_home_is_action_first_and_reads_only_small_snapshots(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
         dashboard = source.split("def render_learning_dashboard", 1)[1].split(
-            "def render_product_hero", 1
+            "def render_demo_page", 1
         )[0]
 
         self.assertIn("list_grading_runs(user, limit=2)", dashboard)
@@ -50,17 +81,51 @@ class HomePageUiTests(unittest.TestCase):
         self.assertNotIn("近期常见问题", dashboard)
         self.assertNotIn("今日训练", dashboard)
 
-    def test_guest_home_has_three_actions_without_feature_wall(self):
+    def test_guest_home_has_ranked_actions_without_feature_wall(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
         home = source.split("def render_home_page", 1)[1].split(
             "def grade_submission", 1
         )[0]
 
-        for label in ("开始批改", "从剑雅真题选题", "查看零 Token 示例"):
-            self.assertIn(label, home)
+        self.assertIn("render_guest_home_intro", home)
+        self.assertNotIn("st.columns(3)", home)
         self.assertNotIn("render_feature_bento", home)
         self.assertNotIn("今天只做四步", home)
         self.assertNotIn("render_dashboard_stats", home)
+
+    def test_guest_intro_renders_one_primary_action_and_quiet_demo_preview(self):
+        captured: dict[str, object] = {}
+
+        def fake_html(body: str, **kwargs: object) -> None:
+            captured["body"] = body
+            captured["kwargs"] = kwargs
+
+        with patch("ui.alpine.st.html", side_effect=fake_html):
+            render_guest_home_intro()
+
+        body = str(captured["body"])
+        self.assertEqual(body.count("ep-home-action__link--primary"), 1)
+        self.assertIn("开始批改", body)
+        self.assertIn("从剑雅真题选题", body)
+        self.assertIn("先看完整效果", body)
+        self.assertIn("?page=write&amp;mode=topics", body)
+        self.assertIn("?page=demo", body)
+        self.assertIn("不会调用模型", body)
+        self.assertEqual(captured["kwargs"], {})
+
+    def test_inline_demo_preview_is_a_shareable_route(self):
+        captured: dict[str, object] = {}
+
+        with patch(
+            "ui.alpine.st.html",
+            side_effect=lambda body, **kwargs: captured.update(body=body, kwargs=kwargs),
+        ):
+            render_home_preview_link(label="Preview <now>", href="?page=demo&from=home")
+
+        body = str(captured["body"])
+        self.assertIn("Preview &lt;now&gt;", body)
+        self.assertIn("?page=demo&amp;from=home", body)
+        self.assertIn("ep-home-preview--inline", body)
 
     def test_score_trend_is_archived_collapsed_and_requires_two_dates(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
@@ -82,7 +147,8 @@ class HomePageUiTests(unittest.TestCase):
         self.assertIn("min-height: 44px", css)
         self.assertIn("overflow-wrap: anywhere", css)
         self.assertIn("@media (max-width: 768px)", css)
-        self.assertIn(".st-key-guest_home_actions", css)
+        self.assertIn(".ep-home-preview", css)
+        self.assertIn("grid-row: 2", css)
 
 
 if __name__ == "__main__":

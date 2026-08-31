@@ -60,6 +60,7 @@ from src.auth_session import (
 from src.analytics import record_grading_event
 from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
 from src.dictionary_provider import DictionaryProvider, get_default_dictionary_provider
+from src.demo_package import DemoPackageError, load_demo_package
 from src.draft_training import list_draft_training_history, save_draft_training_record
 from src.error_book import append_error_book
 from src.learning_assets import (
@@ -120,6 +121,7 @@ from ui.alpine import (
     render_guest_home_intro,
     render_home_action_card,
     render_home_heading,
+    render_home_preview_link,
     render_hero as render_alpine_hero,
     render_scoring_loader,
     paragraph_diff_html,
@@ -131,7 +133,6 @@ from ui.alpine import (
 load_dotenv()
 
 BASE_DIR = Path(__file__).parent
-DEMO_REPORT_PATH = BASE_DIR / "data" / "demo_report.md"
 SCORE_PATTERN = re.compile(r"(?:最可能分数|Likely Score|Overall Band Score|Overall Band|Overall|总分|likely score)[^\d]*(\d(?:\.\d)?)")
 CRITERION_DISPLAY_NAMES = {
     "Task Response": "任务回应（TR）",
@@ -158,26 +159,19 @@ ALPINE_CHART_DASHES = [[1, 0], [9, 4], [3, 3], [11, 3, 2, 3]]
 ALPINE_CHART_SHAPES = ["circle", "square", "diamond", "triangle-up"]
 SAMPLE_POPOVER_TITLE = "试用作文"
 LOGGER = logging.getLogger(__name__)
-SAMPLE_TOPIC = (
-    "Some people believe university students should only study their main subjects, "
-    "while others think they should also study other subjects. "
-    "Discuss both views and give your own opinion."
-)
-SAMPLE_ESSAY = """Nowadays, people have different opinions about whether university students should only study their major or also learn other subjects. Both ideas have some advantages, but I think there are more benefits if students focus mainly on their major.
-
-On the one hand, studying only the main subject can help students learn better skills. University study is difficult and students already have a lot of work to do. For example, a medical student needs to spend a lot of time reading books and doing practice. If they also study other subjects, they may feel too busy and cannot understand their main subject well. Therefore, focusing on one subject can help students prepare for their future job.
-
-On the other hand, learning other subjects can also be useful. Students can get more knowledge and become more interested in different areas. For example, a business student can learn some computer skills, which may help them in the future. However, not all students have enough time or energy to study many subjects at the same time.
-
-In my opinion, students should mainly study their major because it is the most important part of university education. Other subjects can be optional, but they should not take too much time. This way, students can still focus on their main goal while learning some extra knowledge.
-
-In conclusion, both views have some reasons, but I believe focusing on the major is more important for university students."""
 
 
-def load_sample_essay() -> None:
-    """Load the Band 6 sample into the writing fields."""
-    st.session_state.topic_input = SAMPLE_TOPIC
-    st.session_state.essay_input = SAMPLE_ESSAY
+def load_sample_essay() -> bool:
+    """Load the validated static example into the writing fields."""
+    try:
+        package = load_demo_package()
+    except DemoPackageError:
+        st.session_state.demo_load_error = True
+        return False
+    st.session_state.topic_input = package.question
+    st.session_state.essay_input = package.essay
+    st.session_state.pop("demo_load_error", None)
+    return True
 
 
 def show_workspace() -> None:
@@ -190,13 +184,17 @@ def show_workspace() -> None:
 def show_demo() -> None:
     """Open the zero-token walkthrough."""
     st.session_state.page_mode = "demo"
+    st.query_params["page"] = "demo"
+    st.query_params.pop("run_id", None)
+    st.query_params.pop("mode", None)
     st.session_state.scroll_target = "demo-top"
     st.session_state.tutorial_clicked_pending = True
 
 
 def load_sample_and_show_workspace() -> None:
     """Load the sample without running the grader and return to the workspace."""
-    load_sample_essay()
+    if not load_sample_essay():
+        return
     st.session_state.page_mode = "write"
     st.query_params["page"] = "write"
     st.session_state.scroll_target = "writing-input"
@@ -617,7 +615,7 @@ def render_login_page(store: SupabaseStore) -> None:
                 except CloudStoreError as exc:
                     st.error(f"验证码发送失败：{exc}")
     with demo_col:
-        st.button("先看零 Token 范文", on_click=show_demo, use_container_width=True)
+        st.button("先看零 Token 完整示例", on_click=show_demo, use_container_width=True)
     if st.session_state.get("login_code_sent"):
         code = st.text_input("请输入邮箱验证码", key="login_code")
         if st.button("登录并进入学习档案", use_container_width=True):
@@ -1966,241 +1964,168 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
     return True
 
 
-def render_product_hero(is_demo: bool = False) -> None:
-    """Render the shared Alpine photographic hero."""
-    render_alpine_hero(variant="demo" if is_demo else "home")
-
-
 def render_demo_page() -> None:
-    """Render a complete static walkthrough without any AI request."""
+    """Render the current report and training flow from validated local data."""
     try:
-        report = DEMO_REPORT_PATH.read_text(encoding="utf-8")
-    except OSError:
-        st.error("示范报告文件缺失，请返回批改页。")
+        package = load_demo_package()
+    except DemoPackageError:
+        st.error("零 Token 示例暂时无法读取，你仍可正常开始自己的写作练习。")
+        st.button("去写作批改", type="primary", on_click=navigate, args=("write",))
         return
 
     render_anchor("demo-top")
     apply_pending_scroll()
-    render_bookmark_rail(
-        [
-            ("流程", "demo-flow"),
-            ("原稿", "demo-input"),
-            ("评分", "demo-score"),
-            ("诊断", "demo-diagnosis"),
-            ("改写", "demo-rewrite"),
-            ("训练", "demo-practice"),
-            ("二稿", "demo-draft2"),
-        ]
+    st.markdown(
+        """
+        <section class="ep-demo-intro">
+            <span>0 TOKEN · CURRENT PRODUCT WALKTHROUGH</span>
+            <h1>先看一篇作文，如何走完整个提分闭环</h1>
+            <p>这份示例使用当前评分结构与页面组件，展示原文证据、问题地图、词汇卡、训练和第二稿；浏览不会调用模型。</p>
+            <div><b>输入</b><i>→</i><b>报告</b><i>→</i><b>训练</b><i>→</i><b>第二稿</b></div>
+        </section>
+        """,
+        unsafe_allow_html=True,
     )
-    render_product_hero(is_demo=True)
 
-    back_column, fill_column, spacer_column = st.columns([1.15, 1.45, 3.4])
+    back_column, fill_column, spacer_column = st.columns([1.05, 1.7, 3.25])
     with back_column:
         st.button(
-            "← 返回批改页",
-            on_click=show_workspace,
+            "← 返回首页",
+            on_click=navigate,
+            args=("home",),
             use_container_width=True,
             key="demo_back_top",
         )
     with fill_column:
         st.button(
-            "把范文填入输入区",
+            "把示例原稿填入写作区",
+            type="primary",
             on_click=load_sample_and_show_workspace,
             use_container_width=True,
             key="demo_fill_top",
         )
 
-    st.caption("这是零 Token 静态范文。按正式产品的四个阶段浏览，不会调用模型。")
+    st.caption("静态示例 · 当前报告格式 · 不调用模型 · 不写入学习档案")
     input_tab, report_tab, training_tab, draft_tab = st.tabs(
         ["① 输入", "② 报告", "③ 训练", "④ 第二稿"]
     )
     with input_tab:
-        st.subheader("题目与学生原稿")
+        st.subheader("题目与第一稿")
         question_column, essay_column = st.columns([0.82, 1.38], gap="large")
         with question_column:
             with st.container(border=True):
                 st.markdown("**英文作文题目**")
-                st.write(SAMPLE_TOPIC)
+                st.write(package.question)
                 st.caption("Task 2 · 双边讨论并给出观点")
         with essay_column:
             with st.container(border=True):
-                st.markdown("**学生原稿 · 239 词**")
-                st.write(SAMPLE_ESSAY)
+                st.markdown(f"**学生第一稿 · {package.word_count} 词**")
+                st.write(package.essay)
     with report_tab:
-        st.subheader("评分、诊断与改写")
-        score_columns = st.columns(5)
-        demo_scores = [("Overall", "7.0"), ("TR", "7"), ("CC", "7"), ("LR", "6"), ("GRA", "7")]
-        for column, (label, value) in zip(score_columns, demo_scores):
-            with column:
-                render_score_card(label, value, "静态示范")
-        overview_tab, diagnosis_tab, rewrite_tab = st.tabs(["评分依据", "核心诊断", "逐句与范文"])
-        with overview_tab:
-            st.markdown(extract_report_section(report, 2))
-        with diagnosis_tab:
-            st.markdown(extract_report_section(report, 4))
-        with rewrite_tab:
-            st.markdown(extract_report_section(report, 5))
-            st.markdown(extract_report_section(report, 7))
-    with training_tab:
-        st.subheader("从报告进入专项训练")
-        sentence_tab, logic_tab, expression_tab = st.tabs(["单句训练", "逻辑训练", "本篇可迁移表达"])
-        with sentence_tab:
-            st.markdown(extract_report_section(report, 11))
-        with logic_tab:
-            st.markdown(extract_report_section(report, 12))
-        with expression_tab:
-            st.markdown(extract_report_section(report, 8))
-    with draft_tab:
-        st.subheader("第二稿训练与前后对比")
-        st.caption("先由学生独立修改，再用 Band 7.5 示范稿核对，不让模型替写。")
-        compare_draft_1, compare_draft_2, compare_result = st.tabs(["第一稿", "第二稿示范", "两稿变化"])
-        with compare_draft_1:
-            st.markdown(SAMPLE_ESSAY)
-        with compare_draft_2:
-            st.markdown(extract_report_section(report, 7))
-        with compare_result:
+        structured = package.structured
+        st.subheader("先看分数，再核对原文证据")
+        render_overall_band(float(structured.get("overall_band") or 0))
+        priorities = [
+            item for item in structured.get("priorities", [])
+            if isinstance(item, dict)
+        ]
+        if priorities:
             st.markdown(
-                """
-                - **保留：** 原来的立场和四段核心结构。
-                - **已改善：** 补足解释链，减少重复用词，让反方段落回到中心论点。
-                - **下一步：** 将仍未稳定的 LR 问题收入错题本，继续完成单句训练。
-                """
+                '<div class="ep-result-summary"><strong>本轮最重要：</strong> '
+                f'{html.escape(str(priorities[0].get("title") or ""))}</div>',
+                unsafe_allow_html=True,
             )
-    st.success("完整示范已按输入 → 报告 → 训练 → 第二稿拆分；浏览全过程不消耗 Token。")
-    return
-
-    render_anchor("demo-flow")
-    st.markdown('<div class="section-kicker">完整学习流程</div>', unsafe_allow_html=True)
-    st.subheader("一眼看懂完整批改流程")
-    st.markdown(
-        """
-        <div class="feature-strip">
-            <div class="feature-chip"><strong>01 · 诊断</strong>先看分数与证据，不先堆修改建议</div>
-            <div class="feature-chip"><strong>02 · 对照</strong>用原句与改写对照，看见真实差距</div>
-            <div class="feature-chip"><strong>03 · 练习</strong>把问题变成下一次可以完成的练习</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    render_anchor("demo-input")
-    st.markdown('<div class="demo-step">第 1 步 · 查看范文输入</div>', unsafe_allow_html=True)
-    st.subheader("先看原始题目与学生作文")
-    question_column, essay_column = st.columns([0.82, 1.38], gap="large")
-    with question_column:
-        with st.container(border=True):
-            st.markdown("**英文作文题目**")
-            st.write(SAMPLE_TOPIC)
-            st.caption("Task 2 · 双边讨论并给出观点")
-    with essay_column:
-        with st.container(border=True):
-            st.markdown("**学生原稿 · 239 词**")
-            st.write(SAMPLE_ESSAY)
-
-    render_anchor("demo-score")
-    st.divider()
-    st.markdown('<div class="demo-step">第 2 步 · 结合证据评分</div>', unsafe_allow_html=True)
-    st.subheader("分数先给结论，再给可核对的依据")
-    render_overall_band(calculate_overall_band(report))
-    st.markdown(extract_report_section(report, 2))
-
-    render_anchor("demo-diagnosis")
-    st.divider()
-    st.markdown('<div class="demo-step">第 3 步 · 找出优先问题</div>', unsafe_allow_html=True)
-    st.subheader("只抓最影响提分的问题")
-    priorities_column, problems_column = st.columns(2, gap="large")
-    with priorities_column:
-        st.markdown(extract_report_section(report, 3))
-    with problems_column:
-        st.markdown(extract_report_section(report, 4))
-
-    st.markdown('<div class="demo-step">第 4 步 · 逐句与段落批改</div>', unsafe_allow_html=True)
-    st.subheader("从句子到段落，逐层看哪里出了问题")
-    st.markdown(extract_report_section(report, 5))
-    st.markdown(extract_report_section(report, 6))
-
-    render_anchor("demo-rewrite")
-    st.divider()
-    st.markdown('<div class="demo-step">第 5 步 · 对照英文示范</div>', unsafe_allow_html=True)
-    st.subheader("Band 7.5 示范改写")
-    st.caption("保留学生原始立场，只升级论证、搭配和句型控制。")
-    with st.container(border=True):
-        st.markdown(extract_report_section(report, 7))
-
-    render_anchor("demo-practice")
-    st.divider()
-    st.markdown('<div class="demo-step">第 6 步 · 把反馈变成训练</div>', unsafe_allow_html=True)
-    st.subheader("本篇可迁移表达与下一次训练")
-    st.markdown(extract_report_section(report, 8))
-    st.markdown(extract_report_section(report, 9))
-    practice_column, logic_column = st.columns(2, gap="large")
-    with practice_column:
-        with st.container(border=True):
-            st.markdown(extract_report_section(report, 11))
-    with logic_column:
-        with st.container(border=True):
-            st.markdown(extract_report_section(report, 12))
-
-    render_anchor("demo-draft2")
-    st.divider()
-    st.markdown('<div class="demo-step">第 7 步 · 完成第二稿闭环</div>', unsafe_allow_html=True)
-    st.subheader("第二稿训练：把反馈真正写进自己的作文")
-    st.caption("示范报告来自 gpt-5.4-mini；第二稿环节展示用户如何消化反馈，而不是让模型再代写一篇。")
-    st.markdown(
-        """
-        <div class="feature-strip">
-            <div class="feature-chip"><strong>第一稿基线 · 7.0</strong>先保留原文、四项分数和完整反馈</div>
-            <div class="feature-chip"><strong>本轮重点 · LR 6</strong>减少 study / subjects / learn 重复，换成准确搭配</div>
-            <div class="feature-chip"><strong>提交第二稿</strong>对比两稿分数、已改善问题、剩余问题和下一轮重点</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    with st.container(border=True):
-        st.markdown(
-            """
-            #### 完整训练顺序
-
-            1. 展开第一稿，确认原始作文和四项分数。
-            2. 按系统给出的两个最低项制定本轮修改重点。
-            3. 学生独立重写整篇第二稿；第 7 部分的 Band 7.5 改写只作为完成后的参考。
-            4. 提交第二稿后，系统逐项显示 **第一稿 → 第二稿** 的分数变化。
-            5. 系统给出“已经改善 / 仍需修改 / 下一轮优先级”的进步报告，并保存训练记录。
-            """
+        render_structured_criteria_overview(structured)
+        diagnosis_tab, map_tab, full_tab = st.tabs(
+            ["重点诊断", "原文问题地图", "完整报告"]
         )
-    compare_draft_1, compare_draft_2, compare_result = st.tabs(
-        ["第一稿", "第二稿示范", "两稿变化"]
-    )
-    with compare_draft_1:
-        st.markdown(SAMPLE_ESSAY)
-    with compare_draft_2:
-        st.markdown(extract_report_section(report, 7))
-    with compare_result:
-        st.markdown(
-            """
-            - **保留：** 原来的立场和四段核心结构，不替学生更换观点。
-            - **重点变化：** 补足解释链，减少 `study / subjects / learn` 重复，并让反方段落结尾回到中心论点。
-            - **训练目标：** 学生先独立完成第二稿，再把示范稿当作核对材料；系统比较的是两次真实写作表现。
-            """
+        with diagnosis_tab:
+            if priorities:
+                st.markdown("### 本轮只优先解决这两项")
+                columns = st.columns(min(2, len(priorities)))
+                for index, item in enumerate(priorities[:2]):
+                    with columns[index]:
+                        with st.container(border=True):
+                            st.markdown(f"#### {item.get('title', '提分重点')}")
+                            st.write(item.get("why", ""))
+                            st.success(str(item.get("action", "")))
+                            st.caption(f"完成检查：{item.get('success_check', '')}")
+            render_problem_cards(package.report)
+            render_suggestion_cards(package.report)
+        with map_tab:
+            corrections = [
+                item for item in structured.get("sentence_corrections", [])
+                if isinstance(item, dict)
+            ]
+            st.caption("问题地图、原文定位与词汇卡均由本地静态数据渲染，不会额外调用模型。")
+            if corrections:
+                st.markdown("### 这篇文章的问题路径")
+                st.markdown(build_issue_map_html(corrections), unsafe_allow_html=True)
+                st.markdown("### 原文定位")
+                marked_essay, unmatched_nodes = map_essay_issues(package.essay, corrections)
+                st.markdown(f'<div class="issue-map">{marked_essay}</div>', unsafe_allow_html=True)
+                if unmatched_nodes:
+                    st.caption("未可靠定位的问题节点：" + "、".join(f"#{item}" for item in unmatched_nodes))
+            vocabulary_items = report_vocabulary_items(structured, package.essay)
+            st.markdown("### 原文词汇推荐与可优化词")
+            if vocabulary_items:
+                st.markdown(build_vocabulary_cards_html(vocabulary_items), unsafe_allow_html=True)
+        with full_tab:
+            render_grouped_examiner_report(package.report)
+    with training_tab:
+        st.subheader("把报告变成可以动手完成的训练")
+        st.caption("这里展示正式流程会生成的训练任务；示例页不提交答案，也不会触发评审模型。")
+        sentence_tab, logic_tab, expression_tab = st.tabs(
+            ["单句训练", "逻辑训练", "本篇可迁移表达"]
         )
-    st.info("正式使用时，需要先完成第一稿批改，再点击“开始第二稿训练”。示范页只展示流程，因此仍然是 0 Token。")
+        with sentence_tab:
+            for index, task in enumerate(structured.get("sentence_training", []), start=1):
+                if not isinstance(task, dict):
+                    continue
+                with st.container(border=True):
+                    st.markdown(f"**练习 {index} · {task.get('goal', '改写句子')}**")
+                    st.write(task.get("original", ""))
+                    with st.expander("查看参考改写", expanded=False):
+                        st.write(task.get("reference", ""))
+        with logic_tab:
+            for index, task in enumerate(structured.get("logic_training", []), start=1):
+                if not isinstance(task, dict):
+                    continue
+                with st.container(border=True):
+                    st.markdown(f"**逻辑任务 {index} · {task.get('problem', '补足论证')}**")
+                    st.write(task.get("original", ""))
+                    st.info(str(task.get("task", "")))
+                    requirements = task.get("requirements", [])
+                    if isinstance(requirements, list):
+                        st.caption("完成要求：" + "；".join(str(item) for item in requirements))
+        with expression_tab:
+            expressions = [
+                item for item in structured.get("useful_expressions", [])
+                if isinstance(item, dict)
+            ]
+            for item in expressions:
+                with st.container(border=True):
+                    st.markdown(f"**{item.get('expression', '')}** · {item.get('meaning', '')}")
+                    st.write(item.get("example", ""))
+                    st.caption(str(item.get("usage_note", "")))
+    with draft_tab:
+        st.subheader("第二稿：把反馈真正写回自己的文章")
+        st.caption("正式流程会保留第一稿基线，再对比真实第二稿；这里用静态第二稿展示最终效果。")
+        compare_draft_1, compare_draft_2, compare_result = st.tabs(
+            ["第一稿", "第二稿示范", "两稿变化"]
+        )
+        with compare_draft_1:
+            st.markdown(package.essay)
+        with compare_draft_2:
+            st.markdown(package.draft_2)
+        with compare_result:
+            labels = {"retained": "保留", "improved": "已改善", "next": "下一步"}
+            for key in ("retained", "improved", "next"):
+                value = package.draft_changes.get(key)
+                if value:
+                    st.markdown(f"- **{labels[key]}：** {value}")
 
-    st.success("这就是一次完整批改会经历的全部步骤。查看本页不会调用任何模型。")
-    bottom_back, bottom_fill = st.columns(2)
-    with bottom_back:
-        st.button(
-            "返回主页",
-            on_click=show_workspace,
-            use_container_width=True,
-            key="demo_back_bottom",
-        )
-    with bottom_fill:
-        st.button(
-            "用这篇范文开始练习",
-            on_click=load_sample_and_show_workspace,
-            use_container_width=True,
-            key="demo_fill_bottom",
-        )
+    st.success("这份静态示例已按当前产品流程更新；查看全过程不消耗 Token。")
 
 
 APP_ROUTES = {
@@ -2396,12 +2321,7 @@ def render_home_page(store: SupabaseStore, user: CloudUser | None) -> None:
             primary_href="?page=write&mode=topics",
             secondary_actions=(("粘贴自己的题目", "?page=write"),),
         )
-        st.button(
-            "查看零 Token 示例",
-            key="new_learner_demo",
-            use_container_width=True,
-            on_click=show_demo,
-        )
+        render_home_preview_link()
         return
 
     render_guest_home_intro(
@@ -2412,26 +2332,6 @@ def render_home_page(store: SupabaseStore, user: CloudUser | None) -> None:
         ),
         steps=(),
     )
-    with st.container(key="guest_home_actions"):
-        write_col, topic_col, demo_col = st.columns(3)
-        write_col.button(
-            "开始批改",
-            type="primary",
-            use_container_width=True,
-            on_click=navigate,
-            args=("write",),
-        )
-        topic_col.button(
-            "从剑雅真题选题",
-            use_container_width=True,
-            on_click=navigate,
-            args=("write", "", "topics"),
-        )
-        demo_col.button(
-            "查看零 Token 示例",
-            use_container_width=True,
-            on_click=show_demo,
-        )
 
 
 def grade_submission(
@@ -3922,6 +3822,11 @@ if is_admin_request():
         render_admin_dashboard()
     st.stop()
 
+requested_page = str(st.query_params.get("page", "") or "")
+if requested_page == "demo" and st.session_state.page_mode != "demo":
+    st.session_state.page_mode = "demo"
+    st.session_state.tutorial_clicked_pending = True
+
 if st.session_state.page_mode == "demo":
     demo_visitor_id = browser_visitor_id()
     if demo_visitor_id:
@@ -3935,7 +3840,6 @@ if st.session_state.page_mode == "demo":
     render_demo_page()
     st.stop()
 
-requested_page = str(st.query_params.get("page", "") or "")
 raw_visitor_id = browser_visitor_id()
 if raw_visitor_id:
     st.session_state.visitor_hash = visitor_hash(raw_visitor_id)

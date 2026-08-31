@@ -232,15 +232,14 @@ def render_home_heading(
     eyebrow: str = "ESSAYPILOT",
 ) -> None:
     """Render the compact heading used by the action-first signed-in home page."""
-    st.markdown(
+    st.html(
         f"""
         <header class="ep-home-heading">
             <span>{html.escape(str(eyebrow))}</span>
             <h1>{html.escape(str(title))}</h1>
             <p>{html.escape(str(subtitle))}</p>
         </header>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 
@@ -269,7 +268,7 @@ def render_home_action_card(
         f'href="{html.escape(str(href), quote=True)}">{html.escape(str(label))}</a>'
         for label, href in secondary_actions
     )
-    st.markdown(
+    st.html(
         f"""
         <section class="ep-home-action" aria-label="{html.escape(str(aria_label), quote=True)}">
             <div class="ep-home-action__copy">
@@ -284,8 +283,7 @@ def render_home_action_card(
                 {secondary_items}
             </nav>
         </section>
-        """,
-        unsafe_allow_html=True,
+        """
     )
 
 
@@ -294,23 +292,59 @@ def render_guest_home_intro(
     title: str = "先完成一篇，再决定练什么",
     body: str = "提交 IELTS Writing Task 2 作文，获得四项评分、原文证据和下一步训练。",
     steps: Sequence[str] = ("提交作文", "找到核心问题", "针对修改", "完成第二稿"),
+    primary_action: tuple[str, str] = ("开始批改", "?page=write"),
+    secondary_action: tuple[str, str] = ("从剑雅真题选题", "?page=write&mode=topics"),
+    preview_action: tuple[str, str] = ("先看完整效果", "?page=demo"),
 ) -> None:
-    """Render the lean visitor value proposition above Streamlit action buttons."""
+    """Render the visitor value proposition and its clearly ranked actions."""
     steps_html = "".join(
         f'<li><span>{index}</span>{html.escape(str(label))}</li>'
         for index, label in enumerate(steps, start=1)
     )
     steps_block = f"<ol>{steps_html}</ol>" if steps_html else ""
-    st.markdown(
+    primary_label, primary_href = primary_action
+    secondary_label, secondary_href = secondary_action
+    preview_label, preview_href = preview_action
+    markup = (
+        '<section class="ep-home-welcome" aria-label="EssayPilot 写作训练流程">'
+        '<div class="ep-home-welcome__copy">'
+        '<span class="ep-home-welcome__eyebrow">IELTS WRITING · ESSAYPILOT</span>'
+        f'<h1>{html.escape(str(title))}</h1>'
+        f'<p>{html.escape(str(body))}</p>'
+        f'{steps_block}'
+        '<div class="ep-home-welcome__actions" role="navigation" aria-label="开始使用 EssayPilot">'
+        '<a class="ep-home-action__link ep-home-action__link--primary" '
+        f'href="{html.escape(str(primary_href), quote=True)}">{html.escape(str(primary_label))}</a>'
+        '<a class="ep-home-action__link ep-home-action__link--secondary" '
+        f'href="{html.escape(str(secondary_href), quote=True)}">{html.escape(str(secondary_label))}</a>'
+        '</div></div>'
+        f'<a class="ep-home-preview" href="{html.escape(str(preview_href), quote=True)}" '
+        f'aria-label="{html.escape(str(preview_label), quote=True)}，零 Token 静态示例">'
+        '<span>0 TOKEN · 静态示例</span>'
+        f'<strong>{html.escape(str(preview_label))}</strong>'
+        '<small>先看评分证据、问题地图、训练和第二稿，不会调用模型。</small>'
+        '<b>查看示例 <span aria-hidden="true">→</span></b>'
+        '</a></section>'
+    )
+    st.html(markup)
+
+
+def render_home_preview_link(
+    *,
+    label: str = "先看完整批改效果",
+    href: str = "?page=demo",
+) -> None:
+    """Render a quiet demo link without competing with the page's primary action."""
+    st.html(
         f"""
-        <section class="ep-home-welcome" aria-label="EssayPilot 写作训练流程">
-            <span class="ep-home-welcome__eyebrow">IELTS WRITING · ESSAYPILOT</span>
-            <h1>{html.escape(str(title))}</h1>
-            <p>{html.escape(str(body))}</p>
-            {steps_block}
-        </section>
-        """,
-        unsafe_allow_html=True,
+        <a class="ep-home-preview ep-home-preview--inline"
+           href="{html.escape(str(href), quote=True)}">
+            <span>0 TOKEN</span>
+            <strong>{html.escape(str(label))}</strong>
+            <small>静态示例 · 不调用模型</small>
+            <b aria-hidden="true">→</b>
+        </a>
+        """
     )
 
 
