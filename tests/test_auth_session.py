@@ -1168,6 +1168,11 @@ class AuthSessionTests(unittest.TestCase):
         app.session_state["page_mode"] = "home"
         app.session_state[AUTH_USER_VERSION_KEY] = 10
         app.session_state[AUTH_BROWSER_VERSION_KEY] = 10
+        app.session_state["topic_input"] = "private topic"
+        app.session_state["essay_input"] = "private essay"
+        app.session_state["latest_report"] = "private report"
+        app.session_state["grading_cache"] = {"old": {}}
+        app.session_state["sentence_private_feedback"] = "private feedback"
         app.session_state[AUTH_LOGOUT_PENDING_KEY] = {
             "reason": "user",
             "clear_retries": 0,
@@ -1200,6 +1205,14 @@ class AuthSessionTests(unittest.TestCase):
         self.assertEqual(len(app.exception), 0)
         self.assertNotIn(AUTH_LOGOUT_PENDING_KEY, app.session_state)
         self.assertNotIn("cloud_user", app.session_state)
+        for key in (
+            "topic_input",
+            "essay_input",
+            "latest_report",
+            "grading_cache",
+            "sentence_private_feedback",
+        ):
+            self.assertNotIn(key, app.session_state)
         self.assertIn(warning, [item.value for item in app.warning])
 
     def test_app_exact_tombstone_allows_lower_other_tab_login(self):
@@ -1230,6 +1243,12 @@ class AuthSessionTests(unittest.TestCase):
         app.session_state["cloud_user"] = cloud_user_to_state(user)
         app.session_state["user_id"] = user.id
         app.session_state["page_mode"] = "home"
+        app.session_state["latest_cloud_ids"] = {
+            "essay_id": "essay-user-a",
+            "grading_run_id": "run-user-a",
+        }
+        app.session_state["draft_1_snapshot"] = {"text": "private user-a essay"}
+        app.session_state["membership_entitlement_cache"] = {"user_id": user.id}
         for key, value in auth_state.items():
             app.session_state[key] = value
 
@@ -1328,6 +1347,9 @@ class AuthSessionTests(unittest.TestCase):
             app.session_state[AUTH_BROWSER_TOMBSTONES_KEY],
             clear["tombstone_versions"],
         )
+        self.assertNotIn("latest_cloud_ids", app.session_state)
+        self.assertNotIn("draft_1_snapshot", app.session_state)
+        self.assertNotIn("membership_entitlement_cache", app.session_state)
         grade.assert_not_called()
         local_save.assert_not_called()
         error_save.assert_not_called()

@@ -5,12 +5,14 @@ import hashlib
 import html
 import json
 import logging
+import os
 import re
 import time
 import uuid
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlencode
 
 import altair as alt
@@ -20,12 +22,10 @@ from dotenv import load_dotenv
 
 from src.ai_grader import (
     AIGraderError,
-    EXPRESSION_PRACTICE_PROMPT_VERSION,
     PRODUCTION_MODEL,
     compare_draft_progress,
     grade_essay_package,
     review_logic_rewrite,
-    review_expression_sentence,
     review_sentence_rewrite,
 )
 from src.admin_dashboard import is_admin_request, render_admin_dashboard
@@ -73,6 +73,12 @@ from src.learning_assets import (
     expression_status_label,
     report_expression_items,
     resolve_expression_view,
+)
+from src.membership import (
+    FOUNDER_OFFER,
+    action_reason_message,
+    entitlement_caption,
+    normalize_entitlement,
 )
 from src.issue_map import (
     CRITERION_LABELS as ISSUE_MAP_CRITERION_LABELS,
@@ -159,6 +165,20 @@ ALPINE_CHART_DASHES = [[1, 0], [9, 4], [3, 3], [11, 3, 2, 3]]
 ALPINE_CHART_SHAPES = ["circle", "square", "diamond", "triangle-up"]
 SAMPLE_POPOVER_TITLE = "试用作文"
 LOGGER = logging.getLogger(__name__)
+MEMBERSHIP_CACHE_SECONDS = 20
+
+
+class GradingAccessError(RuntimeError):
+    """A learner-facing access decision raised before any model request."""
+
+    def __init__(self, reason: str, *, existing_run_id: str = "") -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.existing_run_id = existing_run_id
+
+
+class GradingSettlementError(RuntimeError):
+    """A valid report exists, but its paid reservation is not settled yet."""
 
 
 def load_sample_essay() -> bool:
@@ -229,10 +249,81 @@ def session_cloud_user() -> CloudUser | None:
     return cloud_user_from_state(st.session_state.get("cloud_user"))
 
 
+_ACCOUNT_PRIVATE_LEARNING_KEYS = frozenset(
+    {
+        "topic_input",
+        "essay_input",
+        "active_run_id",
+        "draft_1_snapshot",
+        "grading_cache",
+        "pending_first_report_access",
+        "pending_guest_claim",
+        "guest_claim_failed",
+        "queued_sentence_training",
+        "pending_training_feedback_run_id",
+        "grading_failed",
+        "reused_result_notice",
+        "first_report_settlement_warning",
+        "guest_trial_completion_warning",
+        "cloud_cache_warning",
+        "cloud_save_warning",
+    }
+)
+_ACCOUNT_PRIVATE_LEARNING_PREFIXES = (
+    "latest_",
+    "draft_2_",
+    "sentence_",
+    "logic_",
+    "expression_",
+    "membership_",
+    "learning_assets_",
+)
+
+
+def clear_account_private_learning_state() -> None:
+    """Remove learning data that must never survive an account boundary."""
+    for key in list(st.session_state.keys()):
+        if key in _ACCOUNT_PRIVATE_LEARNING_KEYS or any(
+            str(key).startswith(prefix)
+            for prefix in _ACCOUNT_PRIVATE_LEARNING_PREFIXES
+        ):
+            st.session_state.pop(key, None)
+
+
+def first_report_actor_key(
+    user: CloudUser | None, guest_user_id: str
+) -> tuple[str, str]:
+    """Identify the principal allowed to reuse one in-session first report."""
+    if user is not None:
+        return ("user", str(user.id))
+    return ("guest", str(guest_user_id))
+
+
+def first_report_cache_key(
+    actor_key: tuple[str, str], fingerprint: str
+) -> tuple[str, str, str]:
+    return (actor_key[0], actor_key[1], str(fingerprint))
+
+
 def write_cloud_user_state(
     user: CloudUser, *, persist: bool, request_rerun: bool = False
 ) -> None:
     """Update login state without running first-login product side effects."""
+    previous_user = session_cloud_user()
+    previous_guest_id = str(st.session_state.get("user_id") or "")
+    identity_changed = previous_user is None or previous_user.id != user.id
+    pending_claim = st.session_state.get("pending_guest_claim")
+    pending_actor = pending_claim.get("actor_key") if isinstance(pending_claim, dict) else None
+    preserve_guest_claim = bool(
+        previous_user is None
+        and isinstance(pending_claim, dict)
+        and (
+            pending_actor is None
+            or tuple(pending_actor) == ("guest", previous_guest_id)
+        )
+    )
+    if identity_changed and not preserve_guest_claim:
+        clear_account_private_learning_state()
     st.session_state.cloud_user = cloud_user_to_state(user)
     st.session_state.user_id = user.id
     if persist:
@@ -246,6 +337,7 @@ def write_cloud_user_state(
 def finish_local_logout(*, reason: str) -> None:
     """Finish phase two only after the browser has confirmed localStorage cleanup."""
     previous_route = str(st.session_state.get("page_mode") or "home")
+    clear_account_private_learning_state()
     for key in (
         "cloud_user",
         AUTH_USER_VERSION_KEY,
@@ -473,6 +565,7 @@ def restore_cloud_user_session(store: SupabaseStore) -> CloudUser | None:
         )
         st.rerun()
     if resolution.user is None and current_user is not None and resolution.state_changed:
+        clear_account_private_learning_state()
         st.session_state.pop("cloud_user", None)
         st.session_state.pop(AUTH_USER_VERSION_KEY, None)
         st.session_state.user_id = str(uuid.uuid4())
@@ -551,6 +644,425 @@ def record_usage_event(
     )
 
 
+def _app_setting(name: str) -> str:
+    """Read one non-secret product setting from Streamlit or the environment."""
+    try:
+        value = st.secrets.get(name, "")
+    except (FileNotFoundError, KeyError):
+        value = ""
+    return str(value or os.getenv(name, "")).strip()
+
+
+def local_unmetered_ai_enabled() -> bool:
+    """Allow quota-free model calls only when a developer opts in explicitly."""
+    return _app_setting("ALLOW_LOCAL_UNMETERED_AI").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def require_ai_access_backend(store: SupabaseStore) -> bool:
+    """Fail closed when the production quota backend is missing."""
+    if store.enabled:
+        return True
+    if local_unmetered_ai_enabled():
+        return False
+    raise CloudStoreError(
+        "AI 权益服务尚未配置。公开环境不会在缺少 Supabase 时放行模型请求。"
+    )
+
+
+def clear_membership_cache() -> None:
+    st.session_state.pop("membership_entitlement_cache", None)
+    st.session_state.pop("membership_request_cache", None)
+
+
+def load_membership_entitlement(
+    store: SupabaseStore,
+    user: CloudUser,
+    *,
+    refresh: bool = False,
+) -> tuple[dict[str, object], str]:
+    """Load a short-lived display cache; access RPCs still decide every AI action."""
+    if not store.enabled and local_unmetered_ai_enabled():
+        return normalize_entitlement(
+            {
+                "active": True,
+                "status": "local",
+                "run_quota": FOUNDER_OFFER.run_quota,
+                "runs_remaining": FOUNDER_OFFER.run_quota,
+            }
+        ), ""
+    if not store.enabled:
+        return normalize_entitlement({"status": "unavailable"}), "AI 权益服务尚未配置"
+    cached = st.session_state.get("membership_entitlement_cache")
+    if (
+        not refresh
+        and isinstance(cached, dict)
+        and cached.get("user_id") == user.id
+        and time.time() - float(cached.get("fetched_at") or 0) < MEMBERSHIP_CACHE_SECONDS
+    ):
+        return normalize_entitlement(cached.get("entitlement")), str(cached.get("error") or "")
+    try:
+        entitlement = normalize_entitlement(store.get_membership_entitlement(user))
+        error = ""
+    except (CloudStoreError, AttributeError) as exc:
+        entitlement = normalize_entitlement({"status": "unavailable"})
+        error = str(exc)
+    st.session_state.membership_entitlement_cache = {
+        "user_id": user.id,
+        "fetched_at": time.time(),
+        "entitlement": entitlement,
+        "error": error,
+    }
+    return entitlement, error
+
+
+def load_membership_request(
+    store: SupabaseStore,
+    user: CloudUser,
+    *,
+    refresh: bool = False,
+) -> dict[str, object]:
+    if not store.enabled:
+        return {}
+    cached = st.session_state.get("membership_request_cache")
+    if not refresh and isinstance(cached, dict) and cached.get("user_id") == user.id:
+        return dict(cached.get("request") or {})
+    getter = getattr(store, "get_my_membership_request", None)
+    if not callable(getter):
+        return {}
+    try:
+        request = getter(user)
+    except CloudStoreError:
+        request = {}
+    normalized = dict(request) if isinstance(request, dict) else {}
+    st.session_state.membership_request_cache = {"user_id": user.id, "request": normalized}
+    return normalized
+
+
+def render_founder_offer(
+    store: SupabaseStore,
+    user: CloudUser | None,
+    *,
+    key: str,
+    intro: str = "",
+) -> None:
+    """Render the manual-payment beta offer without collecting payment screenshots."""
+    with st.container(border=True):
+        st.markdown("### 创始体验包")
+        st.markdown("## ¥7.5 / 30 天")
+        if intro:
+            st.write(intro)
+        st.write(
+            "最多选择 3 篇作文完成训练闭环；每篇包含首稿报告、最多 3 次专项 AI 点评，"
+            "以及 1 次二稿评分与两稿对比。"
+        )
+        st.caption(
+            "30 天与 3 篇任一先达到即结束 · 绑定当前账号 · 不自动续费 · "
+            "表达库独立造句 AI 点评暂不包含"
+        )
+        st.caption("每个账号限开一次 · 权益不可转移 · 未使用权益不自动延期、转赠或折现")
+        st.caption("查看、下载已生成内容不计次数；模型失败不扣次数。AI 估分不等同于 IELTS 官方成绩。")
+        if user is None:
+            st.button(
+                "登录后查看开通方式",
+                key=f"offer_login_{key}",
+                type="primary",
+                use_container_width=True,
+                on_click=open_cloud_login,
+                args=(str(st.session_state.get("page_mode") or "report"), str(st.query_params.get("mode", "") or "")),
+            )
+            return
+
+        entitlement, entitlement_error = load_membership_entitlement(store, user)
+        if entitlement_error:
+            st.warning("暂时无法读取开通状态，请稍后刷新；系统不会因此扣除篇数。")
+            return
+        if entitlement.get("active"):
+            st.success(entitlement_caption(entitlement))
+            return
+        if str(entitlement.get("status") or "none") != "none":
+            st.info(entitlement_caption(entitlement))
+            return
+
+        payment_qr = _app_setting("FOUNDER_PAYMENT_QR_URL")
+        payment_instructions = _app_setting("FOUNDER_PAYMENT_INSTRUCTIONS")
+        support_contact = _app_setting("FOUNDER_SUPPORT_CONTACT")
+        refund_policy = _app_setting("FOUNDER_REFUND_POLICY")
+        payment_ready = bool(payment_instructions and support_contact and refund_policy)
+        request = load_membership_request(store, user)
+        request_status = str(request.get("status") or "")
+        if request_status in {"pending", "reviewing", "needs_info"}:
+            application_code = str(request.get("application_code") or "")
+            label = "付款信息已提交，正在人工核对。有效期将在实际开通时开始计算。"
+            if request_status == "needs_info":
+                label = "这笔申请需要补充信息，请按下方联系方式与管理员确认。"
+            st.info(label)
+            if application_code:
+                st.code(application_code, language="text")
+            if support_contact:
+                st.caption(f"核对、退款或异常联系：{support_contact}")
+            if refund_policy:
+                st.caption(f"退款说明：{refund_policy}")
+        else:
+            if not payment_ready:
+                st.warning("收款说明、真实联系方式或退款说明尚未配置完整，付费申请暂未开放。")
+            if payment_ready:
+                st.caption(f"当前绑定邮箱：{user.email}")
+                if payment_qr:
+                    st.image(payment_qr, caption="创始体验包收款入口", width=260)
+                st.info(payment_instructions)
+                st.caption(f"核对、退款或异常联系：{support_contact}")
+                st.caption(f"退款说明：{refund_policy}")
+                with st.form(f"membership_request_{key}"):
+                    payment_reference = st.text_input(
+                        "支付订单号",
+                        placeholder="请填写支付平台中的订单号，不要上传包含余额或其他交易的截图。",
+                    )
+                    paid_at = st.text_input("付款时间（选填）", placeholder="例如：2026-09-01 20:30")
+                    note = st.text_input("付款备注（选填）", placeholder="只填写核对这笔付款所需的信息")
+                    terms_confirmed = st.checkbox(
+                        "我已确认：¥7.5、30 天、最多 3 篇、不自动续费，并同意上述退款说明。"
+                    )
+                    submitted = st.form_submit_button("提交人工核对", type="primary", use_container_width=True)
+                if submitted:
+                    if not terms_confirmed:
+                        st.warning("请先确认体验包范围与退款说明。")
+                    elif len(payment_reference.strip()) < 4:
+                        st.warning("请填写可供核对的支付订单号。")
+                    else:
+                        try:
+                            created = store.create_membership_request(
+                                user,
+                                payment_reference.strip(),
+                                paid_at=paid_at.strip(),
+                                note=note.strip(),
+                            )
+                        except (CloudStoreError, AttributeError) as exc:
+                            st.error(f"付款信息暂时无法提交：{exc}")
+                        else:
+                            clear_membership_cache()
+                            code = str((created or {}).get("application_code") or "")
+                            reason = str((created or {}).get("reason") or "")
+                            if (created or {}).get("created"):
+                                st.success("付款信息已提交，人工核对后 30 天有效期才会开始。")
+                            elif reason in {"already_submitted", "pending_request_exists"}:
+                                st.info("这笔付款或当前账号已有待核对申请，请勿重复付款。")
+                            elif reason == "membership_exists":
+                                st.info("当前账号已经开通过创始体验包，不能重复购买。")
+                            else:
+                                st.error("本次没有建立核对申请，请联系管理员确认。")
+                            if code and reason != "membership_exists":
+                                st.code(code, language="text")
+        if st.button("刷新开通状态", key=f"refresh_membership_{key}", use_container_width=True):
+            clear_membership_cache()
+            st.rerun()
+
+
+def render_training_access_gate(
+    store: SupabaseStore,
+    user: CloudUser,
+    *,
+    grading_run_id: str,
+) -> dict[str, object] | None:
+    """Require an active pass and bind the current report to one paid run."""
+    if not store.enabled and local_unmetered_ai_enabled():
+        return {
+            "allowed": True,
+            "reason": "local",
+            "training_limit": FOUNDER_OFFER.training_limit_per_run,
+            "training_remaining": FOUNDER_OFFER.training_limit_per_run,
+            "second_draft_completed": False,
+        }
+    if not store.enabled:
+        st.error("AI 权益服务尚未配置，当前不会发起模型请求。")
+        return None
+    entitlement, error = load_membership_entitlement(store, user)
+    if error:
+        st.error("暂时无法安全确认训练权益，请稍后刷新。")
+        return None
+    access: dict[str, object] = {}
+    if grading_run_id:
+        try:
+            raw_access = store.get_membership_run_access(user, grading_run_id)
+            access = dict(raw_access) if isinstance(raw_access, dict) else {}
+        except (CloudStoreError, AttributeError):
+            st.error("暂时无法确认这篇作文的训练状态，请稍后重试。")
+            return None
+    if entitlement.get("active") and access.get("allowed"):
+        st.caption(
+            f"本篇专项 AI 点评剩余 {int(access.get('training_remaining') or 0)}/"
+            f"{int(access.get('training_limit') or FOUNDER_OFFER.training_limit_per_run)} · "
+            f"二稿验证 {'已完成' if access.get('second_draft_completed') else '可用 1 次'}"
+        )
+        return {**access, "read_only": False}
+
+    if access.get("history_readable"):
+        st.info("体验包已结束；这篇已生成的训练与二稿记录仍可查看，但不能再发起新的 AI 请求。")
+        return {**access, "read_only": True}
+
+    if not entitlement.get("active"):
+        render_founder_offer(
+            store,
+            user,
+            key=f"training_{grading_run_id or 'none'}",
+            intro="首稿报告已经保留。开通后可选择将这篇作文加入完整训练。",
+        )
+        return None
+    if not grading_run_id:
+        st.warning("请先保存这份首稿报告，再将它加入完整训练。")
+        return None
+    if int(entitlement.get("runs_remaining") or 0) <= 0:
+        st.warning("3 篇完整训练额度已用完；已有报告和训练记录仍可查看。")
+        return None
+
+    with st.container(border=True):
+        st.markdown("### 将本篇加入完整训练")
+        st.write(
+            "确认后会占用 1 篇额度。本篇将获得最多 3 次专项 AI 点评，以及 1 次二稿评分与两稿对比。"
+        )
+        st.caption(entitlement_caption(entitlement))
+        if st.button(
+            "确认使用 1 篇额度",
+            key=f"activate_training_{grading_run_id}",
+            type="primary",
+            use_container_width=True,
+        ):
+            snapshot = st.session_state.get("draft_1_snapshot")
+            topic = str(snapshot.get("topic") or "") if isinstance(snapshot, dict) else ""
+            essay = str(snapshot.get("text") or "") if isinstance(snapshot, dict) else ""
+            content_hash = submission_hash(topic, essay) if topic and essay else grading_run_id
+            flow_key = f"membership_activation_flow_{grading_run_id}"
+            flow_id = str(st.session_state.setdefault(flow_key, str(uuid.uuid4())))
+            try:
+                reserved = store.reserve_membership_run(
+                    user,
+                    flow_id,
+                    content_hash,
+                    grading_run_id=grading_run_id,
+                )
+                if reserved.get("allowed") and reserved.get("reason") != "already_completed":
+                    completed = store.complete_membership_run(user, flow_id, grading_run_id)
+                    if not completed.get("completed"):
+                        raise CloudStoreError(action_reason_message(completed.get("reason")))
+                elif not reserved.get("allowed") and not reserved.get("cached"):
+                    raise GradingAccessError(str(reserved.get("reason") or "membership_inactive"))
+            except GradingAccessError as exc:
+                st.warning(action_reason_message(exc.reason))
+            except (CloudStoreError, AttributeError) as exc:
+                st.error(f"暂时无法加入训练：{exc}")
+            else:
+                st.session_state.pop(flow_key, None)
+                clear_membership_cache()
+                st.rerun()
+    return None
+
+
+def reserve_training_feedback_action(
+    store: SupabaseStore,
+    user: CloudUser,
+    *,
+    grading_run_id: str,
+    task_kind: str,
+    task_key: str,
+) -> dict[str, object]:
+    """Reserve one of the three per-essay feedback actions before calling AI."""
+    if not require_ai_access_backend(store):
+        return {"allowed": True, "local": True, "flow_id": ""}
+    flow_id = str(uuid.uuid4())
+    result = store.reserve_training_action(
+        user,
+        grading_run_id,
+        flow_id,
+        task_kind,
+        task_key,
+    )
+    if not isinstance(result, dict) or not result.get("allowed"):
+        raise GradingAccessError(str((result or {}).get("reason") or "membership_inactive"))
+    return {**result, "flow_id": flow_id}
+
+
+def complete_training_feedback_action(
+    store: SupabaseStore,
+    user: CloudUser,
+    ticket: dict[str, object],
+) -> None:
+    if ticket.get("local"):
+        return
+    result = store.complete_training_action(user, str(ticket.get("flow_id") or ""))
+    if not isinstance(result, dict) or not result.get("completed"):
+        raise CloudStoreError(action_reason_message((result or {}).get("reason")))
+    clear_membership_cache()
+
+
+def release_training_feedback_action(
+    store: SupabaseStore,
+    user: CloudUser,
+    ticket: dict[str, object],
+) -> None:
+    if ticket.get("local"):
+        return
+    result = store.release_training_action(user, str(ticket.get("flow_id") or ""))
+    if not isinstance(result, dict) or not result.get("released"):
+        raise CloudStoreError(action_reason_message((result or {}).get("reason")))
+
+
+def reserve_second_draft(
+    store: SupabaseStore,
+    user: CloudUser,
+    *,
+    grading_run_id: str,
+    draft_text: str,
+    topic: str,
+) -> dict[str, object]:
+    """Reserve the sole second-draft action for one paid essay run."""
+    if not require_ai_access_backend(store):
+        return {"allowed": True, "local": True, "flow_id": ""}
+    flow_id = str(uuid.uuid4())
+    result = store.reserve_second_draft_action(
+        user,
+        grading_run_id,
+        flow_id,
+        submission_hash(topic, draft_text),
+    )
+    if not isinstance(result, dict) or not result.get("allowed"):
+        raise GradingAccessError(str((result or {}).get("reason") or "membership_inactive"))
+    return {**result, "flow_id": flow_id}
+
+
+def complete_second_draft(
+    store: SupabaseStore,
+    user: CloudUser,
+    ticket: dict[str, object],
+    *,
+    revised_grading_run_id: str = "",
+) -> None:
+    if ticket.get("local"):
+        return
+    result = store.complete_second_draft_action(
+        user,
+        str(ticket.get("flow_id") or ""),
+        revised_grading_run_id=revised_grading_run_id,
+    )
+    if not isinstance(result, dict) or not result.get("completed"):
+        raise CloudStoreError(action_reason_message((result or {}).get("reason")))
+
+
+def release_second_draft(
+    store: SupabaseStore,
+    user: CloudUser,
+    ticket: dict[str, object],
+) -> None:
+    if ticket.get("local"):
+        return
+    result = store.release_second_draft_action(user, str(ticket.get("flow_id") or ""))
+    if not isinstance(result, dict) or not result.get("released"):
+        raise CloudStoreError(action_reason_message((result or {}).get("reason")))
+
+
 def claim_guest_result(store: SupabaseStore, user: CloudUser) -> bool:
     """Attach the current guest result to a new login without another model call."""
     pending = st.session_state.get("pending_guest_claim")
@@ -575,9 +1087,24 @@ def claim_guest_result(store: SupabaseStore, user: CloudUser) -> bool:
         snapshot["grading_run_id"] = cloud_ids.get("grading_run_id", "")
     cache = st.session_state.get("grading_cache")
     if isinstance(cache, dict):
-        entry = cache.get(str(pending["fingerprint"]))
+        fingerprint = str(pending["fingerprint"])
+        pending_actor = pending.get("actor_key")
+        source_key = (
+            first_report_cache_key(tuple(pending_actor), fingerprint)
+            if isinstance(pending_actor, (list, tuple)) and len(pending_actor) == 2
+            else fingerprint
+        )
+        entry = cache.get(source_key)
         if isinstance(entry, dict):
-            entry["cloud_ids"] = cloud_ids
+            claimed_entry = dict(entry)
+            claimed_entry["cloud_ids"] = cloud_ids
+            claimed_entry["cloud_user_id"] = user.id
+            target_key = first_report_cache_key(
+                first_report_actor_key(user, ""), fingerprint
+            )
+            cache[target_key] = claimed_entry
+            if source_key != target_key:
+                cache.pop(source_key, None)
     st.session_state.pop("pending_guest_claim", None)
     st.session_state.pop("guest_claim_failed", None)
     ensure_learning_assets(store, user)
@@ -928,6 +1455,116 @@ def render_score_change(
         st.write(f"**{SCORE_DISPLAY_NAMES.get(label, label)}：** {before_text} → {after_text}")
 
 
+def draft_2_cache_key(
+    user_id: str, grading_run_id: str, draft_content_hash: str
+) -> tuple[str, str, str]:
+    """Scope generated Draft 2 data to one user, one original run, and one text."""
+    return (str(user_id), str(grading_run_id), str(draft_content_hash))
+
+
+def draft_2_result_from_revision(
+    revision: dict[str, object],
+    *,
+    user_id: str,
+    grading_run_id: str,
+) -> dict[str, object]:
+    """Normalize a persisted revision into the same shape as a fresh result."""
+    revised_run = (
+        revision.get("revised_run")
+        if isinstance(revision.get("revised_run"), dict)
+        else {}
+    )
+    revised_essay = (
+        revised_run.get("essays")
+        if isinstance(revised_run.get("essays"), dict)
+        else {}
+    )
+    structured = (
+        revised_run.get("report_json")
+        if isinstance(revised_run.get("report_json"), dict)
+        else revision.get("report_json")
+    )
+    structured = structured if isinstance(structured, dict) else {}
+    stored_scores = revision.get("score_snapshot")
+    scores = (
+        score_snapshot(structured)
+        if structured.get("overall_band") is not None
+        else (dict(stored_scores) if isinstance(stored_scores, dict) else {})
+    )
+    return {
+        "scores": scores,
+        "report": str(
+            revised_run.get("report_markdown")
+            or revision.get("report_markdown")
+            or ""
+        ),
+        "progress_report": str(revision.get("progress_report") or ""),
+        "text": str(revised_essay.get("content") or revision.get("content") or ""),
+        "grading_run_id": str(
+            revised_run.get("id") or revision.get("revised_grading_run_id") or ""
+        ),
+        "attempt_id": f"revision:{revision.get('id') or grading_run_id}",
+        "settlement_pending": False,
+        "persisted": True,
+        "user_id": str(user_id),
+        "parent_grading_run_id": str(grading_run_id),
+    }
+
+
+def persist_draft_2_cloud_result(
+    store: SupabaseStore,
+    user: CloudUser,
+    *,
+    draft_1: dict[str, object],
+    draft_2_text: str,
+    draft_2_package: dict[str, object],
+    draft_2_scores: dict[str, float | None],
+    progress_report: str,
+    cached_generation: dict[str, object],
+) -> dict[str, object]:
+    """Persist once, then make uncertain retries perform settlement only."""
+    linked_ids = (
+        dict(cached_generation.get("cloud_ids") or {})
+        if isinstance(cached_generation.get("cloud_ids"), dict)
+        else {}
+    )
+    revised_run_id = str(linked_ids.get("grading_run_id") or "")
+    saved_ticket = cached_generation.get("access_ticket")
+    if not isinstance(saved_ticket, dict) or not str(saved_ticket.get("flow_id") or ""):
+        raise CloudStoreError("第二稿云端保存缺少原始预留凭证。")
+    if not revised_run_id:
+        linked_ids = store.save_second_draft_result(
+            user,
+            grading_run_id=str(draft_1.get("grading_run_id") or ""),
+            flow_id=str(saved_ticket.get("flow_id") or ""),
+            question=str(draft_1.get("topic") or ""),
+            content=draft_2_text,
+            word_count=count_words(draft_2_text),
+            content_hash=submission_hash(str(draft_1.get("topic") or ""), draft_2_text),
+            package=draft_2_package,
+            scores=draft_2_scores,
+            progress_report=progress_report,
+        )
+        revised_run_id = str(linked_ids.get("grading_run_id") or "")
+        if not revised_run_id:
+            raise CloudStoreError("第二稿云端保存未返回可确认的批改记录。")
+        # Cache the committed ids before quota settlement. A timeout while
+        # completing the action must not insert either row again.
+        cached_generation["cloud_ids"] = linked_ids
+
+    if isinstance(saved_ticket, dict) and not cached_generation.get("settled"):
+        complete_second_draft(
+            store,
+            user,
+            dict(saved_ticket),
+            revised_grading_run_id=revised_run_id,
+        )
+        cached_generation["settled"] = True
+        cached_generation.pop("access_ticket", None)
+        clear_membership_cache()
+    return linked_ids
+
+
 def render_draft_2_training(
     *,
     provider: str,
@@ -936,6 +1573,7 @@ def render_draft_2_training(
     user_id: str,
     cloud_store: SupabaseStore | None = None,
     cloud_user: CloudUser | None = None,
+    read_only: bool = False,
 ) -> None:
     """Render and process the complete Draft 2 learning cycle."""
     draft_1 = st.session_state.get("draft_1_snapshot")
@@ -967,28 +1605,108 @@ def render_draft_2_training(
     for focus in draft_training_focus(draft_1["scores"]):
         st.markdown(f"- {focus}")
 
+    cache_user_id = str(cloud_user.id if cloud_user is not None else user_id)
+    original_run_id = str(draft_1.get("grading_run_id") or "")
+    if not original_run_id:
+        original_run_id = "local:" + submission_hash(
+            str(draft_1.get("topic") or ""), str(draft_1.get("text") or "")
+        )
+    draft_2_context_key = (cache_user_id, original_run_id)
+    if st.session_state.get("draft_2_context_key") != draft_2_context_key:
+        st.session_state.draft_2_context_key = draft_2_context_key
+        st.session_state.pop("draft_2_result", None)
+        st.session_state.pop("draft_2_text", None)
+
+    current_draft_2_result = st.session_state.get("draft_2_result")
+    if isinstance(current_draft_2_result, dict):
+        result_owner = str(current_draft_2_result.get("user_id") or cache_user_id)
+        result_parent = str(
+            current_draft_2_result.get("parent_grading_run_id") or original_run_id
+        )
+        if (result_owner, result_parent) != draft_2_context_key:
+            st.session_state.pop("draft_2_result", None)
+            st.session_state.pop("draft_2_text", None)
+            current_draft_2_result = None
+        elif "draft_2_text" not in st.session_state:
+            st.session_state.draft_2_text = str(
+                current_draft_2_result.get("text") or ""
+            )
+
     draft_2_text = st.text_area(
         "请根据上方反馈写第二稿",
         height=360,
         key="draft_2_text",
+        disabled=read_only or isinstance(current_draft_2_result, dict),
+    )
+    draft_2_settlement_pending = bool(
+        isinstance(current_draft_2_result, dict)
+        and current_draft_2_result.get("settlement_pending")
+    )
+    draft_2_already_generated = bool(
+        isinstance(current_draft_2_result, dict) and not draft_2_settlement_pending
+    )
+    draft_2_button_label = (
+        "本篇二稿验证已完成"
+        if draft_2_already_generated
+        else ("重试同步二稿结果（不重新调用模型）" if draft_2_settlement_pending else "提交第二稿")
     )
     submit_draft_2 = st.button(
-        "提交第二稿",
+        draft_2_button_label,
         type="primary",
         key="submit_draft_2",
         use_container_width=True,
+        disabled=read_only or draft_2_already_generated,
     )
+    if read_only and not isinstance(current_draft_2_result, dict):
+        st.info("这份记录当前为只读，且没有已保存的第二稿结果；不能在此新生成二稿。")
 
-    if submit_draft_2:
+    if submit_draft_2 and not read_only:
         if not draft_2_text.strip():
             st.warning("请先完成第二稿。")
         elif draft_2_text.strip() == draft_1["text"].strip():
             st.warning("第二稿与第一稿完全相同，请根据反馈完成修改后再提交。")
         else:
-            draft_2_attempt_id = str(uuid.uuid4())
             draft_2_started_at = time.perf_counter()
-            st.session_state.pop("draft_2_result", None)
-            if cloud_store is not None:
+            draft_2_fingerprint = submission_hash(str(draft_1["topic"]), draft_2_text)
+            scoped_cache_key = draft_2_cache_key(
+                cache_user_id, original_run_id, draft_2_fingerprint
+            )
+            draft_2_cache = st.session_state.setdefault("draft_2_generation_cache", {})
+            if not isinstance(draft_2_cache, dict):
+                draft_2_cache = {}
+                st.session_state.draft_2_generation_cache = draft_2_cache
+            cached_generation = draft_2_cache.setdefault(scoped_cache_key, {})
+            if not isinstance(cached_generation, dict):
+                cached_generation = {}
+                draft_2_cache[scoped_cache_key] = cached_generation
+            draft_2_attempt_id = str(
+                cached_generation.get("attempt_id") or uuid.uuid4()
+            )
+            cached_generation["attempt_id"] = draft_2_attempt_id
+            saved_ticket = cached_generation.get("access_ticket")
+            draft_2_ticket = dict(saved_ticket) if isinstance(saved_ticket, dict) else None
+            if (
+                draft_2_ticket is None
+                and cloud_store
+                and cloud_user
+                and draft_1.get("grading_run_id")
+            ):
+                try:
+                    draft_2_ticket = reserve_second_draft(
+                        cloud_store,
+                        cloud_user,
+                        grading_run_id=str(draft_1["grading_run_id"]),
+                        draft_text=draft_2_text,
+                        topic=str(draft_1["topic"]),
+                    )
+                    cached_generation["access_ticket"] = draft_2_ticket
+                except GradingAccessError as exc:
+                    st.warning(action_reason_message(exc.reason))
+                    return
+                except (CloudStoreError, AttributeError):
+                    st.error("暂时无法安全预留二稿机会，请稍后重试；当前没有扣除次数。")
+                    return
+            if cloud_store is not None and not cached_generation.get("submitted_recorded"):
                 record_usage_event(
                     cloud_store,
                     "second_draft_submitted",
@@ -998,87 +1716,106 @@ def render_draft_2_training(
                     occurrence_key=draft_2_attempt_id,
                     metadata={"draft_number": 2},
                 )
+                cached_generation["submitted_recorded"] = True
             with st.spinner("正在评分第二稿并生成两稿对比报告..."):
                 render_scoring_loader()
                 try:
-                    draft_2_package = grade_essay_package(
-                        task_type=task_type,
-                        topic=draft_1["topic"],
-                        essay=draft_2_text,
-                    )
+                    if isinstance(cached_generation, dict) and isinstance(cached_generation.get("package"), dict):
+                        draft_2_package = dict(cached_generation["package"])
+                    else:
+                        draft_2_package = grade_essay_package(
+                            task_type=task_type,
+                            topic=draft_1["topic"],
+                            essay=draft_2_text,
+                        )
+                        # Keep the original reservation ticket beside the generated
+                        # result.  If quota settlement is temporarily unavailable,
+                        # the next rerun must retry the same reservation instead of
+                        # creating a second one or calling the model again.
+                        cached_generation["package"] = draft_2_package
                     draft_2_report = str(draft_2_package["report"])
                     draft_2_structured = dict(draft_2_package["structured"])
                     draft_2_scores = score_snapshot(draft_2_structured)
-                    progress_report = compare_draft_progress(
-                        provider=provider,
-                        task_question=draft_1["topic"],
-                        draft_1_text=draft_1["text"],
-                        draft_1_scores=draft_1["scores"],
-                        draft_2_text=draft_2_text,
-                        draft_2_scores=draft_2_scores,
-                        model=model,
+                    cached_progress = (
+                        cached_generation.get("progress_report")
+                        if isinstance(cached_generation, dict) else None
                     )
-                    save_markdown_record(
-                        task_type=task_type,
-                        topic=draft_1["topic"],
-                        essay=draft_2_text,
-                        report=draft_2_report,
-                        word_count=count_words(draft_2_text),
-                        user_id=user_id,
-                        examiner_data=draft_2_structured,
-                        grading_metadata={
-                            "model": draft_2_package["model"],
-                            "prompt_version": draft_2_package["prompt_version"],
-                            "skill_version": draft_2_package["skill_version"],
-                            "schema_version": draft_2_package["schema_version"],
-                            "graded_at": draft_2_package["graded_at"],
-                        },
+                    if cached_progress:
+                        progress_report = str(cached_progress)
+                    else:
+                        progress_report = compare_draft_progress(
+                            provider=provider,
+                            task_question=draft_1["topic"],
+                            draft_1_text=draft_1["text"],
+                            draft_1_scores=draft_1["scores"],
+                            draft_2_text=draft_2_text,
+                            draft_2_scores=draft_2_scores,
+                            model=model,
+                        )
+                        cached_generation["progress_report"] = progress_report
+                    training_path = cached_generation.get("training_path")
+                    if not cached_generation.get("local_saved"):
+                        save_markdown_record(
+                            task_type=task_type,
+                            topic=draft_1["topic"],
+                            essay=draft_2_text,
+                            report=draft_2_report,
+                            word_count=count_words(draft_2_text),
+                            user_id=user_id,
+                            examiner_data=draft_2_structured,
+                            grading_metadata={
+                                "model": draft_2_package["model"],
+                                "prompt_version": draft_2_package["prompt_version"],
+                                "skill_version": draft_2_package["skill_version"],
+                                "schema_version": draft_2_package["schema_version"],
+                                "graded_at": draft_2_package["graded_at"],
+                            },
+                        )
+                        training_path = save_draft_training_record(
+                            user_id=user_id,
+                            task_question=draft_1["topic"],
+                            draft_1_text=draft_1["text"],
+                            draft_1_scores=draft_1["scores"],
+                            draft_1_feedback=draft_1["feedback"],
+                            draft_2_text=draft_2_text,
+                            draft_2_scores=draft_2_scores,
+                            draft_2_feedback=draft_2_report,
+                            progress_report=progress_report,
+                        )
+                        record_grading_event(
+                            user_id=user_id,
+                            overall_band=draft_2_scores["Overall Band"],
+                            essay_word_count=count_words(draft_2_text),
+                            model_name=model,
+                        )
+                        cached_generation["training_path"] = training_path
+                        cached_generation["local_saved"] = True
+
+                    linked_ids = (
+                        dict(cached_generation.get("cloud_ids") or {})
+                        if isinstance(cached_generation.get("cloud_ids"), dict)
+                        else {}
                     )
-                    training_path = save_draft_training_record(
-                        user_id=user_id,
-                        task_question=draft_1["topic"],
-                        draft_1_text=draft_1["text"],
-                        draft_1_scores=draft_1["scores"],
-                        draft_1_feedback=draft_1["feedback"],
-                        draft_2_text=draft_2_text,
-                        draft_2_scores=draft_2_scores,
-                        draft_2_feedback=draft_2_report,
-                        progress_report=progress_report,
-                    )
-                    record_grading_event(
-                        user_id=user_id,
-                        overall_band=draft_2_scores["Overall Band"],
-                        essay_word_count=count_words(draft_2_text),
-                        model_name=model,
-                    )
-                    linked_ids: dict[str, object] = {}
-                    if cloud_store and cloud_user and draft_1.get("essay_id") and draft_1.get("grading_run_id"):
+                    settlement_pending = False
+                    if cloud_store and cloud_user and draft_1.get("grading_run_id"):
                         try:
-                            linked_ids = cloud_store.save_linked_grading_cycle(
+                            linked_ids = persist_draft_2_cloud_result(
+                                cloud_store,
                                 cloud_user,
-                                question=str(draft_1["topic"]),
-                                essay=draft_2_text,
-                                word_count=count_words(draft_2_text),
-                                package=draft_2_package,
-                                content_hash=submission_hash(str(draft_1["topic"]), draft_2_text),
-                                parent_run_id=str(draft_1["grading_run_id"]),
-                            )
-                        except CloudStoreError:
-                            linked_ids = {}
-                        try:
-                            cloud_store.save_draft_revision(
-                                cloud_user,
-                                essay_id=str(draft_1["essay_id"]),
-                                grading_run_id=str(draft_1["grading_run_id"]),
-                                content=draft_2_text,
-                                scores=draft_2_scores,
-                                report_json=draft_2_structured,
-                                report_markdown=draft_2_report,
+                                draft_1=draft_1,
+                                draft_2_text=draft_2_text,
+                                draft_2_package=draft_2_package,
+                                draft_2_scores=draft_2_scores,
                                 progress_report=progress_report,
-                                revised_grading_run_id=str(linked_ids.get("grading_run_id") or ""),
+                                cached_generation=cached_generation,
                             )
-                        except CloudStoreError as exc:
-                            st.warning(f"第二稿已保存在本机，但云端同步失败：{exc}")
+                        except (CloudStoreError, AttributeError) as exc:
+                            settlement_pending = True
+                            st.warning(
+                                "二稿结果已经生成并保留；云端保存或额度状态正在确认。"
+                                "可点击上方按钮重试同步，不会重新调用模型，也不会重复保存。"
+                            )
+                            logging.warning("Draft 2 settlement remains pending: %s", exc)
                     st.session_state.draft_2_result = {
                         "scores": draft_2_scores,
                         "report": draft_2_report,
@@ -1087,8 +1824,11 @@ def render_draft_2_training(
                         "text": draft_2_text,
                         "grading_run_id": str(linked_ids.get("grading_run_id") or ""),
                         "attempt_id": draft_2_attempt_id,
+                        "settlement_pending": settlement_pending,
+                        "user_id": cache_user_id,
+                        "parent_grading_run_id": original_run_id,
                     }
-                    if cloud_store is not None:
+                    if cloud_store is not None and not cached_generation.get("generated_recorded"):
                         record_usage_event(
                             cloud_store,
                             "second_draft_generated",
@@ -1101,7 +1841,15 @@ def render_draft_2_training(
                                 "duration_ms": int((time.perf_counter() - draft_2_started_at) * 1000),
                             },
                         )
+                        cached_generation["generated_recorded"] = True
                 except AIGraderError as exc:
+                    if draft_2_ticket and cloud_store and cloud_user:
+                        try:
+                            release_second_draft(cloud_store, cloud_user, draft_2_ticket)
+                        except CloudStoreError:
+                            pass
+                        else:
+                            cached_generation.pop("access_ticket", None)
                     if cloud_store is not None:
                         record_usage_event(
                             cloud_store,
@@ -1119,6 +1867,13 @@ def render_draft_2_training(
                     st.error("第二稿评分失败。完整诊断信息如下。")
                     st.code(str(exc), language="text")
                 except Exception as exc:
+                    if draft_2_ticket and cloud_store and cloud_user:
+                        try:
+                            release_second_draft(cloud_store, cloud_user, draft_2_ticket)
+                        except CloudStoreError:
+                            pass
+                        else:
+                            cached_generation.pop("access_ticket", None)
                     if cloud_store is not None:
                         record_usage_event(
                             cloud_store,
@@ -1527,6 +2282,44 @@ def find_sentence_reference(sentence: str, references: dict[str, str]) -> str | 
     return None
 
 
+def _normalize_practice_original_text(value: object) -> str:
+    """Collapse Unicode whitespace without weakening the legacy task identity."""
+    return " ".join(str(value or "").split())
+
+
+def _match_practice_attempt(
+    rows: list[dict[str, object]],
+    *,
+    task_kind: str,
+    task_key_hash: str,
+    task_index: int,
+    original_text: str,
+) -> tuple[dict[str, object] | None, bool]:
+    """Prefer a current hash, then strictly match one pre-hash history row."""
+    normalized_original = _normalize_practice_original_text(original_text)
+    legacy_match: dict[str, object] | None = None
+
+    for row in rows:
+        if str(row.get("task_kind") or "") != task_kind:
+            continue
+
+        stored_hash = str(row.get("task_key_hash") or "").strip()
+        if stored_hash:
+            if stored_hash == task_key_hash:
+                return row, False
+            continue
+
+        if row.get("task_index") != task_index:
+            continue
+        if not normalized_original or _normalize_practice_original_text(
+            row.get("original_text")
+        ) != normalized_original:
+            continue
+        legacy_match = row
+
+    return legacy_match, legacy_match is not None
+
+
 def render_sentence_practice(
     sentences: list[str],
     provider: str,
@@ -1536,6 +2329,7 @@ def render_sentence_practice(
     cloud_user: CloudUser | None = None,
     grading_run_id: str = "",
     error_tags: list[str] | None = None,
+    read_only: bool = False,
 ) -> None:
     """Render the interactive sentence rewrite practice."""
     st.subheader("单句提分训练")
@@ -1546,24 +2340,146 @@ def render_sentence_practice(
 
     st.caption("先自己改写，再点击点评。AI 会根据你的版本给出具体建议。")
     references = references or {}
+    persisted_attempts: list[dict[str, object]] = []
+    if cloud_store and cloud_user and grading_run_id:
+        try:
+            persisted_attempts = cloud_store.list_practice_attempts_for_run(
+                cloud_user, grading_run_id
+            )
+        except (CloudStoreError, AttributeError):
+            st.caption("已保存的训练点评暂时无法读取，请稍后刷新。")
 
     for index, original_sentence in enumerate(sentences, start=1):
         sentence_id = hashlib.md5(original_sentence.encode("utf-8")).hexdigest()[:10]
-        rewrite_key = f"sentence_rewrite_{sentence_id}"
-        reference_key = f"sentence_reference_{sentence_id}"
-        button_key = f"sentence_review_button_{sentence_id}"
-        feedback_key = f"sentence_feedback_{sentence_id}"
-        revision_key = f"sentence_revision_{sentence_id}"
-        mastered_key = f"sentence_mastered_{sentence_id}"
-        saved_key = f"sentence_saved_{sentence_id}"
+        task_key_hash = hashlib.sha256(
+            f"sentence\0{sentence_id}".encode("utf-8")
+        ).hexdigest()
+        scope_id = hashlib.md5(
+            f"{grading_run_id or 'local'}|sentence|{sentence_id}".encode("utf-8")
+        ).hexdigest()[:12]
+        rewrite_key = f"sentence_rewrite_{scope_id}"
+        reference_key = f"sentence_reference_{scope_id}"
+        button_key = f"sentence_review_button_{scope_id}"
+        feedback_key = f"sentence_feedback_{scope_id}"
+        access_key = f"sentence_feedback_access_{scope_id}"
+        revision_key = f"sentence_revision_{scope_id}"
+        mastered_key = f"sentence_mastered_{scope_id}"
+        saved_key = f"sentence_saved_{scope_id}"
 
         with st.container(border=True):
+            persisted_attempt, legacy_restore = _match_practice_attempt(
+                persisted_attempts,
+                task_kind="sentence",
+                task_key_hash=task_key_hash,
+                task_index=index,
+                original_text=original_sentence,
+            )
+
+            if persisted_attempt and str(persisted_attempt.get("feedback") or "").strip():
+                st.session_state[feedback_key] = str(persisted_attempt["feedback"])
+                st.session_state.setdefault(
+                    rewrite_key, str(persisted_attempt.get("submitted_text") or "")
+                )
+                if str(persisted_attempt.get("revision_text") or ""):
+                    st.session_state.setdefault(
+                        revision_key, str(persisted_attempt["revision_text"])
+                    )
+                st.session_state[saved_key] = True
+
+            pending_ticket = st.session_state.get(access_key)
+            if (
+                st.session_state.get(feedback_key)
+                and isinstance(pending_ticket, dict)
+                and st.session_state.get(saved_key) is False
+                and cloud_store
+                and cloud_user
+                and grading_run_id
+            ):
+                try:
+                    persisted_attempt = cloud_store.save_practice_attempt(
+                        cloud_user,
+                        grading_run_id=grading_run_id,
+                        task_kind="sentence",
+                        task_key=sentence_id,
+                        task_index=index,
+                        original_text=original_sentence,
+                        submitted_text=str(st.session_state.get(rewrite_key) or ""),
+                        feedback=str(st.session_state[feedback_key]),
+                        training_action_id=str(pending_ticket.get("action_id") or ""),
+                        training_flow_id=str(pending_ticket.get("flow_id") or ""),
+                        error_tags=error_tags,
+                    )
+                except CloudStoreError:
+                    st.caption("点评仍在等待安全保存；保存成功前不会结算额度。")
+                else:
+                    legacy_restore = False
+                    st.session_state[saved_key] = True
+
+            proof_ticket: dict[str, object] | None = None
+            if not legacy_restore:
+                if isinstance(pending_ticket, dict) and st.session_state.get(saved_key) is True:
+                    proof_ticket = pending_ticket
+                elif (
+                    persisted_attempt
+                    and persisted_attempt.get("training_flow_id")
+                    and not persisted_attempt.get("settled_at")
+                ):
+                    proof_ticket = {
+                        "flow_id": str(persisted_attempt["training_flow_id"]),
+                        "action_id": str(persisted_attempt.get("training_action_id") or ""),
+                    }
+            if (
+                st.session_state.get(feedback_key)
+                and proof_ticket
+                and cloud_store
+                and cloud_user
+            ):
+                try:
+                    complete_training_feedback_action(
+                        cloud_store, cloud_user, proof_ticket
+                    )
+                except CloudStoreError:
+                    st.caption("点评已保留，额度状态仍在确认；本题不会再次调用模型。")
+                else:
+                    st.session_state.pop(access_key, None)
             st.markdown(f"**原句 {index}:** {original_sentence}")
+
+            if (
+                legacy_restore
+                and persisted_attempt
+                and str(persisted_attempt.get("feedback") or "").strip()
+            ):
+                st.caption("这是升级前保存的历史点评，已按题号与原文严格匹配，只读展示。")
+                st.markdown("**你的改写：**")
+                st.info(str(persisted_attempt.get("submitted_text") or ""))
+                st.markdown(str(persisted_attempt["feedback"]))
+                if str(persisted_attempt.get("revision_text") or "").strip():
+                    st.markdown("**点评后的改写：**")
+                    st.info(str(persisted_attempt["revision_text"]))
+                if persisted_attempt.get("status") == "mastered":
+                    st.success("已标记为掌握。")
+                continue
+
+            if read_only:
+                if persisted_attempt and str(persisted_attempt.get("feedback") or "").strip():
+                    st.markdown("**你的改写：**")
+                    st.info(str(persisted_attempt.get("submitted_text") or ""))
+                    st.markdown(str(persisted_attempt["feedback"]))
+                    if str(persisted_attempt.get("revision_text") or "").strip():
+                        st.markdown("**点评后的改写：**")
+                        st.info(str(persisted_attempt["revision_text"]))
+                    if persisted_attempt.get("status") == "mastered":
+                        st.success("已标记为掌握。")
+                else:
+                    st.caption("本题还没有已保存的 AI 点评。")
+                continue
+
             rewrite = st.text_area(
                 "你的改写",
                 key=rewrite_key,
                 height=90,
                 placeholder="在这里输入你改写后的完整句子。",
+                disabled=bool(st.session_state.get(feedback_key)),
             )
 
             if st.button("显示参考答案", key=reference_key):
@@ -1573,46 +2489,116 @@ def render_sentence_practice(
                 else:
                     st.info("暂时没有匹配到参考答案。你提交改写后，AI 点评会给出更自然的版本。")
 
-            if st.button("点评我的改写", key=button_key):
+            if st.button(
+                "已获得本题点评" if st.session_state.get(feedback_key) else "点评我的改写",
+                key=button_key,
+                disabled=bool(st.session_state.get(feedback_key)),
+            ):
                 if not rewrite.strip():
                     st.warning("请先输入你的改写句子。")
                 else:
-                    with st.spinner("AI 正在点评你的句子..."):
-                        try:
-                            st.session_state[feedback_key] = review_sentence_rewrite(
-                                provider=provider,
-                                original_sentence=original_sentence,
-                                student_rewrite=rewrite,
-                                model=model,
+                    saved_ticket = st.session_state.get(access_key)
+                    ticket = dict(saved_ticket) if isinstance(saved_ticket, dict) else None
+                    try:
+                        if ticket is None and cloud_store and cloud_user and grading_run_id:
+                            ticket = reserve_training_feedback_action(
+                                cloud_store,
+                                cloud_user,
+                                grading_run_id=grading_run_id,
+                                task_kind="sentence",
+                                task_key=sentence_id,
                             )
-                            if cloud_store and cloud_user and grading_run_id:
-                                cloud_store.save_practice_attempt(
-                                    cloud_user,
-                                    grading_run_id=grading_run_id,
-                                    task_kind="sentence",
-                                    task_index=index,
-                                    original_text=original_sentence,
-                                    submitted_text=rewrite,
-                                    feedback=st.session_state[feedback_key],
-                                    error_tags=error_tags,
+                            st.session_state[access_key] = ticket
+                    except GradingAccessError as exc:
+                        st.warning(action_reason_message(exc.reason))
+                    except (CloudStoreError, AttributeError):
+                        st.error("暂时无法安全预留本次点评，请稍后重试；当前没有扣除次数。")
+                    else:
+                        with st.spinner("AI 正在点评你的句子..."):
+                            try:
+                                feedback = review_sentence_rewrite(
+                                    provider=provider,
+                                    original_sentence=original_sentence,
+                                    student_rewrite=rewrite,
+                                    model=model,
                                 )
-                                sync_learning_item_status(
-                                    cloud_store,
-                                    cloud_user,
-                                    grading_run_id=grading_run_id,
-                                    source_text=original_sentence,
-                                    mastered=False,
+                            except AIGraderError as exc:
+                                if ticket and cloud_store and cloud_user:
+                                    try:
+                                        release_training_feedback_action(cloud_store, cloud_user, ticket)
+                                    except CloudStoreError:
+                                        pass
+                                    else:
+                                        st.session_state.pop(access_key, None)
+                                st.error("点评失败，本次不扣次数。完整诊断信息如下。")
+                                st.code(str(exc), language="text")
+                            except Exception as exc:
+                                if ticket and cloud_store and cloud_user:
+                                    try:
+                                        release_training_feedback_action(cloud_store, cloud_user, ticket)
+                                    except CloudStoreError:
+                                        pass
+                                    else:
+                                        st.session_state.pop(access_key, None)
+                                st.error("点评时出现意外错误，本次不扣次数。")
+                                st.code(
+                                    f"Exception Type: {type(exc).__name__}\n\n{exc}",
+                                    language="text",
                                 )
-                                st.session_state[saved_key] = True
-                        except AIGraderError as exc:
-                            st.error("点评失败。完整诊断信息如下。")
-                            st.code(str(exc), language="text")
-                        except Exception as exc:
-                            st.error("点评时出现意外错误。")
-                            st.code(
-                                f"Exception Type: {type(exc).__name__}\n\n{exc}",
-                                language="text",
-                            )
+                            else:
+                                st.session_state[feedback_key] = feedback
+                                st.session_state[saved_key] = not bool(
+                                    cloud_store and cloud_user and grading_run_id
+                                )
+                                if cloud_store and cloud_user and grading_run_id:
+                                    try:
+                                        persisted_attempt = cloud_store.save_practice_attempt(
+                                            cloud_user,
+                                            grading_run_id=grading_run_id,
+                                            task_kind="sentence",
+                                            task_key=sentence_id,
+                                            task_index=index,
+                                            original_text=original_sentence,
+                                            submitted_text=rewrite,
+                                            feedback=feedback,
+                                            training_action_id=str(
+                                                (ticket or {}).get("action_id") or ""
+                                            ),
+                                            training_flow_id=str(
+                                                (ticket or {}).get("flow_id") or ""
+                                            ),
+                                            error_tags=error_tags,
+                                        )
+                                        legacy_restore = False
+                                        st.session_state[saved_key] = True
+                                    except CloudStoreError as exc:
+                                        st.warning(
+                                            f"点评已生成，但尚未安全保存：{exc}。保存成功前不会结算额度。"
+                                        )
+                                    else:
+                                        try:
+                                            sync_learning_item_status(
+                                                cloud_store,
+                                                cloud_user,
+                                                grading_run_id=grading_run_id,
+                                                source_text=original_sentence,
+                                                mastered=False,
+                                            )
+                                        except CloudStoreError as exc:
+                                            st.warning(f"点评已保存，但学习卡片暂时无法同步：{exc}")
+                                if (
+                                    ticket
+                                    and st.session_state.get(saved_key) is True
+                                    and cloud_store
+                                    and cloud_user
+                                    and not legacy_restore
+                                ):
+                                    try:
+                                        complete_training_feedback_action(cloud_store, cloud_user, ticket)
+                                    except CloudStoreError:
+                                        st.warning("点评已生成并保留；额度状态正在确认，请不要重复提交本题。")
+                                    else:
+                                        st.session_state.pop(access_key, None)
 
             if st.session_state.get(feedback_key):
                 st.markdown(st.session_state[feedback_key])
@@ -1623,7 +2609,12 @@ def render_sentence_practice(
                     height=90,
                     placeholder="吸收点评后再写一次，完成后标记掌握。",
                 )
-                if st.button("标记为已掌握", key=mastered_key, use_container_width=True):
+                if st.button(
+                    "标记为已掌握",
+                    key=mastered_key,
+                    use_container_width=True,
+                    disabled=st.session_state.get(saved_key) is False,
+                ):
                     if not revision.strip():
                         st.warning("请先完成第二次改写。")
                     elif revision.strip() == rewrite.strip():
@@ -1635,6 +2626,7 @@ def render_sentence_practice(
                                     cloud_user,
                                     grading_run_id=grading_run_id,
                                     task_kind="sentence",
+                                    task_key=sentence_id,
                                     task_index=index,
                                     original_text=original_sentence,
                                     submitted_text=rewrite,
@@ -1712,6 +2704,7 @@ def render_logic_practice(
     cloud_user: CloudUser | None = None,
     grading_run_id: str = "",
     error_tags: list[str] | None = None,
+    read_only: bool = False,
 ) -> None:
     """Render interactive logic and structure rewrite practice."""
     st.subheader("写作提升验证")
@@ -1721,69 +2714,259 @@ def render_logic_practice(
         return
 
     st.caption("重写一个关键片段，再让 AI 对比原文和你的版本。")
+    persisted_attempts: list[dict[str, object]] = []
+    if cloud_store and cloud_user and grading_run_id:
+        try:
+            persisted_attempts = cloud_store.list_practice_attempts_for_run(
+                cloud_user, grading_run_id
+            )
+        except (CloudStoreError, AttributeError):
+            st.caption("已保存的训练点评暂时无法读取，请稍后刷新。")
 
     for index, task in enumerate(tasks, start=1):
         logic_source = f"{task['problem']}|{task['original']}"
         logic_id = hashlib.md5(logic_source.encode("utf-8")).hexdigest()[:10]
-        rewrite_key = f"logic_rewrite_{logic_id}"
-        button_key = f"logic_review_button_{logic_id}"
-        feedback_key = f"logic_feedback_{logic_id}"
-        revision_key = f"logic_revision_{logic_id}"
-        mastered_key = f"logic_mastered_{logic_id}"
+        task_key_hash = hashlib.sha256(f"logic\0{logic_id}".encode("utf-8")).hexdigest()
+        scope_id = hashlib.md5(
+            f"{grading_run_id or 'local'}|logic|{logic_id}".encode("utf-8")
+        ).hexdigest()[:12]
+        rewrite_key = f"logic_rewrite_{scope_id}"
+        button_key = f"logic_review_button_{scope_id}"
+        feedback_key = f"logic_feedback_{scope_id}"
+        access_key = f"logic_feedback_access_{scope_id}"
+        revision_key = f"logic_revision_{scope_id}"
+        mastered_key = f"logic_mastered_{scope_id}"
+        saved_key = f"logic_saved_{scope_id}"
 
         with st.container(border=True):
+            persisted_attempt, legacy_restore = _match_practice_attempt(
+                persisted_attempts,
+                task_kind="logic",
+                task_key_hash=task_key_hash,
+                task_index=index,
+                original_text=task["original"],
+            )
+            if persisted_attempt and str(persisted_attempt.get("feedback") or "").strip():
+                st.session_state[feedback_key] = str(persisted_attempt["feedback"])
+                st.session_state.setdefault(
+                    rewrite_key, str(persisted_attempt.get("submitted_text") or "")
+                )
+                if str(persisted_attempt.get("revision_text") or ""):
+                    st.session_state.setdefault(
+                        revision_key, str(persisted_attempt["revision_text"])
+                    )
+                st.session_state[saved_key] = True
+
+            pending_ticket = st.session_state.get(access_key)
+            if (
+                st.session_state.get(feedback_key)
+                and isinstance(pending_ticket, dict)
+                and st.session_state.get(saved_key) is False
+                and cloud_store
+                and cloud_user
+                and grading_run_id
+            ):
+                try:
+                    persisted_attempt = cloud_store.save_practice_attempt(
+                        cloud_user,
+                        grading_run_id=grading_run_id,
+                        task_kind="logic",
+                        task_key=logic_id,
+                        task_index=index,
+                        original_text=task["original"],
+                        submitted_text=str(st.session_state.get(rewrite_key) or ""),
+                        feedback=str(st.session_state[feedback_key]),
+                        training_action_id=str(pending_ticket.get("action_id") or ""),
+                        training_flow_id=str(pending_ticket.get("flow_id") or ""),
+                        error_tags=error_tags,
+                    )
+                except CloudStoreError:
+                    st.caption("点评仍在等待安全保存；保存成功前不会结算额度。")
+                else:
+                    legacy_restore = False
+                    st.session_state[saved_key] = True
+
+            proof_ticket: dict[str, object] | None = None
+            if not legacy_restore:
+                if isinstance(pending_ticket, dict) and st.session_state.get(saved_key) is True:
+                    proof_ticket = pending_ticket
+                elif (
+                    persisted_attempt
+                    and persisted_attempt.get("training_flow_id")
+                    and not persisted_attempt.get("settled_at")
+                ):
+                    proof_ticket = {
+                        "flow_id": str(persisted_attempt["training_flow_id"]),
+                        "action_id": str(persisted_attempt.get("training_action_id") or ""),
+                    }
+            if (
+                st.session_state.get(feedback_key)
+                and proof_ticket
+                and cloud_store
+                and cloud_user
+            ):
+                try:
+                    complete_training_feedback_action(
+                        cloud_store, cloud_user, proof_ticket
+                    )
+                except CloudStoreError:
+                    st.caption("点评已保留，额度状态仍在确认；本题不会再次调用模型。")
+                else:
+                    st.session_state.pop(access_key, None)
             st.markdown(f"**任务 {index}:** {task['problem']}")
             st.markdown("改写/重写下面内容，使其逻辑更清晰、更符合雅思6.5水平：")
             st.markdown(f"> {task['original']}")
             st.markdown("要求：2-4句话；要有清晰论点 + 解释 + 例子。")
+
+            if (
+                legacy_restore
+                and persisted_attempt
+                and str(persisted_attempt.get("feedback") or "").strip()
+            ):
+                st.caption("这是升级前保存的历史点评，已按题号与原文严格匹配，只读展示。")
+                st.markdown("**你的重写：**")
+                st.info(str(persisted_attempt.get("submitted_text") or ""))
+                st.markdown(str(persisted_attempt["feedback"]))
+                if str(persisted_attempt.get("revision_text") or "").strip():
+                    st.markdown("**点评后的重写：**")
+                    st.info(str(persisted_attempt["revision_text"]))
+                if persisted_attempt.get("status") == "mastered":
+                    st.success("已标记为掌握。")
+                continue
+
+            if read_only:
+                if persisted_attempt and str(persisted_attempt.get("feedback") or "").strip():
+                    st.markdown("**你的重写：**")
+                    st.info(str(persisted_attempt.get("submitted_text") or ""))
+                    st.markdown(str(persisted_attempt["feedback"]))
+                    if str(persisted_attempt.get("revision_text") or "").strip():
+                        st.markdown("**点评后的重写：**")
+                        st.info(str(persisted_attempt["revision_text"]))
+                    if persisted_attempt.get("status") == "mastered":
+                        st.success("已标记为掌握。")
+                else:
+                    st.caption("本题还没有已保存的 AI 点评。")
+                continue
 
             rewrite = st.text_area(
                 "你的重写",
                 key=rewrite_key,
                 height=130,
                 placeholder="在这里输入你的2-4句话重写版本。",
+                disabled=bool(st.session_state.get(feedback_key)),
             )
 
-            if st.button("点评我的思路重写", key=button_key):
+            if st.button(
+                "已获得本题点评" if st.session_state.get(feedback_key) else "点评我的思路重写",
+                key=button_key,
+                disabled=bool(st.session_state.get(feedback_key)),
+            ):
                 if not rewrite.strip():
                     st.warning("请先输入你的重写内容。")
                 else:
-                    with st.spinner("AI 正在对比你的逻辑结构..."):
-                        try:
-                            st.session_state[feedback_key] = review_logic_rewrite(
-                                provider=provider,
-                                problem=task["problem"],
-                                original_fragment=task["original"],
-                                student_rewrite=rewrite,
-                                model=model,
+                    saved_ticket = st.session_state.get(access_key)
+                    ticket = dict(saved_ticket) if isinstance(saved_ticket, dict) else None
+                    try:
+                        if ticket is None and cloud_store and cloud_user and grading_run_id:
+                            ticket = reserve_training_feedback_action(
+                                cloud_store,
+                                cloud_user,
+                                grading_run_id=grading_run_id,
+                                task_kind="logic",
+                                task_key=logic_id,
                             )
-                            if cloud_store and cloud_user and grading_run_id:
-                                cloud_store.save_practice_attempt(
-                                    cloud_user,
-                                    grading_run_id=grading_run_id,
-                                    task_kind="logic",
-                                    task_index=index,
-                                    original_text=task["original"],
-                                    submitted_text=rewrite,
-                                    feedback=st.session_state[feedback_key],
-                                    error_tags=error_tags,
+                            st.session_state[access_key] = ticket
+                    except GradingAccessError as exc:
+                        st.warning(action_reason_message(exc.reason))
+                    except (CloudStoreError, AttributeError):
+                        st.error("暂时无法安全预留本次点评，请稍后重试；当前没有扣除次数。")
+                    else:
+                        with st.spinner("AI 正在对比你的逻辑结构..."):
+                            try:
+                                feedback = review_logic_rewrite(
+                                    provider=provider,
+                                    problem=task["problem"],
+                                    original_fragment=task["original"],
+                                    student_rewrite=rewrite,
+                                    model=model,
                                 )
-                                sync_learning_item_status(
-                                    cloud_store,
-                                    cloud_user,
-                                    grading_run_id=grading_run_id,
-                                    source_text=task["original"],
-                                    mastered=False,
+                            except AIGraderError as exc:
+                                if ticket and cloud_store and cloud_user:
+                                    try:
+                                        release_training_feedback_action(cloud_store, cloud_user, ticket)
+                                    except CloudStoreError:
+                                        pass
+                                    else:
+                                        st.session_state.pop(access_key, None)
+                                st.error("点评失败，本次不扣次数。完整诊断信息如下。")
+                                st.code(str(exc), language="text")
+                            except Exception as exc:
+                                if ticket and cloud_store and cloud_user:
+                                    try:
+                                        release_training_feedback_action(cloud_store, cloud_user, ticket)
+                                    except CloudStoreError:
+                                        pass
+                                    else:
+                                        st.session_state.pop(access_key, None)
+                                st.error("点评时出现意外错误，本次不扣次数。")
+                                st.code(
+                                    f"Exception Type: {type(exc).__name__}\n\n{exc}",
+                                    language="text",
                                 )
-                        except AIGraderError as exc:
-                            st.error("点评失败。完整诊断信息如下。")
-                            st.code(str(exc), language="text")
-                        except Exception as exc:
-                            st.error("点评时出现意外错误。")
-                            st.code(
-                                f"Exception Type: {type(exc).__name__}\n\n{exc}",
-                                language="text",
-                            )
+                            else:
+                                st.session_state[feedback_key] = feedback
+                                st.session_state[saved_key] = not bool(
+                                    cloud_store and cloud_user and grading_run_id
+                                )
+                                if cloud_store and cloud_user and grading_run_id:
+                                    try:
+                                        persisted_attempt = cloud_store.save_practice_attempt(
+                                            cloud_user,
+                                            grading_run_id=grading_run_id,
+                                            task_kind="logic",
+                                            task_key=logic_id,
+                                            task_index=index,
+                                            original_text=task["original"],
+                                            submitted_text=rewrite,
+                                            feedback=feedback,
+                                            training_action_id=str(
+                                                (ticket or {}).get("action_id") or ""
+                                            ),
+                                            training_flow_id=str(
+                                                (ticket or {}).get("flow_id") or ""
+                                            ),
+                                            error_tags=error_tags,
+                                        )
+                                        legacy_restore = False
+                                        st.session_state[saved_key] = True
+                                    except CloudStoreError as exc:
+                                        st.warning(
+                                            f"点评已生成，但尚未安全保存：{exc}。保存成功前不会结算额度。"
+                                        )
+                                    else:
+                                        try:
+                                            sync_learning_item_status(
+                                                cloud_store,
+                                                cloud_user,
+                                                grading_run_id=grading_run_id,
+                                                source_text=task["original"],
+                                                mastered=False,
+                                            )
+                                        except CloudStoreError as exc:
+                                            st.warning(f"点评已保存，但学习卡片暂时无法同步：{exc}")
+                                if (
+                                    ticket
+                                    and st.session_state.get(saved_key) is True
+                                    and cloud_store
+                                    and cloud_user
+                                    and not legacy_restore
+                                ):
+                                    try:
+                                        complete_training_feedback_action(cloud_store, cloud_user, ticket)
+                                    except CloudStoreError:
+                                        st.warning("点评已生成并保留；额度状态正在确认，请不要重复提交本题。")
+                                    else:
+                                        st.session_state.pop(access_key, None)
 
             if st.session_state.get(feedback_key):
                 st.markdown(st.session_state[feedback_key])
@@ -1794,7 +2977,12 @@ def render_logic_practice(
                     height=130,
                     placeholder="根据点评重写最终版本。",
                 )
-                if st.button("标记逻辑训练为已掌握", key=mastered_key, use_container_width=True):
+                if st.button(
+                    "标记逻辑训练为已掌握",
+                    key=mastered_key,
+                    use_container_width=True,
+                    disabled=st.session_state.get(saved_key) is False,
+                ):
                     if not revision.strip():
                         st.warning("请先完成第二次重写。")
                     elif revision.strip() == rewrite.strip():
@@ -1806,6 +2994,7 @@ def render_logic_practice(
                                     cloud_user,
                                     grading_run_id=grading_run_id,
                                     task_kind="logic",
+                                    task_key=logic_id,
                                     task_index=index,
                                     original_text=task["original"],
                                     submitted_text=rewrite,
@@ -2152,7 +3341,12 @@ def navigate(route: str, run_id: str = "", mode: str = "") -> None:
         st.query_params.pop("mode", None)
 
 
-def hydrate_grading_run(run: dict[str, object]) -> None:
+def hydrate_grading_run(
+    run: dict[str, object],
+    *,
+    user_id: str = "",
+    draft_revision: dict[str, object] | None = None,
+) -> None:
     """Make a cloud record the current cross-page learning context."""
     essay_data = run.get("essays") if isinstance(run.get("essays"), dict) else {}
     structured = run.get("report_json") if isinstance(run.get("report_json"), dict) else {}
@@ -2168,6 +3362,11 @@ def hydrate_grading_run(run: dict[str, object]) -> None:
     st.session_state.active_run_id = run_id
     st.session_state.topic_input = topic
     st.session_state.essay_input = essay
+    draft_context = (str(user_id), run_id)
+    if st.session_state.get("draft_2_context_key") != draft_context:
+        st.session_state.pop("draft_2_result", None)
+        st.session_state.pop("draft_2_text", None)
+    st.session_state.draft_2_context_key = draft_context
     if structured:
         st.session_state.draft_1_snapshot = {
             "topic": topic,
@@ -2178,6 +3377,17 @@ def hydrate_grading_run(run: dict[str, object]) -> None:
             "essay_id": essay_id,
             "grading_run_id": run_id,
         }
+    if (
+        isinstance(draft_revision, dict)
+        and str(draft_revision.get("grading_run_id") or "") == run_id
+    ):
+        restored = draft_2_result_from_revision(
+            draft_revision,
+            user_id=str(user_id),
+            grading_run_id=run_id,
+        )
+        st.session_state.draft_2_result = restored
+        st.session_state.draft_2_text = str(restored.get("text") or "")
 
 
 def ensure_run_context(store: SupabaseStore, user: CloudUser | None) -> None:
@@ -2190,8 +3400,14 @@ def ensure_run_context(store: SupabaseStore, user: CloudUser | None) -> None:
     except CloudStoreError as exc:
         st.warning(f"暂时无法恢复这份批改记录：{exc}")
         return
+    revision = None
     if run:
-        hydrate_grading_run(run)
+        try:
+            revision = store.get_draft_revision(user, requested)
+        except (CloudStoreError, AttributeError):
+            st.session_state.draft_2_restore_warning = True
+    if run:
+        hydrate_grading_run(run, user_id=user.id, draft_revision=revision)
 
 
 def ensure_learning_assets(store: SupabaseStore, user: CloudUser | None) -> None:
@@ -2210,7 +3426,7 @@ def ensure_learning_assets(store: SupabaseStore, user: CloudUser | None) -> None
         st.session_state.learning_assets_ready = False
 
 
-def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> None:
+def render_app_navigation(user: CloudUser | None, *, store: SupabaseStore) -> None:
     """Render the persistent product-level navigation instead of a long-page index."""
     with st.sidebar:
         st.markdown("## EssayPilot")
@@ -2236,10 +3452,24 @@ def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> Non
         )
         if user is not None:
             st.caption(f"已登录：{user.email}")
+            cached_membership = st.session_state.get("membership_entitlement_cache")
+            if (
+                isinstance(cached_membership, dict)
+                and cached_membership.get("user_id") == user.id
+            ):
+                st.caption(
+                    entitlement_caption(
+                        cached_membership.get("entitlement")
+                        if isinstance(cached_membership.get("entitlement"), dict)
+                        else {}
+                    )
+                )
+            else:
+                st.caption("训练权益可在报告或训练页查看")
             st.button("我的学习档案", key="sidebar_profile", on_click=navigate, args=("growth",), use_container_width=True)
             st.button("退出登录", on_click=logout_cloud_user, use_container_width=True)
-        elif cloud_enabled:
-            st.caption("访客模式 · 可完成一次完整批改")
+        elif store.enabled:
+            st.caption("访客模式 · 当前浏览器可免费生成 1 次首稿完整报告")
             st.button("登录 / 保存学习档案", on_click=open_cloud_login, use_container_width=True)
         else:
             st.caption("本地开发模式")
@@ -2248,9 +3478,9 @@ def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> Non
             account_col, profile_col = st.columns([4, 1])
             account_col.caption(f"已登录：{user.email}")
             profile_col.button("我的学习档案", key="desktop_profile", on_click=navigate, args=("growth",), use_container_width=True)
-        elif cloud_enabled:
+        elif store.enabled:
             account_col, login_col = st.columns([4, 1])
-            account_col.caption("可先完成一次完整批改；登录后保存报告、训练和第二稿。")
+            account_col.caption("当前浏览器可先免费生成 1 次首稿报告；登录后保存报告，AI 训练和二稿需开通体验包。")
             login_col.button("登录 / 保存档案", key="desktop_login", type="primary", on_click=open_cloud_login, use_container_width=True)
     if user is not None and st.session_state.get("pending_guest_claim"):
         st.warning("这次游客批改仍在当前页面中，尚未保存到学习档案。")
@@ -2275,8 +3505,8 @@ def render_app_navigation(user: CloudUser | None, *, cloud_enabled: bool) -> Non
                 on_click=logout_cloud_user,
                 use_container_width=True,
             )
-        elif cloud_enabled:
-            st.caption("当前为访客浏览；登录后可跨设备同步批改、训练和成长记录。")
+        elif store.enabled:
+            st.caption("当前为访客浏览；登录后可跨设备保存报告和成长记录。")
             st.button(
                 "登录并同步进度",
                 key="mobile_login",
@@ -2339,21 +3569,41 @@ def grade_submission(
     *,
     topic: str,
     essay: str,
+    reserve_model_access: Callable[[str], dict[str, object]] | None = None,
+    complete_model_access: Callable[[dict[str, object], str], None] | None = None,
+    release_model_access: Callable[[dict[str, object]], None] | None = None,
 ) -> None:
     """Run the existing fixed-model grading workflow and open its report page."""
     word_count = count_words(essay)
     fingerprint = submission_hash(topic, essay)
+    actor_key = first_report_actor_key(
+        user, str(st.session_state.get("user_id") or "")
+    )
+    scoped_cache_key = first_report_cache_key(actor_key, fingerprint)
     grading_cache = st.session_state.setdefault("grading_cache", {})
-    cached_entry = grading_cache.get(fingerprint)
+    if not isinstance(grading_cache, dict):
+        grading_cache = {}
+        st.session_state.grading_cache = grading_cache
+    cached_entry = grading_cache.get(scoped_cache_key)
     package: dict[str, object] | None = None
     locked_scoring_package: dict[str, object] | None = None
     cloud_ids: dict[str, str] = {}
     reused_result = False
+    pending_accesses = st.session_state.setdefault("pending_first_report_access", {})
+    if not isinstance(pending_accesses, dict):
+        pending_accesses = {}
+        st.session_state.pending_first_report_access = pending_accesses
+    access_ticket = (
+        dict(pending_accesses.get(scoped_cache_key) or {})
+        if isinstance(pending_accesses, dict)
+        else {}
+    )
     if isinstance(cached_entry, dict):
         candidate = dict(cached_entry.get("package") or {})
         if candidate.get("prompt_version") == REPORT_PROMPT_VERSION:
             package = candidate
-            cloud_ids = dict(cached_entry.get("cloud_ids") or {})
+            if user is not None and cached_entry.get("cloud_user_id") == user.id:
+                cloud_ids = dict(cached_entry.get("cloud_ids") or {})
             reused_result = bool(package)
         elif (
             candidate.get("scoring_prompt_version") == SCORING_PROMPT_VERSION
@@ -2413,12 +3663,34 @@ def grade_submission(
                             "usage": {},
                         }
     if package is None:
-        package = grade_essay_package(
-            task_type="Task 2",
-            topic=topic,
-            essay=essay,
-            locked_scoring_package=locked_scoring_package,
-        )
+        if not access_ticket and reserve_model_access is not None:
+            access_ticket = dict(reserve_model_access(fingerprint) or {})
+            if access_ticket and not access_ticket.get("local"):
+                pending_accesses[scoped_cache_key] = access_ticket
+        try:
+            package = grade_essay_package(
+                task_type="Task 2",
+                topic=topic,
+                essay=essay,
+                locked_scoring_package=locked_scoring_package,
+            )
+        except Exception:
+            if access_ticket and release_model_access is not None:
+                try:
+                    release_model_access(access_ticket)
+                except (CloudStoreError, AttributeError):
+                    # Keep the same reservation for a safe retry when release is uncertain.
+                    pass
+                else:
+                    pending_accesses.pop(scoped_cache_key, None)
+            raise
+        # Persist the valid model result in session before any filesystem/cloud write.
+        # A later retry can finish settlement without calling the model again.
+        grading_cache[scoped_cache_key] = {
+            "package": package,
+            "cloud_ids": {},
+            "cloud_user_id": user.id if user is not None else "",
+        }
     report = str(package["report"])
     structured = dict(package["structured"])
     scores = score_snapshot(structured)
@@ -2447,7 +3719,27 @@ def grade_submission(
             )
         except CloudStoreError:
             st.session_state.cloud_save_warning = True
-    grading_cache[fingerprint] = {"package": package, "cloud_ids": cloud_ids}
+    grading_cache[scoped_cache_key] = {
+        "package": package,
+        "cloud_ids": cloud_ids,
+        "cloud_user_id": user.id if user is not None else "",
+    }
+    if access_ticket and complete_model_access is not None:
+        grading_run_id = str(cloud_ids.get("grading_run_id") or "")
+        if access_ticket.get("kind") == "membership" and not grading_run_id:
+            raise GradingSettlementError(
+                "报告已经生成，但云端保存尚未完成。再次提交会复用本次结果，不会重新调用模型。"
+            )
+        try:
+            complete_model_access(access_ticket, grading_run_id)
+        except (CloudStoreError, AttributeError) as exc:
+            st.session_state.first_report_settlement_warning = True
+            raise GradingSettlementError(
+                "报告已经生成，但权益状态暂时无法确认。请稍后用相同内容重试；不会重新调用模型。"
+            ) from exc
+        else:
+            pending_accesses.pop(scoped_cache_key, None)
+            clear_membership_cache()
     st.session_state.latest_report = report
     st.session_state.latest_structured = structured
     st.session_state.latest_prompt_version = str(package["prompt_version"])
@@ -2469,6 +3761,7 @@ def grade_submission(
             "word_count": word_count,
             "fingerprint": fingerprint,
             "package": package,
+            "actor_key": actor_key,
         }
     if reused_result:
         st.session_state.reused_result_notice = True
@@ -2602,25 +3895,82 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
             if not topic.strip() or not essay.strip():
                 st.error("请同时填写英文作文题目和作文正文。")
                 return
-            guest_reserved = False
             hashed = str(st.session_state.get("visitor_hash") or "")
-            flow_id = str(st.session_state.get("flow_id") or "")
-            if user is None:
-                if not hashed:
-                    st.info("正在准备访客体验，请稍后再点一次。")
-                    return
-                try:
-                    guest_reserved = store.reserve_guest_trial(hashed, flow_id)
-                except (CloudStoreError, AttributeError):
-                    st.error("暂时无法安全预留免费体验额度。登录后可继续批改。")
-                    st.button("登录后继续", on_click=open_cloud_login, args=("write",), use_container_width=True)
-                    return
-                if not guest_reserved:
-                    st.info("这台设备的一次完整体验已用完，登录后可继续批改并保存学习档案。")
-                    st.button("登录 / 保存学习档案", type="primary", on_click=open_cloud_login, args=("write",), use_container_width=True)
-                    return
             grading_attempt_id = str(uuid.uuid4())
             st.session_state.latest_grading_attempt_id = grading_attempt_id
+
+            def reserve_first_report_access(content_hash: str) -> dict[str, object]:
+                if not require_ai_access_backend(store):
+                    return {"allowed": True, "local": True, "kind": "local"}
+                if not hashed:
+                    raise CloudStoreError("访客身份尚未准备完成，请刷新页面后重试。")
+                guest_allowed = store.reserve_guest_trial(hashed, grading_attempt_id)
+                if guest_allowed:
+                    return {
+                        "allowed": True,
+                        "kind": "guest",
+                        "visitor_hash": hashed,
+                        "flow_id": grading_attempt_id,
+                    }
+                if user is None:
+                    raise GradingAccessError("free_report_used")
+                result = store.reserve_membership_run(
+                    user,
+                    grading_attempt_id,
+                    content_hash,
+                )
+                existing_run_id = str(
+                    result.get("existing_run_id") or result.get("grading_run_id") or ""
+                )
+                if result.get("cached") and existing_run_id:
+                    raise GradingAccessError(
+                        str(result.get("reason") or "existing_result"),
+                        existing_run_id=existing_run_id,
+                    )
+                if not result.get("allowed"):
+                    raise GradingAccessError(
+                        str(result.get("reason") or "membership_inactive")
+                    )
+                return {
+                    **result,
+                    "kind": "membership",
+                    "flow_id": grading_attempt_id,
+                }
+
+            def complete_first_report_access(
+                ticket: dict[str, object], grading_run_id: str
+            ) -> None:
+                kind = str(ticket.get("kind") or "")
+                flow_id = str(ticket.get("flow_id") or "")
+                if kind == "guest":
+                    if not store.complete_guest_trial(
+                        str(ticket.get("visitor_hash") or ""), flow_id
+                    ):
+                        raise CloudStoreError("免费报告额度状态暂时无法确认。")
+                    return
+                if kind == "membership":
+                    result = store.complete_membership_run(user, flow_id, grading_run_id)
+                    if not result.get("completed"):
+                        raise CloudStoreError(
+                            action_reason_message(result.get("reason"))
+                        )
+
+            def release_first_report_access(ticket: dict[str, object]) -> None:
+                kind = str(ticket.get("kind") or "")
+                flow_id = str(ticket.get("flow_id") or "")
+                if kind == "guest":
+                    if not store.release_guest_trial(
+                        str(ticket.get("visitor_hash") or ""), flow_id
+                    ):
+                        raise CloudStoreError("免费报告额度释放状态暂时无法确认。")
+                    return
+                if kind == "membership":
+                    result = store.release_membership_run(user, flow_id)
+                    if not result.get("released"):
+                        raise CloudStoreError(
+                            action_reason_message(result.get("reason"))
+                        )
+
             grading_started_at = time.perf_counter()
             record_usage_event(
                 store,
@@ -2633,14 +3983,16 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
             with st.spinner("正在评分、核对原文证据并生成训练任务……"):
                 render_scoring_loader()
                 try:
-                    grade_submission(store, user, topic=topic, essay=essay)
+                    grade_submission(
+                        store,
+                        user,
+                        topic=topic,
+                        essay=essay,
+                        reserve_model_access=reserve_first_report_access,
+                        complete_model_access=complete_first_report_access,
+                        release_model_access=release_first_report_access,
+                    )
                     grading_duration_ms = int((time.perf_counter() - grading_started_at) * 1000)
-                    if guest_reserved:
-                        try:
-                            store.complete_guest_trial(hashed, flow_id)
-                        except CloudStoreError:
-                            # The paid result already exists in this session. Never discard it or call the model again.
-                            st.session_state.guest_trial_completion_warning = True
                     generated_run_id = str(
                         st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", "")
                     )
@@ -2657,13 +4009,64 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                         },
                     )
                     st.rerun()
+                except GradingAccessError as exc:
+                    if exc.existing_run_id and user is not None:
+                        try:
+                            existing_run = store.get_grading_run(user, exc.existing_run_id)
+                        except CloudStoreError as cloud_exc:
+                            st.error(f"已有报告暂时无法打开：{cloud_exc}")
+                        else:
+                            if existing_run:
+                                try:
+                                    existing_revision = store.get_draft_revision(
+                                        user, exc.existing_run_id
+                                    )
+                                except CloudStoreError:
+                                    existing_revision = None
+                                hydrate_grading_run(
+                                    existing_run,
+                                    user_id=user.id,
+                                    draft_revision=existing_revision,
+                                )
+                                st.session_state.reused_result_notice = True
+                                navigate("report", exc.existing_run_id)
+                                st.rerun()
+                            else:
+                                st.warning(action_reason_message(exc.reason))
+                    elif user is None:
+                        st.info(action_reason_message(exc.reason))
+                        st.button(
+                            "登录后查看创始体验包",
+                            type="primary",
+                            on_click=open_cloud_login,
+                            args=("write",),
+                            use_container_width=True,
+                        )
+                    else:
+                        st.warning(action_reason_message(exc.reason))
+                        render_founder_offer(
+                            store,
+                            user,
+                            key="write_access_gate",
+                            intro="当前浏览器的免费首稿额度已经使用；开通后可继续生成新报告并完成训练闭环。",
+                        )
+                except GradingSettlementError as exc:
+                    grading_duration_ms = int((time.perf_counter() - grading_started_at) * 1000)
+                    st.session_state.grading_failed = False
+                    record_usage_event(
+                        store,
+                        "report_generated",
+                        user=user,
+                        attempt_id=grading_attempt_id,
+                        occurrence_key=grading_attempt_id,
+                        metadata={
+                            "settlement_pending": True,
+                            "duration_ms": grading_duration_ms,
+                        },
+                    )
+                    st.warning(str(exc))
                 except AIGraderError as exc:
                     grading_duration_ms = int((time.perf_counter() - grading_started_at) * 1000)
-                    if guest_reserved:
-                        try:
-                            store.release_guest_trial(hashed, flow_id)
-                        except CloudStoreError:
-                            pass
                     st.session_state.grading_failed = True
                     record_usage_event(
                         store,
@@ -2681,11 +4084,6 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                         st.code(str(exc), language="text")
                 except CloudStoreError as exc:
                     grading_duration_ms = int((time.perf_counter() - grading_started_at) * 1000)
-                    if guest_reserved:
-                        try:
-                            store.release_guest_trial(hashed, flow_id)
-                        except CloudStoreError:
-                            pass
                     st.session_state.grading_failed = True
                     record_usage_event(
                         store,
@@ -2698,14 +4096,9 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                             "duration_ms": grading_duration_ms,
                         },
                     )
-                    st.error(f"云端保存失败，题目和作文未清空：{exc}")
+                    st.error(f"暂时无法安全确认额度或同步报告，题目和作文未清空：{exc}")
                 except Exception as exc:
                     grading_duration_ms = int((time.perf_counter() - grading_started_at) * 1000)
-                    if guest_reserved:
-                        try:
-                            store.release_guest_trial(hashed, flow_id)
-                        except CloudStoreError:
-                            pass
                     st.session_state.grading_failed = True
                     record_usage_event(
                         store,
@@ -2882,6 +4275,8 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
         st.info("已复用相同作文的当前中文版评分结果，本次未消耗 Token。")
     if st.session_state.pop("guest_trial_completion_warning", False):
         st.warning("报告已经完整保留。游客额度状态暂时无法同步；请登录保存本次结果，不会重新评分。")
+    if st.session_state.pop("first_report_settlement_warning", False):
+        st.warning("报告内容已经保留，权益状态仍在确认；使用相同内容重试不会再次调用模型。")
     priorities = [item for item in structured.get("priorities", []) if isinstance(item, dict)]
     render_overall_band(float(structured.get("overall_band") or 0))
     if priorities:
@@ -3024,9 +4419,9 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                     else:
                         st.caption("该节点属于结构或语法修复，没有可靠的词汇替换，因此不强行生成词条。")
                     if user is None:
-                        st.caption("登录后可把这条问题加入单句训练或错题本。")
+                        st.caption("登录后可保存这条问题；AI 单句训练需开通体验包。")
                         st.button(
-                            f"登录后保存 #{index} 并训练",
+                            f"登录后保存 #{index}",
                             key=f"login_correction_{report_context_key}_{index}",
                             use_container_width=True,
                             on_click=open_cloud_login,
@@ -3079,15 +4474,26 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
         attempt_id=attempt_id,
     )
 
+    if user is not None:
+        render_founder_offer(
+            store,
+            user,
+            key=f"report_{run_id or 'local'}",
+            intro=(
+                "首稿报告已经完整生成。开通后可把这篇作文加入训练，"
+                "继续做专项点评和第二稿验证；加入时才占用 1 篇额度。"
+            ),
+        )
+
     st.markdown("### 下一步：用第二稿验证这次反馈")
     primary_col, practice_col = st.columns([1.25, 1])
     if user is None:
         with primary_col:
-            if st.button("登录并开始第二稿训练", type="primary", use_container_width=True):
+            if st.button("登录并保存本次报告", type="primary", use_container_width=True):
                 open_cloud_login("training", "draft")
                 st.rerun()
         with practice_col:
-            if st.button("登录后先做专项训练", use_container_width=True):
+            if st.button("登录后查看训练权益", use_container_width=True):
                 open_cloud_login("training", "practice")
                 st.rerun()
         if st.button("练习本篇表达", key="guest_report_expressions", use_container_width=True):
@@ -3114,10 +4520,10 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
 def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
     if user is None:
         st.markdown('<div class="section-kicker">专项训练</div>', unsafe_allow_html=True)
-        st.title("登录后继续完成修改与第二稿")
-        st.info("游客批改报告仍保留在当前会话中。登录后会自动保存，不会重新评分。")
+        st.title("登录后保存报告并查看训练权益")
+        st.info("游客首稿报告仍保留在当前会话中。登录后会自动保存，不会重新评分；AI 训练和二稿需开通体验包。")
         mode = str(st.query_params.get("mode", "practice") or "practice")
-        label = "登录并开始第二稿训练" if mode == "draft" else "登录并开始专项训练"
+        label = "登录并查看体验包"
         st.button(
             label,
             type="primary",
@@ -3135,6 +4541,14 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
     st.title("把本轮问题真正练会")
     render_training_stepper(active=3)
     run_id = str(st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
+    membership_access = render_training_access_gate(
+        store,
+        user,
+        grading_run_id=run_id,
+    )
+    if membership_access is None:
+        return
+    read_only = bool(membership_access.get("read_only"))
     if user is not None:
         try:
             pending = store.list_pending_practice(user)
@@ -3180,6 +4594,7 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
             sentences, "OpenAI", PRODUCTION_MODEL, references=references,
             cloud_store=store if user is not None else None, cloud_user=user,
             grading_run_id=run_id, error_tags=list(structured.get("error_tags", [])),
+            read_only=read_only,
         )
     with logic_tab:
         render_logic_practice(
@@ -3187,6 +4602,7 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
             "OpenAI", PRODUCTION_MODEL,
             cloud_store=store if user is not None else None, cloud_user=user,
             grading_run_id=run_id, error_tags=list(structured.get("error_tags", [])),
+            read_only=read_only,
         )
     with draft_tab:
         st.session_state.draft_2_active = True
@@ -3194,6 +4610,7 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
             provider="OpenAI", model=PRODUCTION_MODEL, task_type="Task 2",
             user_id=user.id if user is not None else st.session_state.user_id,
             cloud_store=store if user is not None else None, cloud_user=user,
+            read_only=read_only,
         )
     if st.session_state.pop("learning_assets_sync_error", False):
         st.caption("训练已保存；错题掌握状态将在数据库升级后自动联动。")
@@ -3410,37 +4827,8 @@ def render_expression_library(
         st.write(str(expression.get("meaning") or ""))
         st.caption(str(expression.get("usage_note") or ""))
         sentence = st.text_area("你的英文句子", key="expression_student_sentence", height=130)
-        st.caption(f"只有点击下方按钮才会调用 {PRODUCTION_MODEL}；修改后可以再次提交。")
-        if st.button("获取 AI 点评", type="primary", use_container_width=True):
-            if not sentence.strip():
-                st.warning("请先写一个包含目标表达的英文句子。")
-            else:
-                with st.spinner("正在检查表达含义、搭配、语法和语境……"):
-                    try:
-                        result = review_expression_sentence(
-                            expression=str(expression.get("expression") or ""),
-                            meaning=str(expression.get("meaning") or ""),
-                            usage_note=str(expression.get("usage_note") or ""),
-                            student_sentence=sentence,
-                        )
-                        st.session_state.expression_practice_result = result
-                        if user is not None and expression.get("learning_item_id"):
-                            store.save_expression_attempt(
-                                user, learning_item_id=str(expression.get("learning_item_id")),
-                                submitted_sentence=sentence, result=result, model=PRODUCTION_MODEL,
-                                prompt_version=EXPRESSION_PRACTICE_PROMPT_VERSION,
-                            )
-                            store.update_learning_item(
-                                user, str(expression.get("learning_item_id")),
-                                status="mastered" if result.get("mastered") else "practicing",
-                                review_count=int(expression.get("review_count") or 0) + 1,
-                            )
-                    except AIGraderError as exc:
-                        st.error("AI 点评暂时不可用，你的句子已经保留，可以直接重试。")
-                        with st.expander("查看技术诊断"):
-                            st.code(str(exc), language="text")
-                    except (CloudStoreError, AttributeError) as exc:
-                        st.warning(f"点评已生成，但云端保存暂时失败：{exc}")
+        st.caption("静态表达、释义和例句可以继续使用；独立造句 AI 点评不包含在当前创始体验包中。")
+        st.button("独立造句 AI 点评暂未开放", disabled=True, use_container_width=True)
         result = st.session_state.get("expression_practice_result")
         if isinstance(result, dict):
             if result.get("mastered"):
@@ -3554,7 +4942,7 @@ def _open_draft_comparison(
     original = store.get_grading_run(user, original_run_id)
     if not original:
         return
-    hydrate_grading_run(original)
+    hydrate_grading_run(original, user_id=user.id)
     original_essay = original.get("essays") if isinstance(original.get("essays"), dict) else {}
     revised_run = revised_run or {}
     revised_essay = revised_run.get("essays") if isinstance(revised_run.get("essays"), dict) else {}
@@ -3576,7 +4964,10 @@ def _open_draft_comparison(
         "scores": revised_scores, "report": str(revised_report),
         "progress_report": str(revision.get("progress_report") or ""),
         "text": str(revised_text), "grading_run_id": str(revised_run.get("id") or ""),
+        "user_id": user.id, "parent_grading_run_id": original_run_id,
+        "settlement_pending": False,
     }
+    st.session_state.draft_2_text = str(revised_text)
     navigate("training", original_run_id, "draft")
 
 
@@ -3644,8 +5035,13 @@ def render_correction_history(
             with st.expander("查看完整原文", expanded=False):
                 st.text(content)
             report_col, diff_col = st.columns(2)
+            stored_revision = revision_by_original.get(run_id)
             if report_col.button("打开完整批改报告", key=f"history_report_{run_id}", use_container_width=True):
-                hydrate_grading_run(run)
+                hydrate_grading_run(
+                    run,
+                    user_id=user.id,
+                    draft_revision=stored_revision,
+                )
                 navigate("report", run_id)
                 st.rerun()
             revision = revision_by_revised.get(run_id) or revision_by_original.get(run_id)
@@ -3704,7 +5100,20 @@ def render_growth_page(store: SupabaseStore, user: CloudUser | None) -> None:
         items = []
     if runs and not items:
         latest = runs[0]
-        hydrate_grading_run(latest)
+        latest_id = str(latest.get("id") or "")
+        latest_revision = next(
+            (
+                item
+                for item in revisions
+                if str(item.get("grading_run_id") or "") == latest_id
+            ),
+            None,
+        )
+        hydrate_grading_run(
+            latest,
+            user_id=user.id,
+            draft_revision=latest_revision,
+        )
         ensure_learning_assets(store, user)
         try:
             items = store.list_learning_items(user)
@@ -3790,7 +5199,7 @@ def render_product_route(store: SupabaseStore, user: CloudUser | None) -> None:
     if route == "workspace":
         route = "home"
         st.session_state.page_mode = route
-    render_app_navigation(user, cloud_enabled=store.enabled)
+    render_app_navigation(user, store=store)
     if route == "home":
         render_home_page(store, user)
     elif route == "write":

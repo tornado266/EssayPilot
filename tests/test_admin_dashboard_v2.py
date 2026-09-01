@@ -108,6 +108,136 @@ dashboard.render_admin_dashboard()
             for item in app.metric[:8]
         ))
 
+    def test_membership_review_explains_missing_server_key(self):
+        script = """
+import src.admin_dashboard as dashboard
+
+class Store:
+    server_key = ""
+    analytics_enabled = False
+
+dashboard._authorize_admin = lambda: True
+dashboard.SupabaseStore = Store
+dashboard.render_admin_dashboard()
+"""
+        app = AppTest.from_string(script, default_timeout=10).run()
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertIn(
+            "创始体验包人工核单", [item.value for item in app.subheader]
+        )
+        self.assertTrue(any(
+            "暂时无法读取或批准待核单申请" in item.value
+            for item in app.warning
+        ))
+
+    def test_membership_review_read_failure_does_not_block_analytics(self):
+        script = f"""
+import streamlit as st
+import src.admin_dashboard as dashboard
+
+DATA = {EMPTY_DASHBOARD!r}
+
+class Store:
+    server_key = "sb_secret_test"
+    analytics_enabled = True
+    def list_pending_membership_requests(self):
+        st.session_state.review_attempted = True
+        raise dashboard.CloudStoreError("review unavailable")
+    def get_analytics_dashboard_v2(self, since=None, until=None):
+        st.session_state.analytics_loaded = True
+        return DATA
+
+dashboard._authorize_admin = lambda: True
+dashboard.SupabaseStore = Store
+dashboard.render_admin_dashboard()
+"""
+        app = AppTest.from_string(script, default_timeout=15).run()
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertTrue(app.session_state["review_attempted"])
+        self.assertTrue(app.session_state["analytics_loaded"])
+        self.assertTrue(any(
+            "下方匿名统计不受影响" in item.value for item in app.warning
+        ))
+        self.assertTrue(any(
+            "还没有新版埋点数据" in item.value for item in app.info
+        ))
+
+    def test_membership_approval_requires_two_steps_and_shows_request_details(self):
+        script = """
+import streamlit as st
+import src.admin_dashboard as dashboard
+
+REQUEST = {
+    "id": "10000000-0000-0000-0000-000000000001",
+    "request_code": "EP-ABC123",
+    "user_id": "20000000-0000-0000-0000-000000000002",
+    "payment_reference": "ORDER-7788",
+    "paid_at": "2026-09-01T12:30:00Z",
+    "note": "微信收款",
+    "created_at": "2026-09-01T12:45:00Z",
+}
+st.session_state.setdefault("approval_calls", [])
+
+class Store:
+    server_key = "sb_secret_test"
+    analytics_enabled = False
+    def list_pending_membership_requests(self):
+        return [REQUEST]
+    def approve_membership_request(self, request_id):
+        st.session_state.approval_calls.append(request_id)
+        return {"approved": True, "reason": "approved"}
+
+dashboard._authorize_admin = lambda: True
+dashboard.SupabaseStore = Store
+dashboard.render_admin_dashboard()
+"""
+        app = AppTest.from_string(script, default_timeout=10).run()
+
+        self.assertEqual(len(app.exception), 0)
+        visible_text = [item.value for item in app.text]
+        for expected in (
+            "申请编号：EP-ABC123",
+            "用户 ID：20000000-0000-0000-0000-000000000002",
+            "应核金额：¥7.50 CNY",
+            "订单号：ORDER-7788",
+            "付款时间：2026-09-01 20:30",
+            "备注：微信收款",
+            "提交时间：2026-09-01 20:45",
+        ):
+            self.assertIn(expected, visible_text)
+        self.assertEqual(app.session_state["approval_calls"], [])
+        self.assertNotIn(
+            "第二步：确认批准并开通", [button.label for button in app.button]
+        )
+
+        app = next(
+            button for button in app.button if button.label == "第一步：进入核对"
+        ).click().run()
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(app.session_state["approval_calls"], [])
+        self.assertIn(
+            "第二步：确认批准并开通", [button.label for button in app.button]
+        )
+
+        app = next(
+            checkbox for checkbox in app.checkbox
+            if "我已在收款记录中核对" in checkbox.label
+        ).set_value(True).run()
+        self.assertEqual(app.session_state["approval_calls"], [])
+        app = next(
+            button for button in app.button
+            if button.label == "第二步：确认批准并开通"
+        ).click().run()
+
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(
+            app.session_state["approval_calls"],
+            ["10000000-0000-0000-0000-000000000001"],
+        )
+        self.assertTrue(any("已批准" in item.value for item in app.success))
+
     def test_three_feedback_touchpoints_can_each_submit_once(self):
         script = """
 import streamlit as st

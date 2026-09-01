@@ -1,4 +1,4 @@
-"""Private aggregate product dashboard and robust Streamlit route detection."""
+"""Private product dashboard, manual membership review, and route detection."""
 
 from __future__ import annotations
 
@@ -488,12 +488,91 @@ def _render_history_and_health(data: dict[str, object]) -> None:
         st.caption(f"尝试编号精确统计启用时间：{_shanghai_time(data.get('attempt_tracking_enabled_at'))}（Asia/Shanghai）")
 
 
+def _render_membership_review(store: SupabaseStore) -> None:
+    """Render manual founder-pass review without blocking aggregate analytics."""
+    st.subheader("创始体验包人工核单")
+    st.caption("仅处理待审核申请。请以收款渠道记录为准，不要仅依据用户备注批准。")
+    if not getattr(store, "server_key", ""):
+        st.warning(
+            "尚未配置 SUPABASE_SECRET_KEY（或旧版 SUPABASE_SERVICE_ROLE_KEY），"
+            "暂时无法读取或批准待核单申请。"
+        )
+        return
+
+    try:
+        pending_requests = _rows(store.list_pending_membership_requests())
+    except CloudStoreError:
+        st.warning("待核单列表暂时无法读取，请稍后重试；下方匿名统计不受影响。")
+        return
+
+    if not pending_requests:
+        st.info("当前没有待审核的创始体验包申请。")
+        return
+
+    st.caption(f"待审核 {len(pending_requests)} 笔 · 时间均按 Asia/Shanghai 显示")
+    selected_key = "membership_review_selected_request_id"
+    selected_request_id = str(st.session_state.get(selected_key) or "")
+    for request in pending_requests:
+        request_id = str(request.get("id") or "")
+        request_code = str(request.get("request_code") or "—")
+        amount = float(request.get("amount_cny") or 7.50)
+        currency = str(request.get("currency") or "CNY")
+        with st.container(border=True):
+            st.text(f"申请编号：{request_code}")
+            st.text(f"用户 ID：{str(request.get('user_id') or '—')}")
+            st.text(f"应核金额：¥{amount:.2f} {currency}")
+            st.text(f"订单号：{str(request.get('payment_reference') or '—')}")
+            st.text(f"付款时间：{_shanghai_time(request.get('paid_at'))}")
+            st.text(f"备注：{str(request.get('note') or '（无）')}")
+            st.text(f"提交时间：{_shanghai_time(request.get('created_at'))}")
+
+            if not request_id:
+                st.error("这条申请缺少内部编号，无法审批。")
+                continue
+            if st.button(
+                "第一步：进入核对",
+                key=f"membership_review_prepare_{request_id}",
+                use_container_width=True,
+            ):
+                selected_request_id = request_id
+                st.session_state[selected_key] = request_id
+
+            if selected_request_id != request_id:
+                continue
+            st.warning("批准后会立即开始 30 天有效期并发放 3 篇完整训练额度。")
+            confirmed = st.checkbox(
+                "我已在收款记录中核对：订单号一致、实付 ¥7.50、付款时间合理。",
+                key=f"membership_review_confirm_{request_id}",
+            )
+            if st.button(
+                "第二步：确认批准并开通",
+                key=f"membership_review_approve_{request_id}",
+                type="primary",
+                disabled=not confirmed,
+                use_container_width=True,
+            ):
+                try:
+                    result = store.approve_membership_request(request_id)
+                except CloudStoreError:
+                    st.error("审批请求暂时失败，未确认开通；请刷新后核对状态再重试。")
+                else:
+                    if isinstance(result, dict) and result.get("approved"):
+                        st.success(f"申请 {request_code} 已批准，30 天有效期现已开始。")
+                        st.session_state[selected_key] = ""
+                    else:
+                        reason = str((result or {}).get("reason") or "unknown")
+                        st.error(f"本次未开通，请刷新申请状态后再处理（{reason}）。")
+
+
 def render_admin_dashboard() -> None:
-    """Render the authorized aggregate-only product dashboard."""
+    """Render authorized manual review and aggregate product analytics."""
     st.title("EssayPilot 产品决策中心")
     if not _authorize_admin():
         return
     store = SupabaseStore()
+    _render_membership_review(store)
+    st.divider()
+    st.subheader("匿名产品统计")
     if not store.analytics_enabled:
         st.warning(
             "请配置 SUPABASE_SECRET_KEY（或旧版 SUPABASE_SERVICE_ROLE_KEY），"
@@ -528,7 +607,7 @@ def render_admin_dashboard() -> None:
     st.caption(
         f"当前范围：{selected_range} · 时区：Asia/Shanghai · "
         f"埋点启用：{_shanghai_time(data.get('tracking_enabled_at'))} · "
-        "仅展示匿名聚合结果"
+        "本区仅展示匿名聚合结果"
     )
     _render_priorities(data)
     st.divider()

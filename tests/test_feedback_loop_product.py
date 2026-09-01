@@ -9,6 +9,13 @@ from src.visitor_identity import visitor_hash
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "supabase" / "migrations" / "20260812_feedback_loop_funnel.sql"
+IDEMPOTENCY_MIGRATION = (
+    ROOT
+    / "supabase"
+    / "migrations"
+    / "20260901120000_guest_trial_idempotency.sql"
+)
+SCHEMA = ROOT / "supabase" / "schema.sql"
 
 
 class FeedbackLoopProductTests(unittest.TestCase):
@@ -29,6 +36,47 @@ class FeedbackLoopProductTests(unittest.TestCase):
         self.assertIn("grant execute on function public.get_product_funnel(timestamptz) to service_role", sql)
         for forbidden_column in ("essay_text", "essay_content", "report_json", "email", "ip_address", "raw_visitor"):
             self.assertNotIn(forbidden_column, sql)
+
+    def test_guest_trial_settlement_retries_are_flow_scoped(self):
+        sql = IDEMPOTENCY_MIGRATION.read_text(encoding="utf-8").lower()
+        complete = sql.split(
+            "create or replace function public.complete_guest_trial", 1
+        )[1].split("create or replace function public.release_guest_trial", 1)[0]
+        release = sql.split(
+            "create or replace function public.release_guest_trial", 1
+        )[1].split("create or replace function public.record_product_event", 1)[0]
+        reserve = sql.split(
+            "create or replace function public.reserve_guest_trial", 1
+        )[1].split("create or replace function public.complete_guest_trial", 1)[0]
+
+        self.assertIn("if found then return true", complete)
+        self.assertIn(
+            "status='used' and reservation_id=p_flow_id",
+            complete,
+        )
+        self.assertIn("status='released'", release)
+        self.assertIn(
+            "status='released' and reservation_id=p_flow_id",
+            release,
+        )
+        self.assertNotIn("delete from public.guest_trials", release)
+        self.assertIn("guest_trials.status = 'released'", reserve)
+        self.assertIn(
+            "check (status in ('reserved', 'used', 'released'))",
+            sql,
+        )
+        self.assertEqual(
+            sql.count("set search_path = pg_catalog, public"),
+            3,
+        )
+
+    def test_consolidated_schema_contains_guest_trial_migrations_in_order(self):
+        migration = MIGRATION.read_text(encoding="utf-8").strip()
+        increment = IDEMPOTENCY_MIGRATION.read_text(encoding="utf-8").strip()
+        schema = SCHEMA.read_text(encoding="utf-8")
+        self.assertIn(migration, schema)
+        self.assertIn(increment, schema)
+        self.assertLess(schema.index(migration), schema.index(increment))
 
     @patch("src.cloud_store.requests.request")
     def test_guest_reservation_sends_only_hash_and_flow(self, request):
@@ -64,7 +112,8 @@ class FeedbackLoopProductTests(unittest.TestCase):
         self.assertNotIn("cloud_user is None and not visitor_catalog", source)
         self.assertIn('if requested_page == "login" and cloud_user is None:', source)
         self.assertIn("pending_guest_claim", source)
-        self.assertIn("登录并开始第二稿训练", source)
+        self.assertIn("登录并保存本次报告", source)
+        self.assertIn("AI 训练和二稿需开通体验包", source)
         self.assertIn("开始第二稿训练", source)
         self.assertIn('default_tab = "第二稿验证" if training_mode == "draft"', source)
         self.assertIn('"second_draft_generated"', source)

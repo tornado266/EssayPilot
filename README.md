@@ -52,7 +52,9 @@ EssayPilot 把重点放在反馈之后：
 5. 提交第二稿，查看两稿变化和下一轮优先级。
 6. 在“学习档案”中复习反复出现的错误、积累表达并追踪进步。
 
-在线版允许访客先完成一次体验；登录后可以继续训练、下载报告，并在不同设备间保存学习记录。本地运行时，数据也可以只保存在当前电脑。
+在线版允许当前浏览器的访客免费生成 1 次首稿完整报告；登录后可以保存、下载报告，并在不同设备间同步学习记录。AI 专项训练和第二稿验证属于创始体验包权益。本地运行时，数据也可以只保存在当前电脑。
+
+创始体验包为 **¥7.5 / 30 天**，最多选择 3 篇作文进入完整训练。每篇含 1 份首稿报告、最多 3 次专项 AI 点评和 1 次二稿评分与两稿对比；30 天与 3 篇任一先达到即结束，不自动续费。当前采用支付订单号人工核对，开通时间以审核通过时为准。
 
 ## 完整产品导览
 
@@ -173,9 +175,16 @@ OPENAI_API_KEY=your_openai_api_key
 ```dotenv
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_ANON_KEY=your_publishable_anon_key
+ALLOW_LOCAL_UNMETERED_AI=false
 ```
 
-随后在 Supabase SQL Editor 中运行 `supabase/schema.sql`。应用会优先读取 Streamlit Secrets，再回退到本地环境变量。
+新建 Supabase 项目时，在 SQL Editor 中运行 `supabase/schema.sql`。已有项目应按文件名顺序执行
+`20260901_founder_membership.sql`、`20260901120000_guest_trial_idempotency.sql` 和
+`20260901130000_second_draft_idempotency.sql`。应用会优先读取 Streamlit Secrets，再回退到本地环境变量。
+
+如需开放创始体验包，先完成数据库升级，再同时配置 `FOUNDER_PAYMENT_INSTRUCTIONS`、`FOUNDER_SUPPORT_CONTACT` 与 `FOUNDER_REFUND_POLICY`；缺少任一项时，应用只展示套餐说明，不接受付款核对申请。`FOUNDER_PAYMENT_QR_URL` 可按实际收款方式选配。人工审批入口为管理员登录后的 `?admin=1` 页面。
+
+“当前浏览器免费 1 次”依赖浏览器本地身份，只是一层低摩擦体验限制，不是可靠的反滥用边界。公开引流前还应在部署入口配置 CAPTCHA、来源限速或等价的服务端成本上限。
 
 ### 5. 启动应用
 
@@ -190,12 +199,17 @@ streamlit run app.py
 | 变量 | 是否必需 | 用途 |
 | --- | --- | --- |
 | `OPENAI_API_KEY` | 是 | 作文评分、训练反馈与二稿对比 |
-| `SUPABASE_URL` | 否 | Supabase 项目地址 |
-| `SUPABASE_ANON_KEY` | 否 | 登录与用户侧数据访问 |
+| `SUPABASE_URL` | 公开部署必填 | Supabase 项目地址；缺失时默认拒绝 AI 请求 |
+| `SUPABASE_ANON_KEY` | 公开部署必填 | 登录、用户侧数据和服务端额度校验；缺失时默认拒绝 AI 请求 |
+| `ALLOW_LOCAL_UNMETERED_AI` | 否 | 仅供本机开发显式设为 `true`；Supabase 缺失时允许不计额度的模型调用，公开部署严禁开启 |
 | `SUPABASE_SECRET_KEY` | 否 | 服务端聚合数据接口；必须仅保存在服务端 |
 | `ADMIN_EMAILS` | 否 | 管理员邮箱白名单，多个邮箱用逗号分隔 |
 | `ADMIN_PASSWORD` | 否 | 未配置邮箱白名单时的管理页备用验证 |
 | `BETA_START_AT` | 否 | 公测统计的起始时间 |
+| `FOUNDER_PAYMENT_QR_URL` | 否 | 可选的创始体验包收款二维码图片地址；也可以只在付款说明中提供收款方式 |
+| `FOUNDER_PAYMENT_INSTRUCTIONS` | 否 | 用户可见的付款与人工核对说明 |
+| `FOUNDER_SUPPORT_CONTACT` | 否 | 核对、退款和异常处理的真实联系方式 |
+| `FOUNDER_REFUND_POLICY` | 否 | 用户可见的退款与未使用权益说明 |
 
 不要提交 `.env` 或 `.streamlit/secrets.toml`，也不要把 Supabase 服务端密钥暴露给浏览器。
 
@@ -245,7 +259,7 @@ python -m scripts.run_calibration --repeats 3 --provider OpenAI --model gpt-5.4-
 - API Key 只从 Streamlit Secrets 或环境变量读取，不会写入批改报告。
 - 未配置 Supabase 时，记录保存在本机；部署在 Streamlit Community Cloud 上的本地文件可能随实例重启而清除。
 - 配置 Supabase 后，作文、报告、练习和二稿记录受行级安全策略保护，仅对应用户可访问。
-- 私有管理页只返回匿名聚合数据，不返回邮箱、作文正文或报告内容。
+- 私有管理页的产品统计区只返回匿名聚合数据；单独的人工付款审核区仅向管理员白名单开放，并只显示核单所需的账号与订单信息，不显示作文正文或报告内容。
 - AI 评分存在波动，更适合观察多次练习的趋势，而不是替代官方考试成绩。
 
 ## 当前范围

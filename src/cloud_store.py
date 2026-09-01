@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import os
 import time
@@ -324,6 +325,248 @@ class SupabaseStore:
             "/rest/v1/rpc/release_guest_trial",
             payload={"p_visitor_hash": visitor_hash, "p_flow_id": flow_id},
         ))
+
+    def get_membership_entitlement(self, user: CloudUser) -> dict[str, Any]:
+        """Return the authenticated user's current founder-pass snapshot."""
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/get_my_membership_entitlement",
+            payload={},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def get_my_membership_request(self, user: CloudUser) -> dict[str, Any]:
+        """Return the user's latest manual-payment review request."""
+        result = self._authenticated_request(
+            user,
+            "GET",
+            "/rest/v1/membership_requests",
+            params={
+                "select": (
+                    "id,application_code:request_code,status,payment_reference,"
+                    "submitted_at:created_at,reviewed_at"
+                ),
+                "order": "created_at.desc",
+                "limit": "1",
+            },
+        )
+        return result[0] if isinstance(result, list) and result else {}
+
+    def create_membership_request(
+        self,
+        user: CloudUser,
+        payment_reference: str,
+        *,
+        paid_at: str = "",
+        note: str = "",
+    ) -> dict[str, Any]:
+        """Submit payment details for manual review without accepting screenshots."""
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/create_membership_request",
+            payload={
+                "p_payment_reference": payment_reference.strip(),
+                "p_paid_at": paid_at.strip(),
+                "p_note": note.strip(),
+            },
+        )
+        return result if isinstance(result, dict) else {}
+
+    def reserve_membership_run(
+        self,
+        user: CloudUser,
+        flow_id: str,
+        content_hash: str,
+        *,
+        grading_run_id: str = "",
+    ) -> dict[str, Any]:
+        """Atomically reserve one of the member's three essay-cycle slots."""
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/reserve_membership_run",
+            payload={
+                "p_flow_id": flow_id,
+                "p_content_hash": content_hash,
+                "p_grading_run_id": grading_run_id or None,
+            },
+        )
+        return result if isinstance(result, dict) else {}
+
+    def complete_membership_run(
+        self,
+        user: CloudUser,
+        flow_id: str,
+        grading_run_id: str,
+    ) -> dict[str, Any]:
+        """Bind a successful reservation to its persisted first-draft run."""
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/complete_membership_run",
+            payload={"p_flow_id": flow_id, "p_grading_run_id": grading_run_id},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def release_membership_run(
+        self, user: CloudUser, flow_id: str
+    ) -> dict[str, Any]:
+        """Release a failed essay-cycle reservation without consuming quota."""
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/release_membership_run",
+            payload={"p_flow_id": flow_id},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def get_membership_run_access(
+        self, user: CloudUser, grading_run_id: str
+    ) -> dict[str, Any]:
+        """Return per-run training and second-draft allowances."""
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/get_membership_run_access",
+            payload={"p_grading_run_id": grading_run_id},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def reserve_training_action(
+        self,
+        user: CloudUser,
+        grading_run_id: str,
+        flow_id: str,
+        task_kind: str,
+        task_key: str,
+    ) -> dict[str, Any]:
+        """Reserve one sentence/logic review; store only an opaque task key."""
+        task_key_hash = self._practice_task_key_hash(task_kind, task_key)
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/reserve_training_action",
+            payload={
+                "p_grading_run_id": grading_run_id,
+                "p_flow_id": flow_id,
+                "p_task_kind": task_kind,
+                "p_task_key_hash": task_key_hash,
+            },
+        )
+        return result if isinstance(result, dict) else {}
+
+    @staticmethod
+    def _practice_task_key_hash(task_kind: str, task_key: str) -> str:
+        """Return the opaque task identity shared by reservations and attempts."""
+        return hashlib.sha256(f"{task_kind}\0{task_key}".encode("utf-8")).hexdigest()
+
+    def complete_training_action(
+        self, user: CloudUser, flow_id: str
+    ) -> dict[str, Any]:
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/complete_training_action",
+            payload={"p_flow_id": flow_id},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def release_training_action(
+        self, user: CloudUser, flow_id: str
+    ) -> dict[str, Any]:
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/release_training_action",
+            payload={"p_flow_id": flow_id},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def reserve_second_draft_action(
+        self,
+        user: CloudUser,
+        grading_run_id: str,
+        flow_id: str,
+        content_hash: str,
+    ) -> dict[str, Any]:
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/reserve_second_draft_action",
+            payload={
+                "p_grading_run_id": grading_run_id,
+                "p_flow_id": flow_id,
+                "p_content_hash": content_hash,
+            },
+        )
+        return result if isinstance(result, dict) else {}
+
+    def complete_second_draft_action(
+        self,
+        user: CloudUser,
+        flow_id: str,
+        revised_grading_run_id: str,
+    ) -> dict[str, Any]:
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/complete_second_draft_action",
+            payload={
+                "p_flow_id": flow_id,
+                "p_revised_grading_run_id": revised_grading_run_id,
+            },
+        )
+        return result if isinstance(result, dict) else {}
+
+    def release_second_draft_action(
+        self, user: CloudUser, flow_id: str
+    ) -> dict[str, Any]:
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/release_second_draft_action",
+            payload={"p_flow_id": flow_id},
+        )
+        return result if isinstance(result, dict) else {}
+
+    def list_pending_membership_requests(
+        self, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """List manual-review requests using only the server credential."""
+        if not self.enabled or not self.server_key:
+            raise CloudStoreError("Membership review requires a server-only key.")
+        safe_limit = max(1, min(200, int(limit)))
+        result = self._request(
+            "GET",
+            "/rest/v1/membership_requests",
+            access_token="" if self.server_key.startswith("sb_secret_") else self.server_key,
+            api_key=self.server_key,
+            params={
+                "select": (
+                    "id,request_code,user_id,status,amount_cny,currency,"
+                    "payment_reference,paid_at,note,created_at,reviewed_at,reviewed_by"
+                ),
+                "status": "eq.pending",
+                "order": "created_at.asc",
+                "limit": str(safe_limit),
+            },
+        )
+        return result if isinstance(result, list) else []
+
+    def approve_membership_request(self, request_id: str) -> dict[str, Any]:
+        """Idempotently approve one request using only the server credential."""
+        if not self.enabled or not self.server_key:
+            raise CloudStoreError("Membership approval requires a server-only key.")
+        result = self._request(
+            "POST",
+            "/rest/v1/rpc/approve_membership_request",
+            access_token="" if self.server_key.startswith("sb_secret_") else self.server_key,
+            api_key=self.server_key,
+            payload={"p_request_id": request_id},
+        )
+        return result if isinstance(result, dict) else {}
 
     def record_product_event(
         self,
@@ -848,33 +1091,101 @@ class SupabaseStore:
         *,
         grading_run_id: str,
         task_kind: str,
+        task_key: str,
         task_index: int,
         original_text: str,
         submitted_text: str,
         feedback: str,
+        training_action_id: str = "",
+        training_flow_id: str = "",
         revision_text: str = "",
         mastered: bool = False,
         error_tags: list[str] | None = None,
-    ) -> None:
-        self._authenticated_request(
+    ) -> dict[str, Any]:
+        task_key_hash = self._practice_task_key_hash(task_kind, task_key)
+        payload: dict[str, Any] = {
+            "p_grading_run_id": grading_run_id,
+            "p_action_id": training_action_id or None,
+            "p_flow_id": training_flow_id or None,
+            "p_task_kind": task_kind,
+            "p_task_key_hash": task_key_hash,
+            "p_task_index": task_index,
+            "p_original_text": original_text,
+            "p_submitted_text": submitted_text,
+            "p_feedback": feedback,
+            "p_revision_text": revision_text,
+            "p_mastered": mastered,
+            "p_error_tags": error_tags or [],
+        }
+        if training_action_id or training_flow_id:
+            if not training_action_id or not training_flow_id:
+                raise CloudStoreError(
+                    "A practice proof requires both its action and flow identifiers."
+                )
+        result = self._authenticated_request(
             user,
             "POST",
+            "/rest/v1/rpc/save_training_practice_attempt",
+            payload=payload,
+        )
+        if not isinstance(result, dict) or not result.get("id"):
+            raise CloudStoreError("The saved practice feedback could not be confirmed.")
+        return result
+
+    def get_practice_attempt(
+        self,
+        user: CloudUser,
+        *,
+        grading_run_id: str,
+        task_kind: str,
+        task_key: str,
+    ) -> dict[str, Any] | None:
+        """Load one persisted sentence/logic attempt by its stable task identity."""
+        result = self._authenticated_request(
+            user,
+            "GET",
             "/rest/v1/practice_attempts",
-            params={"on_conflict": "user_id,grading_run_id,task_kind,task_index"},
-            prefer="resolution=merge-duplicates,return=minimal",
-            payload={
-                "user_id": user.id,
-                "grading_run_id": grading_run_id,
-                "task_kind": task_kind,
-                "task_index": task_index,
-                "original_text": original_text,
-                "submitted_text": submitted_text,
-                "feedback": feedback,
-                "revision_text": revision_text,
-                "status": "mastered" if mastered else "in_progress",
-                "error_tags": error_tags or [],
+            params={
+                "select": (
+                    "id,grading_run_id,task_kind,task_key_hash,task_index,original_text,"
+                    "submitted_text,feedback,revision_text,status,error_tags,"
+                    "training_action_id,training_flow_id,feedback_persisted_at,"
+                    "settled_at,created_at,updated_at"
+                ),
+                "user_id": f"eq.{user.id}",
+                "grading_run_id": f"eq.{grading_run_id}",
+                "task_kind": f"eq.{task_kind}",
+                "task_key_hash": f"eq.{self._practice_task_key_hash(task_kind, task_key)}",
+                "limit": "1",
             },
         )
+        if not isinstance(result, list) or not result:
+            return None
+        return result[0] if isinstance(result[0], dict) else None
+
+    def list_practice_attempts_for_run(
+        self,
+        user: CloudUser,
+        grading_run_id: str,
+    ) -> list[dict[str, Any]]:
+        """Load all persisted practice attempts for one owned grading run."""
+        result = self._authenticated_request(
+            user,
+            "GET",
+            "/rest/v1/practice_attempts",
+            params={
+                "select": (
+                    "id,grading_run_id,task_kind,task_key_hash,task_index,original_text,"
+                    "submitted_text,feedback,revision_text,status,error_tags,"
+                    "training_action_id,training_flow_id,feedback_persisted_at,"
+                    "settled_at,created_at,updated_at"
+                ),
+                "user_id": f"eq.{user.id}",
+                "grading_run_id": f"eq.{grading_run_id}",
+                "order": "task_kind.asc,task_index.asc",
+            },
+        )
+        return [row for row in result if isinstance(row, dict)] if isinstance(result, list) else []
 
     def list_pending_practice(self, user: CloudUser, limit: int = 10) -> list[dict[str, Any]]:
         result = self._authenticated_request(
@@ -882,7 +1193,7 @@ class SupabaseStore:
             "GET",
             "/rest/v1/practice_attempts",
             params={
-                "select": "id,grading_run_id,task_kind,task_index,original_text,submitted_text,feedback,revision_text,status,error_tags,updated_at",
+                "select": "id,grading_run_id,task_kind,task_key_hash,task_index,original_text,submitted_text,feedback,revision_text,status,error_tags,training_action_id,training_flow_id,feedback_persisted_at,settled_at,updated_at",
                 "status": "eq.in_progress",
                 "order": "updated_at.desc",
                 "limit": str(limit),
@@ -910,6 +1221,75 @@ class SupabaseStore:
             )
         return result if isinstance(result, list) else []
 
+    def get_draft_revision(
+        self, user: CloudUser, grading_run_id: str
+    ) -> dict[str, Any] | None:
+        """Load the single persisted Draft 2 result for an original grading run."""
+        params = {
+            "select": "id,essay_id,grading_run_id,revised_grading_run_id,draft_number,content,score_snapshot,report_json,report_markdown,progress_report,created_at,revised_run:grading_runs!draft_revisions_revised_grading_run_id_fkey(id,overall_band,report_json,report_markdown,essays(question,content))",
+            "grading_run_id": f"eq.{grading_run_id}",
+            "draft_number": "eq.2",
+            "order": "created_at.desc",
+            "limit": "1",
+        }
+        try:
+            result = self._authenticated_request(
+                user, "GET", "/rest/v1/draft_revisions", params=params
+            )
+        except CloudSessionExpiredError:
+            raise
+        except CloudStoreError as exc:
+            if not _missing_column_error(exc, "revised_grading_run_id"):
+                raise
+            params["select"] = (
+                "id,essay_id,grading_run_id,draft_number,content,score_snapshot,"
+                "report_json,report_markdown,progress_report,created_at"
+            )
+            result = self._authenticated_request(
+                user, "GET", "/rest/v1/draft_revisions", params=params
+            )
+        return result[0] if isinstance(result, list) and result else None
+
+    def save_second_draft_result(
+        self,
+        user: CloudUser,
+        *,
+        grading_run_id: str,
+        flow_id: str,
+        question: str,
+        content: str,
+        word_count: int,
+        content_hash: str,
+        package: dict[str, Any],
+        scores: dict[str, float | None],
+        progress_report: str,
+    ) -> dict[str, Any]:
+        """Atomically persist a linked grading run and its one Draft 2 revision."""
+        structured = package["structured"]
+        result = self._authenticated_request(
+            user,
+            "POST",
+            "/rest/v1/rpc/save_second_draft_result",
+            payload={
+                "p_grading_run_id": grading_run_id,
+                "p_flow_id": flow_id,
+                "p_question": question,
+                "p_content": content,
+                "p_word_count": word_count,
+                "p_content_hash": content_hash,
+                "p_overall_band": structured["overall_band"],
+                "p_criteria": structured["criteria"],
+                "p_report_json": structured,
+                "p_report_markdown": package["report"],
+                "p_model": package["model"],
+                "p_prompt_version": package["prompt_version"],
+                "p_skill_version": package["skill_version"],
+                "p_score_snapshot": scores,
+                "p_progress_report": progress_report,
+            },
+        )
+        return result if isinstance(result, dict) else {}
+
     def save_draft_revision(
         self,
         user: CloudUser,
@@ -933,13 +1313,15 @@ class SupabaseStore:
             "report_json": {} if revised_grading_run_id else report_json,
             "report_markdown": "" if revised_grading_run_id else report_markdown,
             "progress_report": progress_report,
+            "idempotency_key": f"second-draft:{grading_run_id}",
         }
         if revised_grading_run_id:
             payload["revised_grading_run_id"] = revised_grading_run_id
         try:
             self._authenticated_request(
                 user, "POST", "/rest/v1/draft_revisions",
-                prefer="return=minimal", payload=payload,
+                params={"on_conflict": "user_id,idempotency_key"},
+                prefer="resolution=merge-duplicates,return=minimal", payload=payload,
             )
         except CloudSessionExpiredError:
             raise
@@ -949,6 +1331,7 @@ class SupabaseStore:
             if not _missing_column_error(exc, "revised_grading_run_id"):
                 raise
             payload.pop("revised_grading_run_id", None)
+            payload.pop("idempotency_key", None)
             payload["report_json"] = report_json
             payload["report_markdown"] = report_markdown
             self._authenticated_request(
