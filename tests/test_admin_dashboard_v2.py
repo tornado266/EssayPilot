@@ -124,7 +124,7 @@ dashboard.render_admin_dashboard()
 
         self.assertEqual(len(app.exception), 0)
         self.assertIn(
-            "创始体验包人工核单", [item.value for item in app.subheader]
+            "3 篇训练包人工核单", [item.value for item in app.subheader]
         )
         self.assertTrue(any(
             "暂时无法读取或批准待核单申请" in item.value
@@ -173,6 +173,9 @@ REQUEST = {
     "id": "10000000-0000-0000-0000-000000000001",
     "request_code": "EP-ABC123",
     "user_id": "20000000-0000-0000-0000-000000000002",
+    "plan_code": "renewal_pass_30d_3runs",
+    "amount_cny": 9.90,
+    "currency": "CNY",
     "payment_reference": "ORDER-7788",
     "paid_at": "2026-09-01T12:30:00Z",
     "note": "微信收款",
@@ -200,7 +203,8 @@ dashboard.render_admin_dashboard()
         for expected in (
             "申请编号：EP-ABC123",
             "用户 ID：20000000-0000-0000-0000-000000000002",
-            "应核金额：¥7.50 CNY",
+            "申请套餐：3 篇续包",
+            "应核金额：¥9.90 CNY",
             "订单号：ORDER-7788",
             "付款时间：2026-09-01 20:30",
             "备注：微信收款",
@@ -223,7 +227,7 @@ dashboard.render_admin_dashboard()
 
         app = next(
             checkbox for checkbox in app.checkbox
-            if "我已在收款记录中核对" in checkbox.label
+            if "实付 ¥9.90" in checkbox.label
         ).set_value(True).run()
         self.assertEqual(app.session_state["approval_calls"], [])
         app = next(

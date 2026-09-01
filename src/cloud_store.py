@@ -327,7 +327,7 @@ class SupabaseStore:
         ))
 
     def get_membership_entitlement(self, user: CloudUser) -> dict[str, Any]:
-        """Return the authenticated user's current founder-pass snapshot."""
+        """Return the user's current pack and server-priced next offer."""
         result = self._authenticated_request(
             user,
             "POST",
@@ -344,7 +344,8 @@ class SupabaseStore:
             "/rest/v1/membership_requests",
             params={
                 "select": (
-                    "id,application_code:request_code,status,payment_reference,"
+                    "id,application_code:request_code,status,plan_code,"
+                    "amount_cny,currency,payment_reference,"
                     "submitted_at:created_at,reviewed_at"
                 ),
                 "order": "created_at.desc",
@@ -382,7 +383,7 @@ class SupabaseStore:
         *,
         grading_run_id: str = "",
     ) -> dict[str, Any]:
-        """Atomically reserve one of the member's three essay-cycle slots."""
+        """Atomically reserve one slot from the current three-essay pack."""
         result = self._authenticated_request(
             user,
             "POST",
@@ -545,7 +546,7 @@ class SupabaseStore:
             api_key=self.server_key,
             params={
                 "select": (
-                    "id,request_code,user_id,status,amount_cny,currency,"
+                    "id,request_code,user_id,status,plan_code,amount_cny,currency,"
                     "payment_reference,paid_at,note,created_at,reviewed_at,reviewed_by"
                 ),
                 "status": "eq.pending",

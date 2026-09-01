@@ -489,8 +489,8 @@ def _render_history_and_health(data: dict[str, object]) -> None:
 
 
 def _render_membership_review(store: SupabaseStore) -> None:
-    """Render manual founder-pass review without blocking aggregate analytics."""
-    st.subheader("创始体验包人工核单")
+    """Render manual first-pack and renewal review without blocking analytics."""
+    st.subheader("3 篇训练包人工核单")
     st.caption("仅处理待审核申请。请以收款渠道记录为准，不要仅依据用户备注批准。")
     if not getattr(store, "server_key", ""):
         st.warning(
@@ -506,7 +506,7 @@ def _render_membership_review(store: SupabaseStore) -> None:
         return
 
     if not pending_requests:
-        st.info("当前没有待审核的创始体验包申请。")
+        st.info("当前没有待审核的训练包申请。")
         return
 
     st.caption(f"待审核 {len(pending_requests)} 笔 · 时间均按 Asia/Shanghai 显示")
@@ -515,11 +515,18 @@ def _render_membership_review(store: SupabaseStore) -> None:
     for request in pending_requests:
         request_id = str(request.get("id") or "")
         request_code = str(request.get("request_code") or "—")
+        plan_code = str(request.get("plan_code") or "founder_pass_30d_3runs")
+        plan_label = (
+            "3 篇续包"
+            if plan_code == "renewal_pass_30d_3runs"
+            else "创始体验首包"
+        )
         amount = float(request.get("amount_cny") or 7.50)
         currency = str(request.get("currency") or "CNY")
         with st.container(border=True):
             st.text(f"申请编号：{request_code}")
             st.text(f"用户 ID：{str(request.get('user_id') or '—')}")
+            st.text(f"申请套餐：{plan_label}")
             st.text(f"应核金额：¥{amount:.2f} {currency}")
             st.text(f"订单号：{str(request.get('payment_reference') or '—')}")
             st.text(f"付款时间：{_shanghai_time(request.get('paid_at'))}")
@@ -541,7 +548,7 @@ def _render_membership_review(store: SupabaseStore) -> None:
                 continue
             st.warning("批准后会立即开始 30 天有效期并发放 3 篇完整训练额度。")
             confirmed = st.checkbox(
-                "我已在收款记录中核对：订单号一致、实付 ¥7.50、付款时间合理。",
+                f"我已在收款记录中核对：订单号一致、实付 ¥{amount:.2f}、付款时间合理。",
                 key=f"membership_review_confirm_{request_id}",
             )
             if st.button(

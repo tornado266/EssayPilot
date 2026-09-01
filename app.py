@@ -76,9 +76,11 @@ from src.learning_assets import (
 )
 from src.membership import (
     FOUNDER_OFFER,
+    RENEWAL_OFFER,
     action_reason_message,
     entitlement_caption,
     normalize_entitlement,
+    offer_for_entitlement,
 )
 from src.issue_map import (
     CRITERION_LABELS as ISSUE_MAP_CRITERION_LABELS,
@@ -750,10 +752,27 @@ def render_founder_offer(
     key: str,
     intro: str = "",
 ) -> None:
-    """Render the manual-payment beta offer without collecting payment screenshots."""
+    """Render the server-selected first pack or renewal manual-payment offer."""
     with st.container(border=True):
-        st.markdown("### 创始体验包")
-        st.markdown("## ¥7.5 / 30 天")
+        entitlement = normalize_entitlement({"status": "none"})
+        entitlement_error = ""
+        if user is not None:
+            entitlement, entitlement_error = load_membership_entitlement(store, user)
+        offer = offer_for_entitlement(entitlement)
+        is_renewal = offer.plan_code == RENEWAL_OFFER.plan_code
+        offer_name = "3 篇续包" if is_renewal else "创始体验首包"
+        price_label = format(offer.price_cny, ".1f")
+
+        offer_heading = (
+            f"下一包：{offer_name}"
+            if entitlement.get("active") and int(entitlement.get("runs_remaining") or 0) > 0
+            else offer_name
+        )
+        st.markdown(f"### {offer_heading}")
+        if user is None:
+            st.markdown("## 首包 ¥7.5，之后每包 ¥9.9")
+        else:
+            st.markdown(f"## ¥{price_label} / 30 天 / 3 篇")
         if intro:
             st.write(intro)
         st.write(
@@ -764,7 +783,11 @@ def render_founder_offer(
             "30 天与 3 篇任一先达到即结束 · 绑定当前账号 · 不自动续费 · "
             "表达库独立造句 AI 点评暂不包含"
         )
-        st.caption("每个账号限开一次 · 权益不可转移 · 未使用权益不自动延期、转赠或折现")
+        if is_renewal:
+            st.caption("首包之后每包 ¥9.9 / 3 篇 · 可重复续包 · 每包均需单独人工核对")
+        else:
+            st.caption("每个账号仅有 1 个 ¥7.5 首包 · 之后每个 3 篇续包 ¥9.9")
+        st.caption("权益不可转移 · 未使用权益不自动延期、转赠或折现")
         st.caption("查看、下载已生成内容不计次数；模型失败不扣次数。AI 估分不等同于 IELTS 官方成绩。")
         if user is None:
             st.button(
@@ -777,15 +800,22 @@ def render_founder_offer(
             )
             return
 
-        entitlement, entitlement_error = load_membership_entitlement(store, user)
         if entitlement_error:
             st.warning("暂时无法读取开通状态，请稍后刷新；系统不会因此扣除篇数。")
             return
-        if entitlement.get("active"):
+        if entitlement.get("active") and int(entitlement.get("runs_remaining") or 0) > 0:
             st.success(entitlement_caption(entitlement))
+            st.caption("当前包用完 3 篇或到期后，才会开放 ¥9.9 / 3 篇续包申请。")
             return
-        if str(entitlement.get("status") or "none") != "none":
+        if not entitlement.get("can_purchase"):
             st.info(entitlement_caption(entitlement))
+            return
+
+        # Display must agree with the authoritative offer metadata. If a
+        # partially deployed backend returns an unknown plan or price, do not
+        # accept a payment reference.
+        if not entitlement.get("server_offer_verified"):
+            st.warning("套餐价格暂时无法安全确认，付费申请未开放。请稍后刷新。")
             return
 
         payment_qr = _app_setting("FOUNDER_PAYMENT_QR_URL")
@@ -797,10 +827,14 @@ def render_founder_offer(
         request_status = str(request.get("status") or "")
         if request_status in {"pending", "reviewing", "needs_info"}:
             application_code = str(request.get("application_code") or "")
+            request_plan = str(request.get("plan_code") or offer.plan_code)
+            request_name = "3 篇续包" if request_plan == RENEWAL_OFFER.plan_code else "创始体验首包"
+            request_amount = str(request.get("amount_cny") or price_label)
             label = "付款信息已提交，正在人工核对。有效期将在实际开通时开始计算。"
             if request_status == "needs_info":
                 label = "这笔申请需要补充信息，请按下方联系方式与管理员确认。"
             st.info(label)
+            st.caption(f"申请套餐：{request_name} · 应核金额 ¥{request_amount}")
             if application_code:
                 st.code(application_code, language="text")
             if support_contact:
@@ -813,7 +847,7 @@ def render_founder_offer(
             if payment_ready:
                 st.caption(f"当前绑定邮箱：{user.email}")
                 if payment_qr:
-                    st.image(payment_qr, caption="创始体验包收款入口", width=260)
+                    st.image(payment_qr, caption=f"{offer_name}收款入口", width=260)
                 st.info(payment_instructions)
                 st.caption(f"核对、退款或异常联系：{support_contact}")
                 st.caption(f"退款说明：{refund_policy}")
@@ -825,7 +859,8 @@ def render_founder_offer(
                     paid_at = st.text_input("付款时间（选填）", placeholder="例如：2026-09-01 20:30")
                     note = st.text_input("付款备注（选填）", placeholder="只填写核对这笔付款所需的信息")
                     terms_confirmed = st.checkbox(
-                        "我已确认：¥7.5、30 天、最多 3 篇、不自动续费，并同意上述退款说明。"
+                        f"我已确认：{offer_name} ¥{price_label}、30 天、最多 3 篇、"
+                        "不自动续费，并同意上述退款说明。"
                     )
                     submitted = st.form_submit_button("提交人工核对", type="primary", use_container_width=True)
                 if submitted:
@@ -848,14 +883,24 @@ def render_founder_offer(
                             code = str((created or {}).get("application_code") or "")
                             reason = str((created or {}).get("reason") or "")
                             if (created or {}).get("created"):
-                                st.success("付款信息已提交，人工核对后 30 天有效期才会开始。")
+                                st.success(
+                                    f"{offer_name}付款信息已提交，人工核对后 30 天有效期才会开始。"
+                                )
                             elif reason in {"already_submitted", "pending_request_exists"}:
                                 st.info("这笔付款或当前账号已有待核对申请，请勿重复付款。")
-                            elif reason == "membership_exists":
-                                st.info("当前账号已经开通过创始体验包，不能重复购买。")
+                            elif reason in {
+                                "membership_exists",
+                                "active_membership",
+                                "purchase_not_allowed",
+                            }:
+                                st.info("当前权益仍可使用，暂时不能提交续包申请。")
                             else:
                                 st.error("本次没有建立核对申请，请联系管理员确认。")
-                            if code and reason != "membership_exists":
+                            if code and reason not in {
+                                "membership_exists",
+                                "active_membership",
+                                "purchase_not_allowed",
+                            }:
                                 st.code(code, language="text")
         if st.button("刷新开通状态", key=f"refresh_membership_{key}", use_container_width=True):
             clear_membership_cache()
@@ -4036,7 +4081,7 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                     elif user is None:
                         st.info(action_reason_message(exc.reason))
                         st.button(
-                            "登录后查看创始体验包",
+                            "登录后查看 3 篇训练包",
                             type="primary",
                             on_click=open_cloud_login,
                             args=("write",),
@@ -4827,7 +4872,7 @@ def render_expression_library(
         st.write(str(expression.get("meaning") or ""))
         st.caption(str(expression.get("usage_note") or ""))
         sentence = st.text_area("你的英文句子", key="expression_student_sentence", height=130)
-        st.caption("静态表达、释义和例句可以继续使用；独立造句 AI 点评不包含在当前创始体验包中。")
+        st.caption("静态表达、释义和例句可以继续使用；独立造句 AI 点评不包含在当前 3 篇训练包中。")
         st.button("独立造句 AI 点评暂未开放", disabled=True, use_container_width=True)
         result = st.session_state.get("expression_practice_result")
         if isinstance(result, dict):

@@ -193,19 +193,26 @@ class MembershipAppWiringTests(unittest.TestCase):
             second_draft,
         )
 
-    def test_offer_copy_discloses_the_frozen_limits(self):
+    def test_offer_copy_discloses_first_and_renewal_prices_and_frozen_limits(self):
         offer = self.source.split("def render_founder_offer", 1)[1].split(
             "def render_training_access_gate", 1
         )[0]
-        for text in ("¥7.5 / 30 天", "3 篇", "3 次专项 AI 点评", "1 次二稿", "不自动续费"):
+        for text in ("¥7.5", "¥9.9", "3 篇", "3 次专项 AI 点评", "1 次二稿", "不自动续费"):
             self.assertIn(text, offer)
+        self.assertIn("可重复续包", offer)
+        self.assertIn("每包均需单独人工核对", offer)
 
     def test_offer_fails_closed_and_hides_partial_payment_configuration(self):
         offer = self.source.split("def render_founder_offer", 1)[1].split(
             "def render_training_access_gate", 1
         )[0]
         self.assertLess(offer.index("if entitlement_error:"), offer.index("payment_qr ="))
-        self.assertIn('if str(entitlement.get("status") or "none") != "none":', offer)
+        self.assertIn('if not entitlement.get("can_purchase"):', offer)
+        self.assertIn('if not entitlement.get("server_offer_verified"):', offer)
+        self.assertLess(
+            offer.index('if not entitlement.get("server_offer_verified"):'),
+            offer.index("payment_qr ="),
+        )
         self.assertIn(
             "payment_ready = bool(payment_instructions and support_contact and refund_policy)",
             offer,
@@ -213,6 +220,35 @@ class MembershipAppWiringTests(unittest.TestCase):
         payment_branch = offer.split("if payment_ready:", 1)[1]
         self.assertIn("st.image(payment_qr", payment_branch)
         self.assertIn("with st.form", payment_branch)
+
+    def test_active_pack_with_remaining_quota_never_shows_purchase_form(self):
+        offer = self.source.split("def render_founder_offer", 1)[1].split(
+            "def render_training_access_gate", 1
+        )[0]
+        active_guard = offer.index(
+            'if entitlement.get("active") and int(entitlement.get("runs_remaining") or 0) > 0:'
+        )
+        payment_form = offer.index("with st.form")
+        self.assertLess(active_guard, payment_form)
+        guarded_body = offer[active_guard: offer.index('if not entitlement.get("can_purchase"):', active_guard)]
+        self.assertIn("return", guarded_body)
+
+    def test_client_does_not_choose_or_send_a_plan_or_price(self):
+        tree = ast.parse(self.source)
+        render = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "render_founder_offer"
+        )
+        create_call = next(
+            node
+            for node in ast.walk(render)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "create_membership_request"
+        )
+        self.assertEqual(len(create_call.args), 2)
+        self.assertEqual({keyword.arg for keyword in create_call.keywords}, {"paid_at", "note"})
 
     def test_expired_paid_runs_are_rendered_read_only(self):
         gate = self.source.split("def render_training_access_gate", 1)[1].split(

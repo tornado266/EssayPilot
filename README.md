@@ -52,9 +52,9 @@ EssayPilot 把重点放在反馈之后：
 5. 提交第二稿，查看两稿变化和下一轮优先级。
 6. 在“学习档案”中复习反复出现的错误、积累表达并追踪进步。
 
-在线版允许当前浏览器的访客免费生成 1 次首稿完整报告；登录后可以保存、下载报告，并在不同设备间同步学习记录。AI 专项训练和第二稿验证属于创始体验包权益。本地运行时，数据也可以只保存在当前电脑。
+在线版允许当前浏览器的访客免费生成 1 次首稿完整报告；登录后可以保存、下载报告，并在不同设备间同步学习记录。AI 专项训练和第二稿验证属于 3 篇训练包权益。本地运行时，数据也可以只保存在当前电脑。
 
-创始体验包为 **¥7.5 / 30 天**，最多选择 3 篇作文进入完整训练。每篇含 1 份首稿报告、最多 3 次专项 AI 点评和 1 次二稿评分与两稿对比；30 天与 3 篇任一先达到即结束，不自动续费。当前采用支付订单号人工核对，开通时间以审核通过时为准。
+每个账号的创始体验首包为 **¥7.5 / 30 天 / 3 篇**；首包用完或到期后，后续每个 3 篇续包为 **¥9.9 / 30 天 / 3 篇**，可重复购买。每篇含 1 份首稿报告、最多 3 次专项 AI 点评和 1 次二稿评分与两稿对比；30 天与 3 篇任一先达到即结束。所有套餐都不自动续费，当前采用支付订单号人工核对，开通时间以审核通过时为准。当前包仍有可用篇数或存在处理中请求时，系统不会接受下一包申请。
 
 ## 完整产品导览
 
@@ -179,10 +179,11 @@ ALLOW_LOCAL_UNMETERED_AI=false
 ```
 
 新建 Supabase 项目时，在 SQL Editor 中运行 `supabase/schema.sql`。已有项目应按文件名顺序执行
-`20260901_founder_membership.sql`、`20260901120000_guest_trial_idempotency.sql` 和
-`20260901130000_second_draft_idempotency.sql`。应用会优先读取 Streamlit Secrets，再回退到本地环境变量。
+`20260901_founder_membership.sql`、`20260901120000_guest_trial_idempotency.sql`、
+`20260901130000_second_draft_idempotency.sql` 和
+`20260901140000_membership_renewal_packs.sql`。应用会优先读取 Streamlit Secrets，再回退到本地环境变量。
 
-如需开放创始体验包，先完成数据库升级，再同时配置 `FOUNDER_PAYMENT_INSTRUCTIONS`、`FOUNDER_SUPPORT_CONTACT` 与 `FOUNDER_REFUND_POLICY`；缺少任一项时，应用只展示套餐说明，不接受付款核对申请。`FOUNDER_PAYMENT_QR_URL` 可按实际收款方式选配。人工审批入口为管理员登录后的 `?admin=1` 页面。
+如需开放首包与续包，先完成数据库升级，再同时配置 `FOUNDER_PAYMENT_INSTRUCTIONS`、`FOUNDER_SUPPORT_CONTACT` 与 `FOUNDER_REFUND_POLICY`；缺少任一项时，应用只展示套餐说明，不接受付款核对申请。`FOUNDER_PAYMENT_QR_URL` 可按实际收款方式选配。客户端不提交或决定套餐价格：服务端根据账号的已核销购买记录确定本次是 ¥7.5 首包还是 ¥9.9 续包。人工审批入口为管理员登录后的 `?admin=1` 页面。
 
 “当前浏览器免费 1 次”依赖浏览器本地身份，只是一层低摩擦体验限制，不是可靠的反滥用边界。公开引流前还应在部署入口配置 CAPTCHA、来源限速或等价的服务端成本上限。
 
@@ -206,7 +207,7 @@ streamlit run app.py
 | `ADMIN_EMAILS` | 否 | 管理员邮箱白名单，多个邮箱用逗号分隔 |
 | `ADMIN_PASSWORD` | 否 | 未配置邮箱白名单时的管理页备用验证 |
 | `BETA_START_AT` | 否 | 公测统计的起始时间 |
-| `FOUNDER_PAYMENT_QR_URL` | 否 | 可选的创始体验包收款二维码图片地址；也可以只在付款说明中提供收款方式 |
+| `FOUNDER_PAYMENT_QR_URL` | 否 | 可选的首包/续包收款二维码图片地址；也可以只在付款说明中提供收款方式 |
 | `FOUNDER_PAYMENT_INSTRUCTIONS` | 否 | 用户可见的付款与人工核对说明 |
 | `FOUNDER_SUPPORT_CONTACT` | 否 | 核对、退款和异常处理的真实联系方式 |
 | `FOUNDER_REFUND_POLICY` | 否 | 用户可见的退款与未使用权益说明 |
