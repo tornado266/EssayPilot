@@ -7,8 +7,10 @@ from streamlit.testing.v1 import AppTest
 
 from ui.alpine import (
     CSS_PATH,
+    ESSAYPILOT_LOGO_PATH,
     render_guest_home_intro,
     render_home_action_card,
+    render_home_heading,
     render_home_preview_link,
 )
 
@@ -64,6 +66,21 @@ class HomePageUiTests(unittest.TestCase):
         self.assertIn("?page=training&amp;run_id=a&amp;next=bad", body)
         self.assertIn("?page=write&amp;mode=topics", body)
         self.assertEqual(captured["kwargs"], {})
+
+    def test_signed_in_home_heading_uses_official_logo_asset(self):
+        captured: dict[str, object] = {}
+
+        with patch(
+            "ui.alpine.st.html",
+            side_effect=lambda body, **kwargs: captured.update(body=body, kwargs=kwargs),
+        ):
+            render_home_heading()
+
+        body = str(captured["body"])
+        self.assertTrue(ESSAYPILOT_LOGO_PATH.is_file())
+        self.assertIn('class="ep-home-heading__logo"', body)
+        self.assertIn('src="data:image/png;base64,', body)
+        self.assertIn('alt="EssayPilot"', body)
 
     def test_signed_in_home_is_action_first_and_reads_only_small_snapshots(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
@@ -144,9 +161,12 @@ class HomePageUiTests(unittest.TestCase):
         css = Path(CSS_PATH).read_text(encoding="utf-8")
 
         self.assertIn(".ep-home-action", css)
+        self.assertIn(".ep-home-heading__logo", css)
+        self.assertIn(':has(.mobile-product-nav)', css)
         self.assertIn("min-height: 44px", css)
         self.assertIn("overflow-wrap: anywhere", css)
         self.assertIn("@media (max-width: 768px)", css)
+        self.assertIn("display: block", css)
         self.assertIn(".ep-home-preview", css)
         self.assertIn("grid-row: 2", css)
 

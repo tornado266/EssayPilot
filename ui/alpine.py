@@ -22,6 +22,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 CSS_PATH = BASE_DIR / "styles" / "essaypilot_alpine.css"
 HERO_WEBP_PATH = BASE_DIR / "assets" / "alpine" / "hero-mountain.webp"
 HERO_JPG_PATH = BASE_DIR / "assets" / "alpine" / "hero-mountain.jpg"
+ESSAYPILOT_LOGO_PATH = BASE_DIR / "assets" / "essaypilot-logo.png"
 
 
 @dataclass(frozen=True)
@@ -119,7 +120,13 @@ def paragraph_diff_html(original: str, revised: str) -> str:
 @lru_cache(maxsize=4)
 def _image_data_uri(path_string: str) -> str:
     path = Path(path_string)
-    mime = "image/webp" if path.suffix.lower() == ".webp" else "image/jpeg"
+    mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+    }
+    mime = mime_types.get(path.suffix.lower(), "application/octet-stream")
     payload = base64.b64encode(path.read_bytes()).decode("ascii")
     return f"data:{mime};base64,{payload}"
 
@@ -232,10 +239,18 @@ def render_home_heading(
     eyebrow: str = "ESSAYPILOT",
 ) -> None:
     """Render the compact heading used by the action-first signed-in home page."""
+    if ESSAYPILOT_LOGO_PATH.exists():
+        logo_uri = _image_data_uri(str(ESSAYPILOT_LOGO_PATH))
+        brand_html = (
+            '<img class="ep-home-heading__logo" '
+            f'src="{html.escape(logo_uri, quote=True)}" alt="EssayPilot">'
+        )
+    else:
+        brand_html = html.escape(str(eyebrow))
     st.html(
         f"""
         <header class="ep-home-heading">
-            <span>{html.escape(str(eyebrow))}</span>
+            <div class="ep-home-heading__brand">{brand_html}</div>
             <h1>{html.escape(str(title))}</h1>
             <p>{html.escape(str(subtitle))}</p>
         </header>

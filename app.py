@@ -1928,7 +1928,6 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
     if not summary.has_history:
         return False
 
-    render_anchor("learning-dashboard")
     render_home_heading(
         title="学习首页",
         subtitle="继续未完成的训练，或从剑雅真题开始下一篇。",
