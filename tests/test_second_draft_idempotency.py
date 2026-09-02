@@ -1,6 +1,8 @@
 import ast
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import Mock, patch
 
 from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
@@ -116,6 +118,113 @@ class DraftTwoSessionTests(unittest.TestCase):
         self.assertEqual(result["parent_grading_run_id"], "run-1")
         self.assertFalse(result["settlement_pending"])
 
+    def test_feedback_generation_parallelizes_teaching_and_comparison(self):
+        barrier = Barrier(2)
+        scoring_package = {
+            "structured": {"overall_band": 7.0, "criteria": []},
+            "scoring": {"overall_band": 7.0, "criteria": []},
+        }
+
+        def teaching(**kwargs):
+            self.assertIs(kwargs["locked_scoring_package"], scoring_package)
+            barrier.wait(timeout=2)
+            return {"structured": {"overall_band": 7.0}, "report": "report"}
+
+        def comparison(**kwargs):
+            self.assertEqual(kwargs["draft_2_scores"]["Overall Band"], 7.0)
+            barrier.wait(timeout=2)
+            return "progress"
+
+        generate = load_app_function(
+            "generate_draft_2_feedback",
+            {
+                "ThreadPoolExecutor": ThreadPoolExecutor,
+                "get_provider_config": lambda _provider: (
+                    "OPENAI_API_KEY",
+                    "key",
+                    "https://api.openai.com/v1",
+                ),
+                "build_client": lambda _provider: object(),
+                "grade_scoring_decision": lambda **_kwargs: scoring_package,
+                "grade_essay_package": teaching,
+                "compare_draft_progress": comparison,
+                "score_snapshot": lambda value: {"Overall Band": value["overall_band"]},
+            },
+        )
+        cache = {}
+
+        package, progress = generate(
+            provider="OpenAI",
+            model="model",
+            task_type="Task 2",
+            topic="topic",
+            draft_1_text="first",
+            draft_1_scores={"Overall Band": 6.0},
+            draft_2_text="second",
+            cached_generation=cache,
+        )
+
+        self.assertEqual(package["report"], "report")
+        self.assertEqual(progress, "progress")
+        self.assertIs(cache["scoring_package"], scoring_package)
+        self.assertEqual(cache["progress_report"], "progress")
+
+    def test_feedback_generation_caches_a_successful_parallel_branch(self):
+        calls = {"scoring": 0, "teaching": 0, "comparison": 0}
+        scoring_package = {
+            "structured": {"overall_band": 7.0, "criteria": []},
+            "scoring": {"overall_band": 7.0, "criteria": []},
+        }
+
+        def scoring(**_kwargs):
+            calls["scoring"] += 1
+            return scoring_package
+
+        def teaching(**_kwargs):
+            calls["teaching"] += 1
+            if calls["teaching"] == 1:
+                raise RuntimeError("teaching failed")
+            return {"structured": {"overall_band": 7.0}, "report": "report"}
+
+        def comparison(**_kwargs):
+            calls["comparison"] += 1
+            return "progress"
+
+        generate = load_app_function(
+            "generate_draft_2_feedback",
+            {
+                "ThreadPoolExecutor": ThreadPoolExecutor,
+                "get_provider_config": lambda _provider: (
+                    "OPENAI_API_KEY",
+                    "key",
+                    "https://api.openai.com/v1",
+                ),
+                "build_client": lambda _provider: object(),
+                "grade_scoring_decision": scoring,
+                "grade_essay_package": teaching,
+                "compare_draft_progress": comparison,
+                "score_snapshot": lambda value: {"Overall Band": value["overall_band"]},
+            },
+        )
+        kwargs = {
+            "provider": "OpenAI",
+            "model": "model",
+            "task_type": "Task 2",
+            "topic": "topic",
+            "draft_1_text": "first",
+            "draft_1_scores": {"Overall Band": 6.0},
+            "draft_2_text": "second",
+            "cached_generation": {},
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "teaching failed"):
+            generate(**kwargs)
+        package, progress = generate(**kwargs)
+
+        self.assertEqual(package["report"], "report")
+        self.assertEqual(progress, "progress")
+        self.assertEqual(calls, {"scoring": 1, "teaching": 2, "comparison": 1})
+
     def test_render_flow_is_scoped_atomic_and_read_only_aware(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")
         flow = source.split("def render_draft_2_training", 1)[1].split(
@@ -125,6 +234,7 @@ class DraftTwoSessionTests(unittest.TestCase):
         self.assertIn("read_only: bool = False", flow)
         self.assertIn("disabled=read_only or isinstance(current_draft_2_result, dict)", flow)
         self.assertIn("draft_2_cache.setdefault(scoped_cache_key", flow)
+        self.assertIn("generate_draft_2_feedback(", flow)
         self.assertIn("persist_draft_2_cloud_result(", flow)
         self.assertNotIn("save_linked_grading_cycle(", flow)
         self.assertNotIn("save_draft_revision(", flow)

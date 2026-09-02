@@ -7,6 +7,7 @@ from unittest.mock import patch
 from src.ai_grader import (
     AIGraderError,
     build_client,
+    compare_draft_progress,
     grade_essay_package,
     grade_scoring_decision,
 )
@@ -46,6 +47,38 @@ class TwoStageGraderTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "OPENAI_API_KEY is missing"):
                 build_client("OpenAI")
+
+    def test_draft_comparison_uses_injected_client_and_provider_config(self):
+        completions = FakeCompletions(["progress"])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        with (
+            patch(
+                "src.ai_grader.get_provider_config",
+                side_effect=AssertionError("must not resolve settings in the worker"),
+            ),
+            patch(
+                "src.ai_grader.build_client",
+                side_effect=AssertionError("must not build a client in the worker"),
+            ),
+        ):
+            report = compare_draft_progress(
+                provider="OpenAI",
+                task_question="Question",
+                draft_1_text="first",
+                draft_1_scores={"Overall Band": 6.0},
+                draft_2_text="second",
+                draft_2_scores={"Overall Band": 7.0},
+                model="gpt-5.4-mini-2026-03-17",
+                client=client,
+                provider_config=(
+                    "OPENAI_API_KEY",
+                    "key",
+                    "https://api.openai.com/v1",
+                ),
+            )
+
+        self.assertEqual(report, "progress")
+        self.assertEqual(len(completions.calls), 1)
 
     def scoring_payload(self):
         criteria = []

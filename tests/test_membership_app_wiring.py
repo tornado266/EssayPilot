@@ -212,7 +212,15 @@ class MembershipAppWiringTests(unittest.TestCase):
         second_draft = self.source.split("def render_draft_2_training", 1)[1].split(
             "def normalize_record", 1
         )[0]
-        self.assertIn('cached_generation["package"] = draft_2_package', second_draft)
+        feedback_generation = self.source.split("def generate_draft_2_feedback", 1)[1].split(
+            "def persist_draft_2_cloud_result", 1
+        )[0]
+        self.assertIn("generate_draft_2_feedback(", second_draft)
+        self.assertIn('cached_generation["package"] = grade_essay_package(', feedback_generation)
+        self.assertIn(
+            'cached_generation["progress_report"] = comparison_future.result()',
+            feedback_generation,
+        )
         self.assertNotIn(
             'draft_2_cache[draft_2_fingerprint] = {"package": draft_2_package}',
             second_draft,

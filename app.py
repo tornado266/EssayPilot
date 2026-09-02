@@ -11,6 +11,7 @@ import re
 import time
 import uuid
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable
@@ -24,8 +25,11 @@ from dotenv import load_dotenv
 from src.ai_grader import (
     AIGraderError,
     PRODUCTION_MODEL,
+    build_client,
     compare_draft_progress,
+    get_provider_config,
     grade_essay_package,
+    grade_scoring_decision,
     review_logic_rewrite,
     review_sentence_rewrite,
 )
@@ -1613,6 +1617,101 @@ def draft_2_result_from_revision(
     }
 
 
+def generate_draft_2_feedback(
+    *,
+    provider: str,
+    model: str,
+    task_type: str,
+    topic: str,
+    draft_1_text: str,
+    draft_1_scores: dict[str, float | None],
+    draft_2_text: str,
+    cached_generation: dict[str, object],
+) -> tuple[dict[str, object], str]:
+    """Generate Draft 2 teaching and comparison concurrently after score lock."""
+    cached_package = cached_generation.get("package")
+    cached_progress = cached_generation.get("progress_report")
+    if isinstance(cached_package, dict):
+        if cached_progress:
+            return dict(cached_package), str(cached_progress)
+        draft_2_scores = score_snapshot(dict(cached_package["structured"]))
+        progress_report = compare_draft_progress(
+            provider=provider,
+            task_question=topic,
+            draft_1_text=draft_1_text,
+            draft_1_scores=draft_1_scores,
+            draft_2_text=draft_2_text,
+            draft_2_scores=draft_2_scores,
+            model=model,
+        )
+        cached_generation["progress_report"] = progress_report
+        return dict(cached_package), progress_report
+
+    cached_scoring = cached_generation.get("scoring_package")
+    if isinstance(cached_scoring, dict):
+        scoring_package = dict(cached_scoring)
+    else:
+        scoring_package = grade_scoring_decision(
+            task_type=task_type,
+            topic=topic,
+            essay=draft_2_text,
+        )
+        cached_generation["scoring_package"] = scoring_package
+
+    draft_2_scores = score_snapshot(dict(scoring_package["structured"]))
+    comparison_executor = None
+    comparison_future = None
+    comparison_setup_error = None
+    if not cached_progress:
+        try:
+            comparison_provider_config = get_provider_config(provider)
+            comparison_client = build_client(provider)
+            comparison_executor = ThreadPoolExecutor(max_workers=1)
+            comparison_future = comparison_executor.submit(
+                compare_draft_progress,
+                provider=provider,
+                task_question=topic,
+                draft_1_text=draft_1_text,
+                draft_1_scores=draft_1_scores,
+                draft_2_text=draft_2_text,
+                draft_2_scores=draft_2_scores,
+                model=model,
+                client=comparison_client,
+                provider_config=comparison_provider_config,
+            )
+        except Exception as exc:
+            comparison_setup_error = exc
+
+    branch_errors: list[Exception] = []
+    try:
+        try:
+            cached_generation["package"] = grade_essay_package(
+                task_type=task_type,
+                topic=topic,
+                essay=draft_2_text,
+                locked_scoring_package=scoring_package,
+            )
+        except Exception as exc:
+            branch_errors.append(exc)
+        if comparison_future is not None:
+            try:
+                cached_generation["progress_report"] = comparison_future.result()
+            except Exception as exc:
+                branch_errors.append(exc)
+    finally:
+        if comparison_executor is not None:
+            comparison_executor.shutdown(wait=True)
+    if comparison_setup_error is not None:
+        branch_errors.append(comparison_setup_error)
+    if branch_errors:
+        raise branch_errors[0]
+
+    draft_2_package = cached_generation.get("package")
+    if not isinstance(draft_2_package, dict):
+        raise RuntimeError("Draft 2 teaching feedback did not return a package.")
+    return dict(draft_2_package), str(cached_generation.get("progress_report") or "")
+
+
 def persist_draft_2_cloud_result(
     store: SupabaseStore,
     user: CloudUser,
@@ -1822,39 +1921,19 @@ def render_draft_2_training(
             with st.spinner("正在评分第二稿并生成两稿对比报告..."):
                 render_scoring_loader()
                 try:
-                    if isinstance(cached_generation, dict) and isinstance(cached_generation.get("package"), dict):
-                        draft_2_package = dict(cached_generation["package"])
-                    else:
-                        draft_2_package = grade_essay_package(
-                            task_type=task_type,
-                            topic=draft_1["topic"],
-                            essay=draft_2_text,
-                        )
-                        # Keep the original reservation ticket beside the generated
-                        # result.  If quota settlement is temporarily unavailable,
-                        # the next rerun must retry the same reservation instead of
-                        # creating a second one or calling the model again.
-                        cached_generation["package"] = draft_2_package
+                    draft_2_package, progress_report = generate_draft_2_feedback(
+                        provider=provider,
+                        model=model,
+                        task_type=task_type,
+                        topic=draft_1["topic"],
+                        draft_1_text=draft_1["text"],
+                        draft_1_scores=draft_1["scores"],
+                        draft_2_text=draft_2_text,
+                        cached_generation=cached_generation,
+                    )
                     draft_2_report = str(draft_2_package["report"])
                     draft_2_structured = dict(draft_2_package["structured"])
                     draft_2_scores = score_snapshot(draft_2_structured)
-                    cached_progress = (
-                        cached_generation.get("progress_report")
-                        if isinstance(cached_generation, dict) else None
-                    )
-                    if cached_progress:
-                        progress_report = str(cached_progress)
-                    else:
-                        progress_report = compare_draft_progress(
-                            provider=provider,
-                            task_question=draft_1["topic"],
-                            draft_1_text=draft_1["text"],
-                            draft_1_scores=draft_1["scores"],
-                            draft_2_text=draft_2_text,
-                            draft_2_scores=draft_2_scores,
-                            model=model,
-                        )
-                        cached_generation["progress_report"] = progress_report
                     training_path = cached_generation.get("training_path")
                     if not cached_generation.get("local_saved"):
                         save_markdown_record(

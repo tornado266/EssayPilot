@@ -760,10 +760,16 @@ def compare_draft_progress(
     draft_2_text: str,
     draft_2_scores: dict[str, float | None],
     model: str,
+    *,
+    client: OpenAI | None = None,
+    provider_config: tuple[str, str | None, str] | None = None,
 ) -> str:
     """Compare two scored drafts and return concise Chinese coaching."""
-    _, api_key, base_url = get_provider_config(provider)
-    client = build_client(provider)
+    if provider_config is None:
+        provider_config = get_provider_config(provider)
+    _, api_key, base_url = provider_config
+    if client is None:
+        client = build_client(provider)
     visible_draft_1_scores = dict(draft_1_scores)
     visible_draft_2_scores = dict(draft_2_scores)
     prompt = f"""
