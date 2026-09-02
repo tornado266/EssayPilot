@@ -42,6 +42,26 @@ class HomePageUiTests(unittest.TestCase):
         self.assertIn("从剑雅真题选题", html_bodies)
         self.assertIn("?page=demo", html_bodies)
 
+    def test_guest_purchase_mode_renders_offer_and_login_action(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        app.query_params["page"] = "home"
+        app.query_params["mode"] = "purchase"
+
+        with patch(
+            "src.auth_session._AUTH_COMPONENT",
+            return_value=SimpleNamespace(
+                auth_session={"status": "empty"}, auth_wake=0
+            ),
+        ), patch(
+            "src.visitor_identity.browser_visitor_id", return_value=""
+        ):
+            app.run()
+
+        self.assertEqual(len(app.exception), 0)
+        markdown = "\n".join(str(item.value) for item in app.markdown)
+        self.assertIn("首包 ¥7.5，之后每包 ¥9.9", markdown)
+        self.assertIn("登录后查看开通方式", [button.label for button in app.button])
+
     def test_action_card_escapes_copy_and_route_values(self):
         captured: dict[str, object] = {}
 
@@ -109,6 +129,38 @@ class HomePageUiTests(unittest.TestCase):
         self.assertNotIn("render_feature_bento", home)
         self.assertNotIn("今天只做四步", home)
         self.assertNotIn("render_dashboard_stats", home)
+
+    def test_purchase_entry_reuses_home_mode_and_login_return(self):
+        source = (ROOT / "app.py").read_text(encoding="utf-8")
+        helper = source.split("def open_purchase_offer", 1)[1].split(
+            "def hydrate_grading_run", 1
+        )[0]
+        home = source.split("def render_home_page", 1)[1].split(
+            "def grade_submission", 1
+        )[0]
+
+        self.assertIn('navigate("home", "", "purchase")', helper)
+        self.assertIn('open_cloud_login("home", "purchase")', helper)
+        self.assertIn('st.query_params.get("mode", "")', home)
+        self.assertIn('key="home_purchase"', home)
+        self.assertLess(
+            home.index('key="home_purchase"'),
+            home.index("render_learning_dashboard(store, user)"),
+        )
+
+    def test_purchase_entry_is_visible_in_each_responsive_navigation(self):
+        source = (ROOT / "app.py").read_text(encoding="utf-8")
+
+        for token in (
+            'key="sidebar_purchase"',
+            'key="desktop_purchase"',
+            'key="mobile_purchase"',
+            '"购买批改包"',
+        ):
+            self.assertIn(token, source)
+        self.assertEqual(source.count('key="sidebar_purchase"'), 1)
+        self.assertEqual(source.count('key="desktop_purchase"'), 2)
+        self.assertEqual(source.count('key="mobile_purchase"'), 2)
 
     def test_guest_intro_renders_one_primary_action_and_quiet_demo_preview(self):
         captured: dict[str, object] = {}

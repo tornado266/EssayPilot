@@ -36,6 +36,10 @@ class AlpineUiTests(unittest.TestCase):
             'key="mobile_account_bar"',
             'key="mobile_login"',
             'key="mobile_logout"',
+            'key="sidebar_purchase"',
+            'key="desktop_purchase"',
+            'key="mobile_purchase"',
+            "购买批改包",
             "登录 / 保存学习档案",
             "登录并同步进度",
         ):

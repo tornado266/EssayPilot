@@ -3443,6 +3443,14 @@ def navigate(route: str, run_id: str = "", mode: str = "") -> None:
         st.query_params.pop("mode", None)
 
 
+def open_purchase_offer(authenticated: bool) -> None:
+    """Open the purchase offer, preserving it as the post-login destination."""
+    if authenticated:
+        navigate("home", "", "purchase")
+        return
+    open_cloud_login("home", "purchase")
+
+
 def hydrate_grading_run(
     run: dict[str, object],
     *,
@@ -3543,6 +3551,15 @@ def render_app_navigation(user: CloudUser | None, *, store: SupabaseStore) -> No
                 on_click=navigate,
                 args=(route,),
             )
+        if store.enabled:
+            st.button(
+                "购买批改包",
+                key="sidebar_purchase",
+                type="primary",
+                use_container_width=True,
+                on_click=open_purchase_offer,
+                args=(user is not None,),
+            )
         st.divider()
         st.caption(f"固定评分模型 · {PRODUCTION_MODEL}")
         st.markdown(
@@ -3577,13 +3594,29 @@ def render_app_navigation(user: CloudUser | None, *, store: SupabaseStore) -> No
             st.caption("本地开发模式")
     with st.container(key="desktop_account_bar", border=True):
         if user is not None:
-            account_col, profile_col = st.columns([4, 1])
+            account_col, purchase_col, profile_col = st.columns([3, 1, 1])
             account_col.caption(f"已登录：{user.email}")
+            purchase_col.button(
+                "购买批改包",
+                key="desktop_purchase",
+                type="primary",
+                on_click=open_purchase_offer,
+                args=(True,),
+                use_container_width=True,
+            )
             profile_col.button("我的学习档案", key="desktop_profile", on_click=navigate, args=("growth",), use_container_width=True)
         elif store.enabled:
-            account_col, login_col = st.columns([4, 1])
+            account_col, purchase_col, login_col = st.columns([3, 1, 1])
             account_col.caption("当前浏览器可先免费生成 1 次首稿报告；登录后保存报告，AI 训练和二稿需开通体验包。")
-            login_col.button("登录 / 保存档案", key="desktop_login", type="primary", on_click=open_cloud_login, use_container_width=True)
+            purchase_col.button(
+                "购买批改包",
+                key="desktop_purchase",
+                type="primary",
+                on_click=open_purchase_offer,
+                args=(False,),
+                use_container_width=True,
+            )
+            login_col.button("登录 / 保存档案", key="desktop_login", on_click=open_cloud_login, use_container_width=True)
     if user is not None and st.session_state.get("pending_guest_claim"):
         st.warning("这次游客批改仍在当前页面中，尚未保存到学习档案。")
         if st.button("重试保存这次批改", key="retry_guest_claim", use_container_width=True):
@@ -3602,6 +3635,14 @@ def render_app_navigation(user: CloudUser | None, *, store: SupabaseStore) -> No
         if user is not None:
             st.caption(f"已登录：{user.email}")
             st.button(
+                "购买批改包",
+                key="mobile_purchase",
+                type="primary",
+                on_click=open_purchase_offer,
+                args=(True,),
+                use_container_width=True,
+            )
+            st.button(
                 "退出登录",
                 key="mobile_logout",
                 on_click=logout_cloud_user,
@@ -3610,9 +3651,16 @@ def render_app_navigation(user: CloudUser | None, *, store: SupabaseStore) -> No
         elif store.enabled:
             st.caption("当前为访客浏览；登录后可跨设备保存报告和成长记录。")
             st.button(
+                "购买批改包",
+                key="mobile_purchase",
+                type="primary",
+                on_click=open_purchase_offer,
+                args=(False,),
+                use_container_width=True,
+            )
+            st.button(
                 "登录并同步进度",
                 key="mobile_login",
-                type="primary",
                 on_click=open_cloud_login,
                 use_container_width=True,
             )
@@ -3637,6 +3685,19 @@ def _run_priority(structured: dict[str, object]) -> str:
 
 
 def render_home_page(store: SupabaseStore, user: CloudUser | None) -> None:
+    if str(st.query_params.get("mode", "") or "") == "purchase":
+        render_home_heading(
+            title="购买批改包",
+            subtitle="查看当前账号可购买的套餐，付款后提交订单号等待人工核对。",
+        )
+        render_founder_offer(
+            store,
+            user,
+            key="home_purchase",
+            intro="人工核对通过后才开始计算 30 天有效期；付款前请确认套餐与退款说明。",
+        )
+        return
+
     if user is not None:
         if render_learning_dashboard(store, user):
             return
