@@ -1,6 +1,7 @@
 """Streamlit app entry point for the IELTS Writing Correction Skill."""
 
 import base64
+import binascii
 import hashlib
 import html
 import json
@@ -647,12 +648,49 @@ def record_usage_event(
 
 
 def _app_setting(name: str) -> str:
-    """Read one non-secret product setting from Streamlit or the environment."""
+    """Read one server-side app setting from Streamlit or the environment."""
     try:
         value = st.secrets.get(name, "")
     except (FileNotFoundError, KeyError):
         value = ""
     return str(value or os.getenv(name, "")).strip()
+
+
+def _nested_secret_setting(section: str, name: str) -> str:
+    """Read a setting kept in a non-environment Streamlit Secrets section."""
+    try:
+        section_values = st.secrets.get(section, {})
+        value = section_values.get(name, "")
+    except (AttributeError, FileNotFoundError, KeyError, TypeError):
+        value = ""
+    return str(value or "").strip()
+
+
+def _payment_qr_bytes(name: str) -> bytes | None:
+    """Decode one payment QR stored outside Git in Streamlit Secrets."""
+    encoded = _nested_secret_setting("founder_payment_qr", name)
+    if not encoded:
+        return None
+    if encoded.startswith("data:"):
+        header, separator, encoded = encoded.partition(",")
+        if not separator or ";base64" not in header.lower():
+            LOGGER.warning("Ignoring invalid payment QR data URL for %s", name)
+            return None
+    try:
+        image_bytes = base64.b64decode(re.sub(r"\s+", "", encoded), validate=True)
+    except (binascii.Error, ValueError, TypeError):
+        LOGGER.warning("Ignoring invalid base64 payment QR for %s", name)
+        return None
+    if len(image_bytes) > 2_000_000:
+        LOGGER.warning("Ignoring oversized payment QR for %s", name)
+        return None
+    is_jpeg = image_bytes.startswith(b"\xff\xd8\xff")
+    is_png = image_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    is_webp = image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP"
+    if not (is_jpeg or is_png or is_webp):
+        LOGGER.warning("Ignoring unsupported payment QR image for %s", name)
+        return None
+    return image_bytes
 
 
 def local_unmetered_ai_enabled() -> bool:
@@ -818,6 +856,8 @@ def render_founder_offer(
             st.warning("套餐价格暂时无法安全确认，付费申请未开放。请稍后刷新。")
             return
 
+        wechat_payment_qr = _payment_qr_bytes("wechat_base64")
+        alipay_payment_qr = _payment_qr_bytes("alipay_base64")
         payment_qr = _app_setting("FOUNDER_PAYMENT_QR_URL")
         payment_instructions = _app_setting("FOUNDER_PAYMENT_INSTRUCTIONS")
         support_contact = _app_setting("FOUNDER_SUPPORT_CONTACT")
@@ -846,7 +886,24 @@ def render_founder_offer(
                 st.warning("收款说明、真实联系方式或退款说明尚未配置完整，付费申请暂未开放。")
             if payment_ready:
                 st.caption(f"当前绑定邮箱：{user.email}")
-                if payment_qr:
+                private_qr_codes = [
+                    ("微信支付", wechat_payment_qr),
+                    ("支付宝", alipay_payment_qr),
+                ]
+                private_qr_codes = [item for item in private_qr_codes if item[1]]
+                if private_qr_codes:
+                    qr_columns = st.columns(len(private_qr_codes))
+                    for column, (payment_name, qr_image) in zip(
+                        qr_columns,
+                        private_qr_codes,
+                        strict=True,
+                    ):
+                        column.image(
+                            qr_image,
+                            caption=f"{payment_name} · {offer_name}",
+                            width=260,
+                        )
+                elif payment_qr:
                     st.image(payment_qr, caption=f"{offer_name}收款入口", width=260)
                 st.info(payment_instructions)
                 st.caption(f"核对、退款或异常联系：{support_contact}")

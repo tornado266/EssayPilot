@@ -1,4 +1,8 @@
 import ast
+import base64
+import binascii
+import logging
+import re
 import unittest
 from pathlib import Path
 
@@ -20,6 +24,27 @@ def load_practice_matcher():
     ast.fix_missing_locations(module)
     exec(compile(module, str(source_path), "exec"), namespace)
     return namespace["_match_practice_attempt"]
+
+
+def load_payment_qr_decoder(values: dict[str, str]):
+    source_path = ROOT / "app.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    decoder = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_payment_qr_bytes"
+    )
+    namespace: dict[str, object] = {
+        "base64": base64,
+        "binascii": binascii,
+        "re": re,
+        "LOGGER": logging.getLogger("payment-qr-test"),
+        "_nested_secret_setting": lambda section, name: values.get(name, ""),
+    }
+    module = ast.Module(body=[decoder], type_ignores=[])
+    ast.fix_missing_locations(module)
+    exec(compile(module, str(source_path), "exec"), namespace)
+    return namespace["_payment_qr_bytes"]
 
 
 class MembershipAppWiringTests(unittest.TestCase):
@@ -218,8 +243,36 @@ class MembershipAppWiringTests(unittest.TestCase):
             offer,
         )
         payment_branch = offer.split("if payment_ready:", 1)[1]
+        self.assertIn('wechat_base64', offer)
+        self.assertIn('alipay_base64', offer)
+        self.assertIn("private_qr_codes", payment_branch)
         self.assertIn("st.image(payment_qr", payment_branch)
         self.assertIn("with st.form", payment_branch)
+
+    def test_private_payment_qr_decoder_rejects_non_images_and_large_payloads(self):
+        decoder = self.source.split("def _payment_qr_bytes", 1)[1].split(
+            "def local_unmetered_ai_enabled", 1
+        )[0]
+        self.assertIn("base64.b64decode", decoder)
+        self.assertIn("validate=True", decoder)
+        self.assertIn("2_000_000", decoder)
+        for signature in ("is_jpeg", "is_png", "is_webp"):
+            self.assertIn(signature, decoder)
+
+        jpeg = b"\xff\xd8\xff" + b"safe-qr-test"
+        encoded = base64.b64encode(jpeg).decode("ascii")
+        multiline = encoded[:8] + "\n" + encoded[8:]
+        decode = load_payment_qr_decoder({"wechat_base64": multiline})
+        self.assertEqual(decode("wechat_base64"), jpeg)
+
+        invalid = load_payment_qr_decoder({"wechat_base64": "not-base64"})
+        self.assertIsNone(invalid("wechat_base64"))
+
+        oversized_bytes = b"\xff\xd8\xff" + (b"x" * 2_000_000)
+        oversized = load_payment_qr_decoder(
+            {"wechat_base64": base64.b64encode(oversized_bytes).decode("ascii")}
+        )
+        self.assertIsNone(oversized("wechat_base64"))
 
     def test_active_pack_with_remaining_quota_never_shows_purchase_form(self):
         offer = self.source.split("def render_founder_offer", 1)[1].split(

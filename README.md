@@ -183,7 +183,7 @@ ALLOW_LOCAL_UNMETERED_AI=false
 `20260901130000_second_draft_idempotency.sql` 和
 `20260901140000_membership_renewal_packs.sql`。应用会优先读取 Streamlit Secrets，再回退到本地环境变量。
 
-如需开放首包与续包，先完成数据库升级，再同时配置 `FOUNDER_PAYMENT_INSTRUCTIONS`、`FOUNDER_SUPPORT_CONTACT` 与 `FOUNDER_REFUND_POLICY`；缺少任一项时，应用只展示套餐说明，不接受付款核对申请。`FOUNDER_PAYMENT_QR_URL` 可按实际收款方式选配。客户端不提交或决定套餐价格：服务端根据账号的已核销购买记录确定本次是 ¥7.5 首包还是 ¥9.9 续包。人工审批入口为管理员登录后的 `?admin=1` 页面。
+如需开放首包与续包，先完成数据库升级，再同时配置 `FOUNDER_PAYMENT_INSTRUCTIONS`、`FOUNDER_SUPPORT_CONTACT` 与 `FOUNDER_REFUND_POLICY`；缺少任一项时，应用只展示套餐说明，不接受付款核对申请。微信和支付宝收款码应分别以 base64 写入 Streamlit Secrets 的 `[founder_payment_qr]` 分区下的 `wechat_base64`、`alipay_base64`，避免把个人收款码提交到公开 Git 仓库，也避免根级 Secrets 将大段图片数据注入环境变量；`FOUNDER_PAYMENT_QR_URL` 仅作为兼容旧部署的可选回退。客户端不提交或决定套餐价格：服务端根据账号的已核销购买记录确定本次是 ¥7.5 首包还是 ¥9.9 续包。人工审批入口为管理员登录后的 `?admin=1` 页面。
 
 “当前浏览器免费 1 次”依赖浏览器本地身份，只是一层低摩擦体验限制，不是可靠的反滥用边界。公开引流前还应在部署入口配置 CAPTCHA、来源限速或等价的服务端成本上限。
 
@@ -207,7 +207,9 @@ streamlit run app.py
 | `ADMIN_EMAILS` | 否 | 管理员邮箱白名单，多个邮箱用逗号分隔 |
 | `ADMIN_PASSWORD` | 否 | 未配置邮箱白名单时的管理页备用验证 |
 | `BETA_START_AT` | 否 | 公测统计的起始时间 |
-| `FOUNDER_PAYMENT_QR_URL` | 否 | 可选的首包/续包收款二维码图片地址；也可以只在付款说明中提供收款方式 |
+| `[founder_payment_qr].wechat_base64` | 否 | 仅存于 Streamlit Secrets 分区的微信收款码 base64；不要提交到 Git |
+| `[founder_payment_qr].alipay_base64` | 否 | 仅存于 Streamlit Secrets 分区的支付宝收款码 base64；不要提交到 Git |
+| `FOUNDER_PAYMENT_QR_URL` | 否 | 兼容旧部署的单张公开二维码图片地址 |
 | `FOUNDER_PAYMENT_INSTRUCTIONS` | 否 | 用户可见的付款与人工核对说明 |
 | `FOUNDER_SUPPORT_CONTACT` | 否 | 核对、退款和异常处理的真实联系方式 |
 | `FOUNDER_REFUND_POLICY` | 否 | 用户可见的退款与未使用权益说明 |
