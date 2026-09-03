@@ -794,7 +794,7 @@ def render_founder_offer(
     key: str,
     intro: str = "",
 ) -> None:
-    """Render the server-selected first pack or renewal manual-payment offer."""
+    """Render the server-selected first pack or renewal payment offer."""
     with st.container(border=True):
         entitlement = normalize_entitlement({"status": "none"})
         entitlement_error = ""
@@ -826,7 +826,7 @@ def render_founder_offer(
             "表达库独立造句 AI 点评暂不包含"
         )
         if is_renewal:
-            st.caption("首包之后每包 ¥9.9 / 3 篇 · 可重复续包 · 每包均需单独人工核对")
+            st.caption("首包之后每包 ¥9.9 / 3 篇 · 可重复续包 · 提交订单号后自动开通")
         else:
             st.caption("每个账号仅有 1 个 ¥7.5 首包 · 之后每个 3 篇续包 ¥9.9")
         st.caption("权益不可转移 · 未使用权益不自动延期、转赠或折现")
@@ -874,7 +874,7 @@ def render_founder_offer(
             request_plan = str(request.get("plan_code") or offer.plan_code)
             request_name = "3 篇续包" if request_plan == RENEWAL_OFFER.plan_code else "创始体验首包"
             request_amount = str(request.get("amount_cny") or price_label)
-            label = "付款信息已提交，正在人工核对。有效期将在实际开通时开始计算。"
+            label = "付款信息已提交，系统正在自动开通。请刷新开通状态。"
             if request_status == "needs_info":
                 label = "这笔申请需要补充信息，请按下方联系方式与管理员确认。"
             st.info(label)
@@ -882,7 +882,7 @@ def render_founder_offer(
             if application_code:
                 st.code(application_code, language="text")
             if support_contact:
-                st.caption(f"核对、退款或异常联系：{support_contact}")
+                st.caption(f"退款或异常联系：{support_contact}")
             if refund_policy:
                 st.caption(f"退款说明：{refund_policy}")
         else:
@@ -910,7 +910,7 @@ def render_founder_offer(
                 elif payment_qr:
                     st.image(payment_qr, caption=f"{offer_name}收款入口", width=260)
                 st.info(payment_instructions)
-                st.caption(f"核对、退款或异常联系：{support_contact}")
+                st.caption(f"退款或异常联系：{support_contact}")
                 st.caption(f"退款说明：{refund_policy}")
                 with st.form(f"membership_request_{key}"):
                     payment_reference = st.text_input(
@@ -918,17 +918,17 @@ def render_founder_offer(
                         placeholder="请填写支付平台中的订单号，不要上传包含余额或其他交易的截图。",
                     )
                     paid_at = st.text_input("付款时间（选填）", placeholder="例如：2026-09-01 20:30")
-                    note = st.text_input("付款备注（选填）", placeholder="只填写核对这笔付款所需的信息")
+                    note = st.text_input("付款备注（选填）", placeholder="可填写付款渠道中的备注")
                     terms_confirmed = st.checkbox(
                         f"我已确认：{offer_name} ¥{price_label}、30 天、最多 3 篇、"
                         "不自动续费，并同意上述退款说明。"
                     )
-                    submitted = st.form_submit_button("提交人工核对", type="primary", use_container_width=True)
+                    submitted = st.form_submit_button("提交并开通", type="primary", use_container_width=True)
                 if submitted:
                     if not terms_confirmed:
                         st.warning("请先确认体验包范围与退款说明。")
                     elif len(payment_reference.strip()) < 4:
-                        st.warning("请填写可供核对的支付订单号。")
+                        st.warning("请填写支付平台中的订单号。")
                     else:
                         try:
                             created = store.create_membership_request(
@@ -943,12 +943,16 @@ def render_founder_offer(
                             clear_membership_cache()
                             code = str((created or {}).get("application_code") or "")
                             reason = str((created or {}).get("reason") or "")
-                            if (created or {}).get("created"):
-                                st.success(
-                                    f"{offer_name}付款信息已提交，人工核对后 30 天有效期才会开始。"
-                                )
+                            status = str((created or {}).get("status") or "")
+                            if (created or {}).get("created") and status == "approved":
+                                st.success(f"{offer_name}已自动开通，30 天有效期现在开始。")
+                                st.rerun()
+                            elif status == "approved":
+                                st.rerun()
+                            elif (created or {}).get("created"):
+                                st.info("开通申请已提交，系统正在自动处理，请刷新开通状态。")
                             elif reason in {"already_submitted", "pending_request_exists"}:
-                                st.info("这笔付款或当前账号已有待核对申请，请勿重复付款。")
+                                st.info("这笔付款或当前账号已有开通申请，请勿重复付款。")
                             elif reason in {
                                 "membership_exists",
                                 "active_membership",
@@ -956,7 +960,7 @@ def render_founder_offer(
                             }:
                                 st.info("当前权益仍可使用，暂时不能提交续包申请。")
                             else:
-                                st.error("本次没有建立核对申请，请联系管理员确认。")
+                                st.error("本次没有建立开通申请，请联系管理员确认。")
                             if code and reason not in {
                                 "membership_exists",
                                 "active_membership",
@@ -3767,13 +3771,13 @@ def render_home_page(store: SupabaseStore, user: CloudUser | None) -> None:
     if str(st.query_params.get("mode", "") or "") == "purchase":
         render_home_heading(
             title="购买批改包",
-            subtitle="查看当前账号可购买的套餐，付款后提交订单号等待人工核对。",
+            subtitle="查看当前账号可购买的套餐，付款后提交订单号即可自动开通。",
         )
         render_founder_offer(
             store,
             user,
             key="home_purchase",
-            intro="人工核对通过后才开始计算 30 天有效期；付款前请确认套餐与退款说明。",
+            intro="提交订单号后自动开通并开始计算 30 天有效期；付款前请确认套餐与退款说明。",
         )
         return
 

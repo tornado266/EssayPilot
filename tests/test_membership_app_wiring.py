@@ -233,7 +233,9 @@ class MembershipAppWiringTests(unittest.TestCase):
         for text in ("¥7.5", "¥9.9", "3 篇", "3 次专项 AI 点评", "1 次二稿", "不自动续费"):
             self.assertIn(text, offer)
         self.assertIn("可重复续包", offer)
-        self.assertIn("每包均需单独人工核对", offer)
+        self.assertIn("提交订单号后自动开通", offer)
+        self.assertIn("提交并开通", offer)
+        self.assertNotIn("人工核对", offer)
 
     def test_offer_fails_closed_and_hides_partial_payment_configuration(self):
         offer = self.source.split("def render_founder_offer", 1)[1].split(

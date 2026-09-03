@@ -1,4 +1,4 @@
-"""Manual membership product rules and display helpers.
+"""Membership product rules and display helpers.
 
 The database remains the authority for access decisions.  This module only keeps
 the public offer and read-only presentation rules in one testable place.

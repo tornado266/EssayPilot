@@ -54,7 +54,7 @@ EssayPilot 把重点放在反馈之后：
 
 在线版允许当前浏览器的访客免费生成 1 次首稿完整报告；登录后可以保存、下载报告，并在不同设备间同步学习记录。AI 专项训练和第二稿验证属于 3 篇训练包权益。本地运行时，数据也可以只保存在当前电脑。
 
-每个账号的创始体验首包为 **¥7.5 / 30 天 / 3 篇**；首包用完或到期后，后续每个 3 篇续包为 **¥9.9 / 30 天 / 3 篇**，可重复购买。每篇含 1 份首稿报告、最多 3 次专项 AI 点评和 1 次二稿评分与两稿对比；30 天与 3 篇任一先达到即结束。所有套餐都不自动续费，当前采用支付订单号人工核对，开通时间以审核通过时为准。当前包仍有可用篇数或存在处理中请求时，系统不会接受下一包申请。
+每个账号的创始体验首包为 **¥7.5 / 30 天 / 3 篇**；首包用完或到期后，后续每个 3 篇续包为 **¥9.9 / 30 天 / 3 篇**，可重复购买。每篇含 1 份首稿报告、最多 3 次专项 AI 点评和 1 次二稿评分与两稿对比；30 天与 3 篇任一先达到即结束。所有套餐都不自动续费，提交支付订单号后系统自动开通并开始计算有效期。当前包仍有可用篇数时，系统不会接受下一包申请。
 
 ## 完整产品导览
 
@@ -181,9 +181,10 @@ ALLOW_LOCAL_UNMETERED_AI=false
 新建 Supabase 项目时，在 SQL Editor 中运行 `supabase/schema.sql`。已有项目应按文件名顺序执行
 `20260901_founder_membership.sql`、`20260901120000_guest_trial_idempotency.sql`、
 `20260901130000_second_draft_idempotency.sql` 和
-`20260901140000_membership_renewal_packs.sql`。应用会优先读取 Streamlit Secrets，再回退到本地环境变量。
+`20260901140000_membership_renewal_packs.sql` 和
+`20260903094108_auto_approve_membership_requests.sql`。应用会优先读取 Streamlit Secrets，再回退到本地环境变量。
 
-如需开放首包与续包，先完成数据库升级，再同时配置 `FOUNDER_PAYMENT_INSTRUCTIONS`、`FOUNDER_SUPPORT_CONTACT` 与 `FOUNDER_REFUND_POLICY`；缺少任一项时，应用只展示套餐说明，不接受付款核对申请。微信和支付宝收款码应分别以 base64 写入 Streamlit Secrets 的 `[founder_payment_qr]` 分区下的 `wechat_base64`、`alipay_base64`，避免把个人收款码提交到公开 Git 仓库，也避免根级 Secrets 将大段图片数据注入环境变量；`FOUNDER_PAYMENT_QR_URL` 仅作为兼容旧部署的可选回退。客户端不提交或决定套餐价格：服务端根据账号的已核销购买记录确定本次是 ¥7.5 首包还是 ¥9.9 续包。人工审批入口为管理员登录后的 `?admin=1` 页面。
+如需开放首包与续包，先完成数据库升级，再同时配置 `FOUNDER_PAYMENT_INSTRUCTIONS`、`FOUNDER_SUPPORT_CONTACT` 与 `FOUNDER_REFUND_POLICY`；缺少任一项时，应用只展示套餐说明，不接受开通申请。微信和支付宝收款码应分别以 base64 写入 Streamlit Secrets 的 `[founder_payment_qr]` 分区下的 `wechat_base64`、`alipay_base64`，避免把个人收款码提交到公开 Git 仓库，也避免根级 Secrets 将大段图片数据注入环境变量；`FOUNDER_PAYMENT_QR_URL` 仅作为兼容旧部署的可选回退。客户端不提交或决定套餐价格：服务端根据账号的已开通购买记录确定本次是 ¥7.5 首包还是 ¥9.9 续包。用户提交支付订单号后，数据库会在同一事务中自动发放权益。
 
 “当前浏览器免费 1 次”依赖浏览器本地身份，只是一层低摩擦体验限制，不是可靠的反滥用边界。公开引流前还应在部署入口配置 CAPTCHA、来源限速或等价的服务端成本上限。
 
@@ -210,8 +211,8 @@ streamlit run app.py
 | `[founder_payment_qr].wechat_base64` | 否 | 仅存于 Streamlit Secrets 分区的微信收款码 base64；不要提交到 Git |
 | `[founder_payment_qr].alipay_base64` | 否 | 仅存于 Streamlit Secrets 分区的支付宝收款码 base64；不要提交到 Git |
 | `FOUNDER_PAYMENT_QR_URL` | 否 | 兼容旧部署的单张公开二维码图片地址 |
-| `FOUNDER_PAYMENT_INSTRUCTIONS` | 否 | 用户可见的付款与人工核对说明 |
-| `FOUNDER_SUPPORT_CONTACT` | 否 | 核对、退款和异常处理的真实联系方式 |
+| `FOUNDER_PAYMENT_INSTRUCTIONS` | 否 | 用户可见的付款与自动开通说明 |
+| `FOUNDER_SUPPORT_CONTACT` | 否 | 退款和异常处理的真实联系方式 |
 | `FOUNDER_REFUND_POLICY` | 否 | 用户可见的退款与未使用权益说明 |
 
 不要提交 `.env` 或 `.streamlit/secrets.toml`，也不要把 Supabase 服务端密钥暴露给浏览器。
@@ -262,7 +263,7 @@ python -m scripts.run_calibration --repeats 3 --provider OpenAI --model gpt-5.4-
 - API Key 只从 Streamlit Secrets 或环境变量读取，不会写入批改报告。
 - 未配置 Supabase 时，记录保存在本机；部署在 Streamlit Community Cloud 上的本地文件可能随实例重启而清除。
 - 配置 Supabase 后，作文、报告、练习和二稿记录受行级安全策略保护，仅对应用户可访问。
-- 私有管理页的产品统计区只返回匿名聚合数据；单独的人工付款审核区仅向管理员白名单开放，并只显示核单所需的账号与订单信息，不显示作文正文或报告内容。
+- 私有管理页只返回匿名聚合产品统计，不显示作文正文或报告内容。
 - AI 评分存在波动，更适合观察多次练习的趋势，而不是替代官方考试成绩。
 
 ## 当前范围

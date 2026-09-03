@@ -337,7 +337,7 @@ class SupabaseStore:
         return result if isinstance(result, dict) else {}
 
     def get_my_membership_request(self, user: CloudUser) -> dict[str, Any]:
-        """Return the user's latest manual-payment review request."""
+        """Return the user's latest payment activation request."""
         result = self._authenticated_request(
             user,
             "GET",
@@ -362,7 +362,7 @@ class SupabaseStore:
         paid_at: str = "",
         note: str = "",
     ) -> dict[str, Any]:
-        """Submit payment details for manual review without accepting screenshots."""
+        """Submit payment details for immediate membership activation."""
         result = self._authenticated_request(
             user,
             "POST",
