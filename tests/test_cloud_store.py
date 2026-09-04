@@ -343,6 +343,43 @@ class CloudStoreTests(unittest.TestCase):
         self.assertEqual(headers["apikey"], "public-anon-key")
 
     @patch("src.cloud_store.requests.request")
+    def test_home_snapshot_fetches_only_display_fields_under_user_rls(self, request):
+        runs = [{"id": "run-a", "overall_band": 7, "criteria": [], "created_at": "2026-09-01"}]
+        pending = [{"id": "task-a", "grading_run_id": "run-b", "task_kind": "logic"}]
+        request.side_effect = [self.response(200, runs), self.response(200, pending)]
+        user = CloudUser("user-a", "a@example.com", "user-access-token")
+
+        self.assertEqual(self.store.get_home_snapshot(user), (runs, pending))
+
+        self.assertEqual(request.call_count, 2)
+        runs_call, pending_call = request.call_args_list
+        self.assertTrue(runs_call.args[1].endswith("/rest/v1/grading_runs"))
+        self.assertEqual(runs_call.kwargs["params"], {
+            "select": "id,overall_band,criteria,created_at",
+            "user_id": "eq.user-a", "order": "created_at.desc", "limit": "2",
+        })
+        self.assertTrue(pending_call.args[1].endswith("/rest/v1/practice_attempts"))
+        self.assertEqual(pending_call.kwargs["params"], {
+            "select": "id,grading_run_id,task_kind,task_index,original_text,updated_at",
+            "user_id": "eq.user-a", "status": "eq.in_progress",
+            "order": "updated_at.desc", "limit": "1",
+        })
+        for call in request.call_args_list:
+            self.assertEqual(call.args[0], "GET")
+            self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer user-access-token")
+            self.assertEqual(call.kwargs["headers"]["apikey"], "public-anon-key")
+
+    @patch("src.cloud_store.requests.request")
+    def test_home_snapshot_handles_empty_data_and_propagates_service_failure(self, request):
+        user = CloudUser("user-a", "a@example.com", "user-access-token")
+        request.side_effect = [self.response(200, []), self.response(200, {})]
+        self.assertEqual(self.store.get_home_snapshot(user), ([], []))
+
+        request.side_effect = [self.response(200, []), self.response(503, {"message": "unavailable"})]
+        with self.assertRaises(CloudStoreError):
+            self.store.get_home_snapshot(user)
+
+    @patch("src.cloud_store.requests.request")
     def test_history_is_owner_scoped_paginated_and_newest_first(self, request):
         response = Mock(status_code=200, content=b"[]")
         response.json.return_value = []

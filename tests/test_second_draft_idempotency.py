@@ -1,11 +1,17 @@
 import ast
+import json
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import test_ai_grader_pipeline as grader_fixtures
+from src.ai_grader import AIGraderError, grade_essay_package, grade_scoring_decision
 from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
+from src.report_schema import SCORING_DECISION_JSON_SCHEMA, TEACHING_FEEDBACK_JSON_SCHEMA, score_snapshot
+from test_report_schema import ESSAY
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -224,6 +230,77 @@ class DraftTwoSessionTests(unittest.TestCase):
         self.assertEqual(package["report"], "report")
         self.assertEqual(progress, "progress")
         self.assertEqual(calls, {"scoring": 1, "teaching": 2, "comparison": 1})
+
+    def test_real_second_draft_teaching_recovers_with_score_and_comparison_cached(self):
+        fixture = grader_fixtures.TwoStageGraderTests()
+        invalid_teaching = fixture.teaching_payload()
+        invalid_teaching["priorities"][0]["evidence"] = "This quotation was invented."
+        mismatched_teaching = fixture.teaching_payload()
+        mismatched_teaching["sentence_training"][0]["original"] = "improve bus services."
+        completions = grader_fixtures.FakeCompletions([
+            json.dumps(fixture.scoring_payload()),
+            json.dumps(invalid_teaching),
+            json.dumps(invalid_teaching),
+            json.dumps(mismatched_teaching),
+        ])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        provider_config = ("OPENAI_API_KEY", "key", "https://api.openai.com/v1")
+        scoring = Mock(wraps=grade_scoring_decision)
+        teaching = Mock(wraps=grade_essay_package)
+        comparison = Mock(return_value="Saved comparison")
+        generate = load_app_function(
+            "generate_draft_2_feedback",
+            {
+                "ThreadPoolExecutor": ThreadPoolExecutor,
+                "get_provider_config": lambda _provider: provider_config,
+                "build_client": lambda _provider: object(),
+                "grade_scoring_decision": scoring,
+                "grade_essay_package": teaching,
+                "compare_draft_progress": comparison,
+                "score_snapshot": score_snapshot,
+            },
+        )
+        cache = {}
+        kwargs = {
+            "provider": "OpenAI",
+            "model": "gpt-5.4-mini-2026-03-17",
+            "task_type": "Task 2",
+            "topic": "Question",
+            "draft_1_text": "First draft",
+            "draft_1_scores": {"Overall Band": 6.0},
+            "draft_2_text": ESSAY,
+            "cached_generation": cache,
+        }
+        with (
+            patch("src.ai_grader.build_client", return_value=client),
+            patch("src.ai_grader.get_provider_config", return_value=provider_config),
+        ):
+            with self.assertRaises(AIGraderError):
+                generate(**kwargs)
+            locked_scoring = cache["scoring_package"]["scoring"]
+            self.assertEqual(cache["progress_report"], "Saved comparison")
+            self.assertNotIn("package", cache)
+
+            package, progress = generate(**kwargs)
+            cached_package, cached_progress = generate(**kwargs)
+
+        self.assertEqual(scoring.call_count, 1)
+        self.assertEqual(teaching.call_count, 2)
+        self.assertEqual(comparison.call_count, 1)
+        self.assertEqual(len(completions.calls), 4)
+        self.assertEqual(
+            [call["response_format"]["json_schema"]["name"] for call in completions.calls],
+            [SCORING_DECISION_JSON_SCHEMA["name"]] + [TEACHING_FEEDBACK_JSON_SCHEMA["name"]] * 3,
+        )
+        self.assertEqual(package["scoring"], locked_scoring)
+        self.assertEqual(package["structured"]["criteria"], locked_scoring["criteria"])
+        self.assertEqual(package["structured"]["overall_band"], locked_scoring["overall_band"])
+        self.assertEqual(package["repaired_training_links"], [
+            "Governments should improve bus services.",
+        ])
+        self.assertEqual(progress, "Saved comparison")
+        self.assertEqual(cached_package, package)
+        self.assertEqual(cached_progress, progress)
 
     def test_render_flow_is_scoped_atomic_and_read_only_aware(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")

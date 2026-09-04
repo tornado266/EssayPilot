@@ -166,6 +166,98 @@ class TwoStageGraderTests(unittest.TestCase):
         self.assertEqual(package["structured"]["overall_band"], locked["overall_band"])
         self.assertIn("estimated practice band", package["report"])
 
+    def test_priority_training_mismatch_is_repaired_without_an_extra_ai_call(self):
+        for training_original in (
+            "Public transport reduces traffic.",
+            "improve bus services.",
+        ):
+            with self.subTest(training_original=training_original):
+                teaching = self.teaching_payload()
+                teaching["sentence_training"][0]["original"] = training_original
+                before = deepcopy(teaching)
+                locked = validate_scoring_decision(self.scoring_payload(), ESSAY)
+                cached_package = {
+                    "provider": "OpenAI",
+                    "model": "gpt-5.4-mini-2026-03-17",
+                    "prompt_version": SCORING_PROMPT_VERSION,
+                    "skill_version": SCORING_SKILL_VERSION,
+                    "scoring": locked,
+                    "usage": {},
+                }
+                completions = FakeCompletions([json.dumps(teaching, ensure_ascii=False)])
+                client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+                with (
+                    patch("src.ai_grader.build_client", return_value=client),
+                    patch("src.ai_grader.get_provider_config", return_value=(
+                        "OPENAI_API_KEY", "key", "https://api.openai.com/v1",
+                    )),
+                ):
+                    package = grade_essay_package(
+                        task_type="Task 2", topic="Question", essay=ESSAY,
+                        locked_scoring_package=cached_package,
+                    )
+
+                self.assertEqual(len(completions.calls), 1)
+                self.assertEqual(
+                    completions.calls[0]["response_format"]["json_schema"]["name"],
+                    TEACHING_FEEDBACK_JSON_SCHEMA["name"],
+                )
+                self.assertTrue(package["scoring_reused"])
+                self.assertEqual(package["scoring"], locked)
+                self.assertEqual(package["structured"]["criteria"], locked["criteria"])
+                self.assertEqual(package["structured"]["overall_band"], locked["overall_band"])
+                self.assertEqual(package["usage"]["total_tokens"], 30)
+                self.assertEqual(package["structured"]["priorities"], before["priorities"])
+                priority = before["priorities"][0]
+                self.assertEqual(package["repaired_training_links"], [priority["evidence"]])
+                self.assertIn({
+                    "problem": priority["title"],
+                    "original": priority["evidence"],
+                    "task": priority["action"],
+                    "requirements": [priority["success_check"]],
+                }, package["structured"]["logic_training"])
+                self.assertEqual(teaching, before)
+
+    def test_training_link_repair_does_not_rescue_invalid_priority_evidence(self):
+        for evidence in ("This quotation was invented.", "Public transport reduces traffic."):
+            with self.subTest(evidence=evidence):
+                teaching = self.teaching_payload()
+                teaching["priorities"][0]["evidence"] = evidence
+                locked = validate_scoring_decision(self.scoring_payload(), ESSAY)
+                cached_package = {
+                    "provider": "OpenAI",
+                    "model": "gpt-5.4-mini-2026-03-17",
+                    "prompt_version": SCORING_PROMPT_VERSION,
+                    "skill_version": SCORING_SKILL_VERSION,
+                    "scoring": locked,
+                    "usage": {},
+                }
+                completions = FakeCompletions([json.dumps(teaching)] * 2)
+                client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+                with (
+                    patch("src.ai_grader.build_client", return_value=client),
+                    patch("src.ai_grader.get_provider_config", return_value=(
+                        "OPENAI_API_KEY", "key", "https://api.openai.com/v1",
+                    )),
+                ):
+                    with self.assertRaises(AIGraderError):
+                        grade_essay_package(
+                            task_type="Task 2", topic="Question", essay=ESSAY,
+                            locked_scoring_package=cached_package,
+                        )
+
+                self.assertEqual(len(completions.calls), 2)
+                self.assertTrue(all(
+                    call["response_format"]["json_schema"]["name"]
+                    == TEACHING_FEEDBACK_JSON_SCHEMA["name"]
+                    for call in completions.calls
+                ))
+                self.assertEqual(
+                    {call["model"] for call in completions.calls},
+                    {"gpt-5.4-mini-2026-03-17"},
+                )
+                self.assertEqual(cached_package["scoring"], locked)
+
     def test_private_audit_hook_observes_both_calls_without_changing_them(self):
         completions = FakeCompletions(
             [json.dumps(self.scoring_payload(), ensure_ascii=False), json.dumps(self.teaching_payload(), ensure_ascii=False)]

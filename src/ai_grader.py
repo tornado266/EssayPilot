@@ -28,8 +28,8 @@ from src.report_schema import (
     drop_unverified_optional_teaching_items,
     estimated_band_range,
     restore_score_evidence_roles,
-    validate_examiner_result,
     validate_scoring_decision,
+    validate_teaching_training_links,
 )
 
 
@@ -437,6 +437,7 @@ def grade_essay_package(
         },
     ]
     sanitized_teaching_fields: list[str] = []
+    repaired_training_links: list[str] = []
 
     def validate_teaching(teaching: dict[str, Any], attempt: int) -> dict[str, Any]:
         if "criteria" in teaching or "overall_band" in teaching:
@@ -446,7 +447,9 @@ def grade_essay_package(
             sanitized_teaching_fields.extend(removed)
         merged = dict(teaching)
         merged["criteria"] = scoring["criteria"]
-        return validate_examiner_result(merged, essay)
+        validated, repaired = validate_teaching_training_links(merged, essay)
+        repaired_training_links.extend(repaired)
+        return validated
 
     try:
         structured, teaching_events = _validated_completion(
@@ -488,6 +491,7 @@ def grade_essay_package(
         "teaching_model": teaching_config.model,
         "teaching_reasoning_effort": teaching_config.reasoning_effort,
         "sanitized_teaching_fields": sorted(set(sanitized_teaching_fields)),
+        "repaired_training_links": list(dict.fromkeys(repaired_training_links)),
         "scoring_reused": scoring_reused,
         "schema_version": SCHEMA_VERSION,
         "overall_calibration_version": OVERALL_CALIBRATION_VERSION,

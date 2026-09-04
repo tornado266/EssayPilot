@@ -1,9 +1,11 @@
+import ast
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from streamlit.testing.v1 import AppTest
+from src.cloud_store import CloudStoreError, CloudUser
 
 from ui.alpine import (
     CSS_PATH,
@@ -19,6 +21,39 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class HomePageUiTests(unittest.TestCase):
+    def test_signed_in_snapshot_renders_pending_history_and_failure_actions(self):
+        source = (ROOT / "app.py").read_text(encoding="utf-8")
+        function = next(node for node in ast.parse(source).body
+                        if isinstance(node, ast.FunctionDef) and node.name == "render_learning_dashboard")
+        script = "\n".join([
+            "import streamlit as st",
+            "from urllib.parse import urlencode",
+            "from src.cloud_store import SupabaseStore, CloudStoreError, CloudUser",
+            "from src.home_dashboard import build_home_summary",
+            "from ui.alpine import render_home_heading, render_home_action_card",
+            ast.get_source_segment(source, function),
+            "render_learning_dashboard(SupabaseStore(), CloudUser('user-a', 'a@example.com', 'token'))",
+        ])
+        runs = [{"id": "run-latest", "overall_band": 7, "criteria": [], "created_at": "2026-09-01"}]
+        pending = [{"grading_run_id": "run-older", "task_kind": "logic", "original_text": "Explain why."}]
+        for snapshot, label, href in (
+            ((runs, pending), "继续这项训练", "?page=training&amp;run_id=run-older"),
+            ((runs, []), "从剑雅真题开始", "?page=report&amp;run_id=run-latest"),
+            (CloudStoreError("unavailable"), "从剑雅真题开始", "?page=write&amp;mode=topics"),
+        ):
+            with self.subTest(label=label, snapshot=snapshot):
+                with patch("src.cloud_store.SupabaseStore.get_home_snapshot") as load:
+                    if isinstance(snapshot, Exception):
+                        load.side_effect = snapshot
+                    else:
+                        load.return_value = snapshot
+                    app = AppTest.from_string(script).run()
+                self.assertEqual(len(app.exception), 0)
+                load.assert_called_once_with(CloudUser("user-a", "a@example.com", "token"))
+                html = "\n".join(str(item.proto.body) for item in app.get("html"))
+                self.assertIn(label, html)
+                self.assertIn(href, html)
+
     def test_guest_home_renders_actions_as_html_not_a_code_block(self):
         app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
         app.query_params["page"] = "home"
@@ -108,8 +143,9 @@ class HomePageUiTests(unittest.TestCase):
             "def render_demo_page", 1
         )[0]
 
-        self.assertIn("list_grading_runs(user, limit=2)", dashboard)
-        self.assertIn("list_pending_practice(user, limit=1)", dashboard)
+        self.assertIn("store.get_home_snapshot(user)", dashboard)
+        self.assertNotIn("list_grading_runs", dashboard)
+        self.assertNotIn("list_pending_practice", dashboard)
         self.assertIn('primary_label=summary.primary_label', dashboard)
         self.assertNotIn("list_learning_items", dashboard)
         self.assertNotIn("list_draft_revisions", dashboard)

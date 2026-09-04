@@ -382,6 +382,10 @@ class ExaminerResultError(ValueError):
     """Raised when a structured examiner response is incomplete or inconsistent."""
 
 
+class PriorityTrainingLinkError(ExaminerResultError):
+    """Valid coaching evidence is missing its corresponding practice task."""
+
+
 def calculate_descriptor_overall(criteria: list[dict[str, Any]]) -> float:
     """Calculate the uncalibrated IELTS half-band from four whole-band criteria."""
     raw_scores = [item.get("score") for item in criteria]
@@ -918,6 +922,12 @@ def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]
             f"locked {primary['criterion']} criterion. Copy exactly one of these allowed "
             f"strings without editing it: {allowed}"
         )
+    pseudo_rules = pseudo_scoring_rule_hits(data)
+    if pseudo_rules:
+        raise ExaminerResultError(
+            "Feedback must not present word counts, paragraph counts, templates, linking-word "
+            "counts, or prescribed constructions as IELTS requirements."
+        )
     training_originals = {
         _normalize_evidence_text(str(task.get("original", "")))
         for collection in ("sentence_training", "logic_training")
@@ -927,15 +937,10 @@ def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]
     for priority in priorities:
         evidence = _normalize_evidence_text(str(priority["evidence"]))
         if evidence not in training_originals:
-            raise ExaminerResultError(
-                "Every priority must link to sentence or logic training using the same original evidence."
+            raise PriorityTrainingLinkError(
+                "Every priority must link to sentence or logic training using the same original evidence. "
+                f"Missing training original: {priority['evidence']!r}."
             )
-    pseudo_rules = pseudo_scoring_rule_hits(data)
-    if pseudo_rules:
-        raise ExaminerResultError(
-            "Feedback must not present word counts, paragraph counts, templates, linking-word "
-            "counts, or prescribed constructions as IELTS requirements."
-        )
     normalized = deepcopy(data)
     for correction in normalized.get("sentence_corrections", []):
         if not isinstance(correction, dict):
@@ -958,6 +963,70 @@ def validate_examiner_result(data: dict[str, Any], essay: str) -> dict[str, Any]
     normalized["feedback_skill_version"] = FEEDBACK_SKILL_VERSION
     normalized["practice_band_interval_version"] = PRACTICE_BAND_INTERVAL_VERSION
     return normalized
+
+
+def validate_teaching_training_links(
+    data: dict[str, Any], essay: str
+) -> tuple[dict[str, Any], list[str]]:
+    """Complete missing tasks from validated priorities, then recheck every invariant.
+
+    Scores, evidence, actions and success checks stay unchanged. This is not a
+    fuzzy quote match or a generated model answer; the priority itself supplies
+    the exercise. Other validation failures still require the normal retry.
+    """
+    try:
+        return validate_examiner_result(data, essay), []
+    except PriorityTrainingLinkError:
+        normalized = deepcopy(data)
+
+    collections = ("sentence_training", "logic_training")
+    priorities = normalized["priorities"]
+    priority_quotes = {
+        _normalize_evidence_text(item["evidence"]) for item in priorities
+    }
+    repaired: list[str] = []
+    for priority in priorities:
+        originals = [
+            _normalize_evidence_text(task["original"])
+            for collection in collections
+            for task in normalized.get(collection, [])
+        ]
+        if _normalize_evidence_text(priority["evidence"]) in originals:
+            continue
+        if priority["action_type"] in {"replace", "repair", "proofread_recurring"}:
+            collection = "sentence_training"
+            task = {
+                "original": priority["evidence"],
+                "goal": f"{priority['action']}\n完成标准：{priority['success_check']}",
+                # An absent reference is preferable to inventing an English answer.
+                "reference": "",
+            }
+        else:
+            collection = "logic_training"
+            task = {
+                "problem": priority["title"],
+                "original": priority["evidence"],
+                "task": priority["action"],
+                "requirements": [priority["success_check"]],
+            }
+        tasks = normalized.setdefault(collection, [])
+        limit = EXAMINER_JSON_SCHEMA["schema"]["properties"][collection]["maxItems"]
+        if len(tasks) > limit:
+            raise ExaminerResultError(f"Too many {collection} tasks.")
+        if len(tasks) == limit:
+            # Keep at least one task for each already-linked priority, including
+            # when multiple tasks quote the same evidence.
+            removable = next((
+                index for index, existing in enumerate(tasks)
+                if (quote := _normalize_evidence_text(existing["original"])) not in priority_quotes
+                or originals.count(quote) > 1
+            ), None)
+            if removable is None:
+                raise PriorityTrainingLinkError("No room for the missing priority training task.")
+            del tasks[removable]
+        tasks.append(task)
+        repaired.append(priority["evidence"])
+    return validate_examiner_result(normalized, essay), repaired
 
 
 def score_snapshot(data: dict[str, Any]) -> dict[str, float | None]:

@@ -2515,6 +2515,8 @@ def render_sentence_practice(
     grading_run_id: str = "",
     error_tags: list[str] | None = None,
     read_only: bool = False,
+    persisted_attempts: list[dict[str, object]] | None = None,
+    goals: dict[str, str] | None = None,
 ) -> None:
     """Render the interactive sentence rewrite practice."""
     st.subheader("单句提分训练")
@@ -2525,14 +2527,15 @@ def render_sentence_practice(
 
     st.caption("先自己改写，再点击点评。AI 会根据你的版本给出具体建议。")
     references = references or {}
-    persisted_attempts: list[dict[str, object]] = []
-    if cloud_store and cloud_user and grading_run_id:
+    goals = goals or {}
+    if persisted_attempts is None and cloud_store and cloud_user and grading_run_id:
         try:
             persisted_attempts = cloud_store.list_practice_attempts_for_run(
                 cloud_user, grading_run_id
             )
         except (CloudStoreError, AttributeError):
             st.caption("已保存的训练点评暂时无法读取，请稍后刷新。")
+    persisted_attempts = persisted_attempts or []
 
     for index, original_sentence in enumerate(sentences, start=1):
         sentence_id = hashlib.md5(original_sentence.encode("utf-8")).hexdigest()[:10]
@@ -2628,6 +2631,8 @@ def render_sentence_practice(
                 else:
                     st.session_state.pop(access_key, None)
             st.markdown(f"**原句 {index}:** {original_sentence}")
+            if goal := str(goals.get(original_sentence) or "").strip():
+                st.markdown(f"**本题目标：** {goal}")
 
             if (
                 legacy_restore
@@ -2890,6 +2895,7 @@ def render_logic_practice(
     grading_run_id: str = "",
     error_tags: list[str] | None = None,
     read_only: bool = False,
+    persisted_attempts: list[dict[str, object]] | None = None,
 ) -> None:
     """Render interactive logic and structure rewrite practice."""
     st.subheader("写作提升验证")
@@ -2899,14 +2905,14 @@ def render_logic_practice(
         return
 
     st.caption("重写一个关键片段，再让 AI 对比原文和你的版本。")
-    persisted_attempts: list[dict[str, object]] = []
-    if cloud_store and cloud_user and grading_run_id:
+    if persisted_attempts is None and cloud_store and cloud_user and grading_run_id:
         try:
             persisted_attempts = cloud_store.list_practice_attempts_for_run(
                 cloud_user, grading_run_id
             )
         except (CloudStoreError, AttributeError):
             st.caption("已保存的训练点评暂时无法读取，请稍后刷新。")
+    persisted_attempts = persisted_attempts or []
 
     for index, task in enumerate(tasks, start=1):
         logic_source = f"{task['problem']}|{task['original']}"
@@ -2999,9 +3005,13 @@ def render_logic_practice(
                 else:
                     st.session_state.pop(access_key, None)
             st.markdown(f"**任务 {index}:** {task['problem']}")
-            st.markdown("改写/重写下面内容，使其逻辑更清晰、更符合雅思6.5水平：")
+            st.markdown(str(task.get("task") or "改写下面内容，补足本题指出的逻辑问题。"))
             st.markdown(f"> {task['original']}")
-            st.markdown("要求：2-4句话；要有清晰论点 + 解释 + 例子。")
+            requirements = task.get("requirements")
+            if isinstance(requirements, list):
+                for requirement in requirements:
+                    if str(requirement).strip():
+                        st.markdown(f"**完成检查：** {requirement}")
 
             if (
                 legacy_restore
@@ -3037,7 +3047,7 @@ def render_logic_practice(
                 "你的重写",
                 key=rewrite_key,
                 height=130,
-                placeholder="在这里输入你的2-4句话重写版本。",
+                placeholder="按照本题目标，在这里输入你的重写版本。",
                 disabled=bool(st.session_state.get(feedback_key)),
             )
 
@@ -3280,8 +3290,7 @@ def render_history(user_id: str) -> None:
 def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
     """Render the action-first signed-in home page from a minimal cloud snapshot."""
     try:
-        runs = store.list_grading_runs(user, limit=2)
-        pending = store.list_pending_practice(user, limit=1)
+        runs, pending = store.get_home_snapshot(user)
     except CloudStoreError as exc:
         st.warning(f"云端学习档案暂时不可用：{exc}")
         render_home_heading(
@@ -3845,6 +3854,16 @@ def grade_submission(
         else {}
     )
     if isinstance(cached_entry, dict):
+        cached_scoring = cached_entry.get("scoring_package")
+        if (
+            isinstance(cached_scoring, dict)
+            and cached_scoring.get("prompt_version") == SCORING_PROMPT_VERSION
+            and cached_scoring.get("skill_version") == SCORING_SKILL_VERSION
+            and isinstance(cached_scoring.get("scoring"), dict)
+            and cached_entry.get("scoring_topic") == topic
+            and cached_entry.get("scoring_essay") == essay
+        ):
+            locked_scoring_package = dict(cached_scoring)
         candidate = dict(cached_entry.get("package") or {})
         if candidate.get("prompt_version") == REPORT_PROMPT_VERSION:
             package = candidate
@@ -3914,6 +3933,17 @@ def grade_submission(
             if access_ticket and not access_ticket.get("local"):
                 pending_accesses[scoped_cache_key] = access_ticket
         try:
+            if locked_scoring_package is None:
+                locked_scoring_package = grade_scoring_decision(
+                    task_type="Task 2", topic=topic, essay=essay,
+                )
+            # Keep the validated score if teaching fails; retries only regenerate
+            # teaching. A score-only entry must never count as a complete report.
+            grading_cache[scoped_cache_key] = {
+                "scoring_package": locked_scoring_package,
+                "scoring_topic": topic,
+                "scoring_essay": essay,
+            }
             package = grade_essay_package(
                 task_type="Task 2",
                 topic=topic,
@@ -4804,12 +4834,28 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
             st.info(f"你有 {len(pending)} 项未完成训练，本页已优先显示当前作文的任务。")
     sentence_data = [item for item in structured.get("sentence_training", []) if isinstance(item, dict)]
     sentences = [str(item.get("original") or "") for item in sentence_data]
-    references = [str(item.get("reference") or "") for item in sentence_data]
+    references = {
+        str(item.get("original") or ""): str(item.get("reference") or "")
+        for item in sentence_data
+    }
+    goals = {
+        str(item.get("original") or ""): str(item.get("goal") or "")
+        for item in sentence_data
+    }
     queued = st.session_state.get("queued_sentence_training")
     if isinstance(queued, dict) and queued.get("original"):
         if queued["original"] not in sentences:
             sentences.insert(0, str(queued["original"]))
-            references.insert(0, str(queued.get("reference") or ""))
+            references[str(queued["original"])] = str(queued.get("reference") or "")
+    logic_tasks = [item for item in structured.get("logic_training", []) if isinstance(item, dict)]
+    # Both tabs execute in one Streamlit run. Share this read, not a cross-rerun
+    # cache, so a saved attempt or account/run change is visible immediately.
+    persisted_attempts: list[dict[str, object]] = []
+    if run_id and (sentences or logic_tasks):
+        try:
+            persisted_attempts = store.list_practice_attempts_for_run(user, run_id)
+        except (CloudStoreError, AttributeError):
+            st.caption("已保存的训练点评暂时无法读取，请稍后刷新。")
     training_mode = str(st.query_params.get("mode", "practice") or "practice")
     default_tab = "第二稿验证" if training_mode == "draft" else "单句训练"
     sentence_tab, logic_tab, draft_tab = st.tabs(
@@ -4841,14 +4887,17 @@ def render_training_page(store: SupabaseStore, user: CloudUser | None) -> None:
             cloud_store=store if user is not None else None, cloud_user=user,
             grading_run_id=run_id, error_tags=list(structured.get("error_tags", [])),
             read_only=read_only,
+            persisted_attempts=persisted_attempts,
+            goals=goals,
         )
     with logic_tab:
         render_logic_practice(
-            [item for item in structured.get("logic_training", []) if isinstance(item, dict)],
+            logic_tasks,
             "OpenAI", PRODUCTION_MODEL,
             cloud_store=store if user is not None else None, cloud_user=user,
             grading_run_id=run_id, error_tags=list(structured.get("error_tags", [])),
             read_only=read_only,
+            persisted_attempts=persisted_attempts,
         )
     with draft_tab:
         st.session_state.draft_2_active = True

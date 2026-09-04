@@ -59,7 +59,8 @@ def examiner_result_to_markdown(
         for item in data["useful_expressions"]
     )
     sentence_training = "\n".join(
-        f'{index}. “{item["original"]}”\n   - 训练目标：{item["goal"]}\n   - 英文参考：{item["reference"]}'
+        f'{index}. “{item["original"]}”\n   - 训练目标：{item["goal"]}'
+        + (f'\n   - 英文参考：{item["reference"]}' if item["reference"] else "")
         for index, item in enumerate(data["sentence_training"], 1)
     )
     logic_training = "\n\n".join(

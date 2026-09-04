@@ -896,6 +896,38 @@ class SupabaseStore:
                 return result[0]
         return None
 
+    def get_home_snapshot(
+        self, user: CloudUser
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Read only the fields displayed on home; load report bodies on demand."""
+        runs = self._authenticated_request(
+            user,
+            "GET",
+            "/rest/v1/grading_runs",
+            params={
+                "select": "id,overall_band,criteria,created_at",
+                "user_id": f"eq.{user.id}",
+                "order": "created_at.desc",
+                "limit": "2",
+            },
+        )
+        pending = self._authenticated_request(
+            user,
+            "GET",
+            "/rest/v1/practice_attempts",
+            params={
+                "select": "id,grading_run_id,task_kind,task_index,original_text,updated_at",
+                "user_id": f"eq.{user.id}",
+                "status": "eq.in_progress",
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
+        )
+        return (
+            runs if isinstance(runs, list) else [],
+            pending if isinstance(pending, list) else [],
+        )
+
     def list_grading_runs(
         self, user: CloudUser, limit: int = 30, offset: int = 0
     ) -> list[dict[str, Any]]:

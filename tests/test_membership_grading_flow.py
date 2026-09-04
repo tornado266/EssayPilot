@@ -79,10 +79,19 @@ def valid_package():
     }
 
 
+def valid_scoring_package():
+    return {
+        "prompt_version": "scoring-v",
+        "skill_version": "skill-v",
+        "scoring": {"criteria": [], "uncertainty": {}},
+        "usage": {"total_tokens": 30},
+    }
+
+
 class MembershipGradingFlowTests(unittest.TestCase):
     cache_key = ("guest", "visitor", "f" * 64)
 
-    def build(self, grader):
+    def build(self, grader, scorer=None):
         st = FakeStreamlit()
         calls = {"navigate": 0, "events": 0}
         namespace = {
@@ -100,6 +109,7 @@ class MembershipGradingFlowTests(unittest.TestCase):
             "submission_hash": lambda topic, essay: "f" * 64,
             "score_snapshot": lambda structured: {"Overall Band": structured["overall_band"]},
             "grade_essay_package": grader,
+            "grade_scoring_decision": scorer or (lambda **kwargs: valid_scoring_package()),
             "save_markdown_record": lambda **kwargs: None,
             "append_error_book": lambda **kwargs: None,
             "record_grading_event": lambda **kwargs: calls.__setitem__("events", calls["events"] + 1),
@@ -108,6 +118,114 @@ class MembershipGradingFlowTests(unittest.TestCase):
             "clear_membership_cache": lambda: None,
         }
         return load_grade_submission(namespace), st, calls
+
+    def test_teaching_retry_preserves_scoring_without_completing_partial_report(self):
+        scoring_calls = []
+        teaching_calls = []
+        scoring = valid_scoring_package()
+
+        def scorer(**kwargs):
+            scoring_calls.append(kwargs)
+            return scoring
+
+        def grader(**kwargs):
+            teaching_calls.append(kwargs)
+            if len(teaching_calls) == 1:
+                raise ValueError("teaching failed")
+            return valid_package()
+
+        grade_submission, st, calls = self.build(grader, scorer)
+        completions = []
+        kwargs = {
+            "topic": "topic",
+            "essay": "one two",
+            "reserve_model_access": lambda _fingerprint: {"kind": "guest", "flow_id": "flow"},
+            "complete_model_access": lambda ticket, run_id: completions.append(ticket),
+            "release_model_access": lambda ticket: None,
+        }
+        with self.assertRaisesRegex(ValueError, "teaching failed"):
+            grade_submission(object(), None, **kwargs)
+
+        cached = st.session_state.grading_cache[self.cache_key]
+        self.assertEqual(cached["scoring_package"], scoring)
+        self.assertNotIn("package", cached)
+        self.assertNotIn("latest_report", st.session_state)
+        self.assertEqual(completions, [])
+        self.assertEqual(calls, {"navigate": 0, "events": 0})
+
+        grade_submission(object(), None, **kwargs)
+
+        self.assertEqual(len(scoring_calls), 1)
+        self.assertEqual(len(teaching_calls), 2)
+        self.assertEqual(teaching_calls[1]["locked_scoring_package"], scoring)
+        self.assertEqual(len(completions), 1)
+        self.assertIn("package", st.session_state.grading_cache[self.cache_key])
+        self.assertFalse(st.session_state.get("reused_result_notice"))
+
+    def test_partial_scoring_is_not_reused_after_source_or_version_change(self):
+        for changed_field, changed_value in (
+            ("scoring_topic", "Topic"),
+            ("scoring_essay", "one  two"),
+            ("prompt_version", "older-scoring-v"),
+            ("skill_version", "older-skill-v"),
+        ):
+            with self.subTest(field=changed_field):
+                scoring_calls = []
+                teaching_calls = []
+                cached_scoring = valid_scoring_package()
+                cached_entry = {
+                    "scoring_package": cached_scoring,
+                    "scoring_topic": "topic",
+                    "scoring_essay": "one two",
+                }
+                if changed_field in ("prompt_version", "skill_version"):
+                    cached_scoring[changed_field] = changed_value
+                else:
+                    cached_entry[changed_field] = changed_value
+                fresh_scoring = valid_scoring_package()
+                fresh_scoring["usage"] = {"total_tokens": 45}
+                grade_submission, st, _ = self.build(
+                    lambda **kwargs: teaching_calls.append(kwargs) or valid_package(),
+                    lambda **kwargs: scoring_calls.append(kwargs) or fresh_scoring,
+                )
+                st.session_state.grading_cache = {self.cache_key: cached_entry}
+
+                grade_submission(object(), None, topic="topic", essay="one two")
+
+                self.assertEqual(len(scoring_calls), 1)
+                self.assertEqual(teaching_calls[0]["locked_scoring_package"], fresh_scoring)
+
+    def test_partial_scoring_is_not_reused_by_another_actor(self):
+        scoring_calls = []
+        grade_submission, st, _ = self.build(
+            lambda **kwargs: valid_package(),
+            lambda **kwargs: scoring_calls.append(kwargs) or valid_scoring_package(),
+        )
+        st.session_state.grading_cache = {
+            ("guest", "other-visitor", "f" * 64): {
+                "scoring_package": valid_scoring_package(),
+                "scoring_topic": "topic",
+                "scoring_essay": "one two",
+            }
+        }
+
+        grade_submission(object(), None, topic="topic", essay="one two")
+
+        self.assertEqual(len(scoring_calls), 1)
+
+    def test_failed_scoring_is_not_cached_or_sent_to_teaching(self):
+        def scorer(**kwargs):
+            raise ValueError("scoring failed")
+
+        def grader(**kwargs):
+            self.fail("teaching must wait for a validated score")
+
+        grade_submission, st, calls = self.build(grader, scorer)
+        with self.assertRaisesRegex(ValueError, "scoring failed"):
+            grade_submission(object(), None, topic="topic", essay="one two")
+
+        self.assertNotIn(self.cache_key, st.session_state.grading_cache)
+        self.assertEqual(calls, {"navigate": 0, "events": 0})
 
     def test_cache_hit_neither_reserves_nor_calls_model(self):
         def should_not_grade(**kwargs):
