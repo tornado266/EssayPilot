@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
-import pandas as pd
 import streamlit as st
 
 from src.cloud_store import CloudStoreError, SupabaseStore
@@ -203,6 +202,8 @@ def _render_tracking_metrics(data: dict[str, object]) -> None:
     daily = [row for row in (data.get("daily") or []) if isinstance(row, dict)]
     st.subheader("每日趋势")
     if daily:
+        import pandas as pd
+
         frame = pd.DataFrame(daily).rename(columns={"day": "日期", "active_users": "活跃用户", "gradings": "批改量"})
         st.line_chart(frame, x="日期", y=["活跃用户", "批改量"], color=["#0B4F8A", "#4D9BE6"])
     else:
@@ -454,6 +455,8 @@ def _render_trends_and_retention(data: dict[str, object]) -> None:
     st.subheader("趋势与留存")
     daily = _rows(data.get("daily"))
     if daily:
+        import pandas as pd
+
         frame = pd.DataFrame(daily).rename(columns={
             "day": "日期", "active_users": "活跃主体", "reports": "成功报告", "failures": "生成失败",
         })

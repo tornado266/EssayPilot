@@ -17,8 +17,6 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlencode
 
-import altair as alt
-import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -3289,8 +3287,24 @@ def render_history(user_id: str) -> None:
 
 def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
     """Render the action-first signed-in home page from a minimal cloud snapshot."""
+    # Browser components trigger an extra rerun when their initial value arrives.
+    # Reuse this display-only snapshot briefly within one user's page visit.
+    cached = st.session_state.get("latest_home_snapshot")
     try:
-        runs, pending = store.get_home_snapshot(user)
+        if (
+            isinstance(cached, dict)
+            and cached.get("user_id") == user.id
+            and 0 <= time.monotonic() - cached["fetched_at"] < 15
+        ):
+            runs, pending = cached["snapshot"]
+        else:
+            st.session_state.pop("latest_home_snapshot", None)
+            runs, pending = store.get_home_snapshot(user)
+            st.session_state.latest_home_snapshot = {
+                "user_id": user.id,
+                "fetched_at": time.monotonic(),
+                "snapshot": (runs, pending),
+            }
     except CloudStoreError as exc:
         st.warning(f"云端学习档案暂时不可用：{exc}")
         render_home_heading(
@@ -3593,6 +3607,10 @@ def hydrate_grading_run(
 
 
 def ensure_run_context(store: SupabaseStore, user: CloudUser | None) -> None:
+    # A saved home/archive URL can carry a run_id, but these pages do not
+    # need the full essay and second draft before they can be displayed.
+    if st.session_state.get("page_mode", "home") not in {"write", "report", "training"}:
+        return
     requested = str(st.query_params.get("run_id", "") or "")
     current = str(st.session_state.get("active_run_id", "") or "")
     if not requested or requested == current or user is None:
@@ -3760,7 +3778,7 @@ def render_app_navigation(user: CloudUser | None, *, store: SupabaseStore) -> No
             st.caption("本地开发模式")
     active = str(st.session_state.get("page_mode", "home"))
     short_labels = {"home": "首页", "write": "写作", "report": "报告", "training": "训练", "growth": "档案"}
-    run_id = str(st.session_state.get("active_run_id") or st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
+    run_id = str(st.query_params.get("run_id") or st.session_state.get("active_run_id") or st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
     links: list[str] = []
     for route in APP_ROUTES:
         query = f"?page={route}" + (f"&run_id={html.escape(run_id)}" if run_id else "")
@@ -5158,6 +5176,9 @@ def render_score_trend(runs: list[dict[str, object]]) -> None:
     if len(practice_dates) < 2 or not chart_rows:
         return
 
+    import altair as alt
+    import pandas as pd
+
     with st.expander("成绩趋势", expanded=False):
         chart = (
             alt.Chart(pd.DataFrame(chart_rows))
@@ -5517,7 +5538,13 @@ cloud_store.bind_auth_session(
 )
 cloud_user = restore_cloud_user_session(cloud_store)
 
-if is_admin_request():
+requested_page = str(st.query_params.get("page", "") or "")
+admin_requested = is_admin_request()
+if admin_requested or (requested_page or st.session_state.page_mode) != "home":
+    # Leaving home (including demo/login/admin) must refresh pending work on return.
+    st.session_state.pop("latest_home_snapshot", None)
+
+if admin_requested:
     if cloud_user is None:
         st.session_state.login_return_route = "home"
         render_login_page(cloud_store)
@@ -5525,7 +5552,6 @@ if is_admin_request():
         render_admin_dashboard()
     st.stop()
 
-requested_page = str(st.query_params.get("page", "") or "")
 if requested_page == "demo" and st.session_state.page_mode != "demo":
     st.session_state.page_mode = "demo"
     st.session_state.tutorial_clicked_pending = True

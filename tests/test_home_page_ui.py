@@ -27,6 +27,7 @@ class HomePageUiTests(unittest.TestCase):
                         if isinstance(node, ast.FunctionDef) and node.name == "render_learning_dashboard")
         script = "\n".join([
             "import streamlit as st",
+            "import time",
             "from urllib.parse import urlencode",
             "from src.cloud_store import SupabaseStore, CloudStoreError, CloudUser",
             "from src.home_dashboard import build_home_summary",
