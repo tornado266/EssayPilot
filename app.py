@@ -4183,7 +4183,7 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
         with col_words:
             render_score_card("当前词数", str(word_count), "Task 2 建议 250 词以上")
         with col_model:
-            render_score_card("固定模型", PRODUCTION_MODEL, "评分标准保持一致")
+            render_score_card("固定模型", "gpt", "评分标准保持一致")
         warning = word_count_warning("Task 2", word_count) if essay.strip() else ""
         if warning:
             st.warning(warning)
