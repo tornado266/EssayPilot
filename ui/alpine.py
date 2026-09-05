@@ -302,6 +302,15 @@ def render_home_action_card(
     )
 
 
+def render_home_loading() -> None:
+    """Keep public entry links usable while login or personal progress loads."""
+    render_guest_home_intro(
+        title="先选一道题，开始今天的练习",
+        body="正在同步登录状态与学习进度，你也可以先选题或打开写作区。",
+        steps=(),
+    )
+
+
 def render_guest_home_intro(
     *,
     title: str = "先完成一篇，再决定练什么",

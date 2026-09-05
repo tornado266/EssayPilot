@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 from src.cloud_store import CloudStoreError, CloudUser
 
@@ -31,7 +32,7 @@ class HomePageUiTests(unittest.TestCase):
             "from urllib.parse import urlencode",
             "from src.cloud_store import SupabaseStore, CloudStoreError, CloudUser",
             "from src.home_dashboard import build_home_summary",
-            "from ui.alpine import render_home_heading, render_home_action_card",
+            "from ui.alpine import render_home_heading, render_home_action_card, render_home_loading",
             ast.get_source_segment(source, function),
             "render_learning_dashboard(SupabaseStore(), CloudUser('user-a', 'a@example.com', 'token'))",
         ])
@@ -43,17 +44,28 @@ class HomePageUiTests(unittest.TestCase):
             (CloudStoreError("unavailable"), "从剑雅真题开始", "?page=write&amp;mode=topics"),
         ):
             with self.subTest(label=label, snapshot=snapshot):
-                with patch("src.cloud_store.SupabaseStore.get_home_snapshot") as load:
-                    if isinstance(snapshot, Exception):
-                        load.side_effect = snapshot
-                    else:
-                        load.return_value = snapshot
+                with patch("src.cloud_store.SupabaseStore.get_home_snapshot") as load, patch(
+                    "ui.alpine.st.html", wraps=st.html,
+                ) as rendered:
+                    def fetch_snapshot(user):
+                        # The public links must be sent before a slow cloud read,
+                        # not simply inserted when all networking has finished.
+                        self.assertTrue(any(
+                            "正在同步登录状态与学习进度" in str(call.args[0])
+                            for call in rendered.call_args_list
+                        ))
+                        if isinstance(snapshot, Exception):
+                            raise snapshot
+                        return snapshot
+
+                    load.side_effect = fetch_snapshot
                     app = AppTest.from_string(script).run()
                 self.assertEqual(len(app.exception), 0)
                 load.assert_called_once_with(CloudUser("user-a", "a@example.com", "token"))
                 html = "\n".join(str(item.proto.body) for item in app.get("html"))
                 self.assertIn(label, html)
                 self.assertIn(href, html)
+                self.assertNotIn("正在同步登录状态与学习进度", html)
 
     def test_guest_home_renders_actions_as_html_not_a_code_block(self):
         app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
@@ -77,6 +89,37 @@ class HomePageUiTests(unittest.TestCase):
         self.assertIn("开始批改", html_bodies)
         self.assertIn("从剑雅真题选题", html_bodies)
         self.assertIn("?page=demo", html_bodies)
+        self.assertNotIn("正在同步登录状态与学习进度", html_bodies)
+
+    def test_home_links_are_visible_before_browser_login_finishes(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        app.query_params["page"] = "home"
+        with patch(
+            "src.auth_session._AUTH_COMPONENT",
+            return_value=SimpleNamespace(auth_session={"status": "loading"}, auth_wake=0),
+        ), patch("src.cloud_store.SupabaseStore.get_home_snapshot") as snapshot:
+            app.run()
+
+        self.assertEqual(len(app.exception), 0)
+        snapshot.assert_not_called()
+        markup = "\n".join(str(item.proto.body) for item in app.get("html"))
+        self.assertIn("正在同步登录状态与学习进度", markup)
+        self.assertIn("?page=write", markup)
+        self.assertIn("?page=write&amp;mode=topics", markup)
+        self.assertNotIn("已登录", markup)
+        self.assertNotIn("Overall", markup)
+
+    def test_login_route_does_not_show_the_public_home_preview(self):
+        app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)
+        app.query_params["page"] = "login"
+        with patch(
+            "src.auth_session._AUTH_COMPONENT",
+            return_value=SimpleNamespace(auth_session={"status": "loading"}, auth_wake=0),
+        ):
+            app.run()
+        self.assertEqual(len(app.exception), 0)
+        markup = "\n".join(str(item.proto.body) for item in app.get("html"))
+        self.assertNotIn("正在同步登录状态与学习进度", markup)
 
     def test_guest_purchase_mode_renders_offer_and_login_action(self):
         app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30)

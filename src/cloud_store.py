@@ -9,6 +9,7 @@ import json
 import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -198,16 +199,8 @@ class SupabaseStore:
         except ValueError:
             return response.text
 
-    def _authenticated_request(
-        self,
-        user: CloudUser,
-        method: str,
-        path: str,
-        *,
-        allow_refresh: bool = True,
-        **kwargs: Any,
-    ) -> Any:
-        """Retry exactly one explicit 401 after rotating the user's session."""
+    def _active_request_user(self, user: CloudUser, *, allow_refresh: bool = True) -> CloudUser:
+        """Resolve session state on the calling (Streamlit) thread only."""
         if user.id in self._auth_blocked_user_ids:
             raise CloudSessionExpiredError(
                 "The saved login session has expired.", status_code=401
@@ -220,6 +213,19 @@ class SupabaseStore:
                     active_user = latest
             elif self._runtime_user is not None and self._runtime_user.id == user.id:
                 active_user = self._runtime_user
+        return active_user
+
+    def _authenticated_request(
+        self,
+        user: CloudUser,
+        method: str,
+        path: str,
+        *,
+        allow_refresh: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """Retry exactly one explicit 401 after rotating the user's session."""
+        active_user = self._active_request_user(user, allow_refresh=allow_refresh)
         try:
             return self._request(
                 method, path, access_token=active_user.access_token, **kwargs
@@ -900,29 +906,43 @@ class SupabaseStore:
         self, user: CloudUser
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Read only the fields displayed on home; load report bodies on demand."""
-        runs = self._authenticated_request(
-            user,
-            "GET",
-            "/rest/v1/grading_runs",
-            params={
+        queries = (
+            ("/rest/v1/grading_runs", {
                 "select": "id,overall_band,criteria,created_at",
                 "user_id": f"eq.{user.id}",
                 "order": "created_at.desc",
                 "limit": "2",
-            },
-        )
-        pending = self._authenticated_request(
-            user,
-            "GET",
-            "/rest/v1/practice_attempts",
-            params={
+            }),
+            ("/rest/v1/practice_attempts", {
                 "select": "id,grading_run_id,task_kind,task_index,original_text,updated_at",
                 "user_id": f"eq.{user.id}",
                 "status": "eq.in_progress",
                 "order": "updated_at.desc",
                 "limit": "1",
-            },
+            }),
         )
+        active_user = self._active_request_user(user)
+        # The two small, independent reads should cost one network wait, not two.
+        # Workers perform only HTTP; token rotation and session callbacks stay here.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [
+                pool.submit(
+                    self._request, "GET", path,
+                    access_token=active_user.access_token, params=params, timeout=5,
+                )
+                for path, params in queries
+            ]
+        results = []
+        for (path, params), future in zip(queries, futures):
+            try:
+                results.append(future.result())
+            except CloudStoreError as exc:
+                if exc.status_code != 401:
+                    raise
+                results.append(self._authenticated_request(
+                    user, "GET", path, params=params, timeout=5,
+                ))
+        runs, pending = results
         return (
             runs if isinstance(runs, list) else [],
             pending if isinstance(pending, list) else [],

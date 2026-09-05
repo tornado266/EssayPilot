@@ -54,6 +54,7 @@ class HomeSnapshotCacheTests(unittest.TestCase):
             "build_home_summary": build_home_summary,
             "render_home_heading": Mock(),
             "render_home_action_card": self.card,
+            "render_home_loading": Mock(),
         }
         self.namespace.update({name: value for name, value in vars(auth_session).items()
                                if name.startswith("AUTH_")})

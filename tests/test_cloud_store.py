@@ -1,6 +1,7 @@
 import unittest
 import base64
 import json
+import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -346,13 +347,16 @@ class CloudStoreTests(unittest.TestCase):
     def test_home_snapshot_fetches_only_display_fields_under_user_rls(self, request):
         runs = [{"id": "run-a", "overall_band": 7, "criteria": [], "created_at": "2026-09-01"}]
         pending = [{"id": "task-a", "grading_run_id": "run-b", "task_kind": "logic"}]
-        request.side_effect = [self.response(200, runs), self.response(200, pending)]
+        request.side_effect = lambda method, url, **kwargs: self.response(
+            200, runs if url.endswith("/grading_runs") else pending
+        )
         user = CloudUser("user-a", "a@example.com", "user-access-token")
 
         self.assertEqual(self.store.get_home_snapshot(user), (runs, pending))
 
         self.assertEqual(request.call_count, 2)
-        runs_call, pending_call = request.call_args_list
+        runs_call = next(call for call in request.call_args_list if call.args[1].endswith("/grading_runs"))
+        pending_call = next(call for call in request.call_args_list if call.args[1].endswith("/practice_attempts"))
         self.assertTrue(runs_call.args[1].endswith("/rest/v1/grading_runs"))
         self.assertEqual(runs_call.kwargs["params"], {
             "select": "id,overall_band,criteria,created_at",
@@ -365,9 +369,76 @@ class CloudStoreTests(unittest.TestCase):
             "order": "updated_at.desc", "limit": "1",
         })
         for call in request.call_args_list:
+            self.assertEqual(call.kwargs["timeout"], 5)
             self.assertEqual(call.args[0], "GET")
             self.assertEqual(call.kwargs["headers"]["Authorization"], "Bearer user-access-token")
             self.assertEqual(call.kwargs["headers"]["apikey"], "public-anon-key")
+
+    def test_home_reads_overlap_without_session_callbacks_in_workers(self):
+        barrier = threading.Barrier(2, timeout=3)
+        main_thread = threading.get_ident()
+        user = CloudUser("user-a", "a@example.com", "old-token")
+        current = CloudUser("user-a", "a@example.com", "current-token")
+
+        def get_user():
+            self.assertEqual(threading.get_ident(), main_thread)
+            return current
+
+        def read(method, path, **kwargs):
+            self.assertNotEqual(threading.get_ident(), main_thread)
+            self.assertEqual(kwargs["access_token"], "current-token")
+            barrier.wait()  # Serial reads cannot pass this rendezvous.
+            return [{"path": path}]
+
+        self.store.bind_auth_session(get_user, Mock(), Mock())
+        with patch.object(self.store, "_request", side_effect=read):
+            runs, pending = self.store.get_home_snapshot(user)
+        self.assertEqual(runs, [{"path": "/rest/v1/grading_runs"}])
+        self.assertEqual(pending, [{"path": "/rest/v1/practice_attempts"}])
+
+    def test_home_expired_reads_rotate_token_once_on_main_thread(self):
+        main_thread = threading.get_ident()
+        user = CloudUser("user-a", "a@example.com", "expired", "refresh-token")
+        refreshed = CloudUser("user-a", "a@example.com", "fresh", "rotated-token")
+        state = [user]
+
+        def get_user():
+            self.assertEqual(threading.get_ident(), main_thread)
+            return state[0]
+
+        def update(value):
+            self.assertEqual(threading.get_ident(), main_thread)
+            state[0] = value
+
+        def read(method, path, **kwargs):
+            if kwargs["access_token"] == "expired":
+                raise CloudStoreError("expired", status_code=401)
+            return [{"path": path}]
+
+        def refresh(token):
+            self.assertEqual(threading.get_ident(), main_thread)
+            self.assertEqual(token, "refresh-token")
+            return refreshed
+
+        invalidated = Mock()
+        self.store.bind_auth_session(get_user, update, invalidated)
+        with patch.object(self.store, "_request", side_effect=read), patch.object(
+            self.store, "refresh", side_effect=refresh,
+        ) as rotate:
+            runs, pending = self.store.get_home_snapshot(user)
+        rotate.assert_called_once()
+        invalidated.assert_not_called()
+        self.assertEqual(state[0], refreshed)
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(len(pending), 1)
+
+    def test_home_blocked_session_sends_no_parallel_reads(self):
+        user = CloudUser("user-a", "a@example.com", "expired")
+        self.store._auth_blocked_user_ids.add(user.id)
+        with patch.object(self.store, "_request") as request:
+            with self.assertRaises(CloudSessionExpiredError):
+                self.store.get_home_snapshot(user)
+        request.assert_not_called()
 
     @patch("src.cloud_store.requests.request")
     def test_home_snapshot_handles_empty_data_and_propagates_service_failure(self, request):

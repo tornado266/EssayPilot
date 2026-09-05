@@ -132,6 +132,7 @@ from ui.alpine import (
     render_guest_home_intro,
     render_home_action_card,
     render_home_heading,
+    render_home_loading,
     render_home_preview_link,
     render_hero as render_alpine_hero,
     render_scoring_loader,
@@ -3290,6 +3291,7 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
     # Browser components trigger an extra rerun when their initial value arrives.
     # Reuse this display-only snapshot briefly within one user's page visit.
     cached = st.session_state.get("latest_home_snapshot")
+    loading = st.empty()
     try:
         if (
             isinstance(cached, dict)
@@ -3299,7 +3301,12 @@ def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
             runs, pending = cached["snapshot"]
         else:
             st.session_state.pop("latest_home_snapshot", None)
-            runs, pending = store.get_home_snapshot(user)
+            with loading.container():
+                render_home_loading()
+            try:
+                runs, pending = store.get_home_snapshot(user)
+            finally:
+                loading.empty()
             st.session_state.latest_home_snapshot = {
                 "user_id": user.id,
                 "fetched_at": time.monotonic(),
@@ -5536,10 +5543,24 @@ cloud_store.bind_auth_session(
     ),
     mark_cloud_session_invalid,
 )
-cloud_user = restore_cloud_user_session(cloud_store)
-
 requested_page = str(st.query_params.get("page", "") or "")
 admin_requested = is_admin_request()
+# Public links need neither a browser-storage round trip nor an auth refresh.
+# Keep all account data and protected routes behind the existing auth gate.
+home_entry_preview = None
+if (
+    not admin_requested
+    and (requested_page or st.session_state.page_mode) == "home"
+    and not st.query_params.get("mode")
+):
+    home_entry_preview = st.empty()
+    with home_entry_preview.container():
+        render_home_loading()
+
+cloud_user = restore_cloud_user_session(cloud_store)
+if home_entry_preview is not None:
+    home_entry_preview.empty()
+
 if admin_requested or (requested_page or st.session_state.page_mode) != "home":
     # Leaving home (including demo/login/admin) must refresh pending work on return.
     st.session_state.pop("latest_home_snapshot", None)

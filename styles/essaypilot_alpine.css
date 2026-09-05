@@ -2142,7 +2142,8 @@ div[class*="st-key-correction_history_card_"] [data-testid="stVerticalBlockBorde
 
 @media (max-width: 768px) {
   .block-container {
-    padding-top: 1rem;
+    /* Clear the fixed toolbar, then start the page immediately below it. */
+    padding-top: 4.25rem;
     padding-right: 1rem;
     padding-bottom: 5.5rem;
     padding-left: 1rem;
@@ -2302,26 +2303,41 @@ div[class*="st-key-correction_history_card_"] [data-testid="stVerticalBlockBorde
   }
 
   .st-key-mobile_account_bar {
-    display: block;
-    margin: 3.45rem 0 0.55rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    margin: 0 0 0.55rem;
     padding: 0.75rem;
     border-color: var(--ep-border);
     background: rgba(255, 255, 255, 0.96);
     box-shadow: var(--ep-shadow-sm);
   }
 
-  .st-key-desktop_account_bar {
+  .st-key-desktop_account_bar,
+  [data-testid="stLayoutWrapper"]:has(> .st-key-desktop_account_bar) {
     display: none;
   }
 
+  [data-testid="stElementContainer"]:has(.ep-global-site-entry) {
+    position: absolute;
+    width: 0;
+    height: 0;
+  }
+
+  .st-key-mobile_account_bar [data-testid="stCaptionContainer"] {
+    /* Streamlit's negative caption margin otherwise pulls the button over text. */
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
   .st-key-mobile_account_bar [data-testid="stCaptionContainer"] p {
-    margin-bottom: 0.35rem;
+    margin: 0;
     font-size: 0.78rem;
     line-height: 1.35;
   }
 
   .st-key-mobile_account_bar [data-testid="stButton"] button {
-    min-height: 40px;
+    min-height: 44px;
   }
 
   [data-testid="stElementContainer"]:has(.mobile-product-nav) {
