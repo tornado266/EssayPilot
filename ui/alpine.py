@@ -22,7 +22,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 CSS_PATH = BASE_DIR / "styles" / "essaypilot_alpine.css"
 HERO_WEBP_PATH = BASE_DIR / "assets" / "alpine" / "hero-mountain.webp"
 HERO_JPG_PATH = BASE_DIR / "assets" / "alpine" / "hero-mountain.jpg"
-HOME_DAWN_PATH = BASE_DIR / "assets" / "alpine" / "home-snow-dawn.png"
+HOME_DAWN_PATH = BASE_DIR / "static" / "home-snow-dawn.jpg"
 ESSAYPILOT_LOGO_PATH = BASE_DIR / "assets" / "essaypilot-logo.png"
 
 
@@ -148,10 +148,9 @@ def inject_alpine_theme() -> None:
 
 def inject_home_background() -> None:
     """Add the local snow artwork only while rendering the learning home."""
-    image_uri = _image_data_uri(str(HOME_DAWN_PATH))
     st.html(
         '<style>[data-testid="stAppViewContainer"]:has(.ep-home-heading, .ep-home-welcome)'
-        f'{{--ep-home-dawn: url("{image_uri}");}}</style>'
+        '{--ep-home-dawn: url("app/static/home-snow-dawn.jpg");}</style>'
     )
 
 

@@ -34,6 +34,25 @@ def snapshot(run_id="run-a", *, pending=False):
 
 
 class HomeSnapshotCacheTests(unittest.TestCase):
+    def test_all_progress_writes_invalidate_snapshot_before_saving(self):
+        tree = ast.parse((ROOT / "app.py").read_text(encoding="utf-8"))
+        writes = 0
+        for node in ast.walk(tree):
+            for _, statements in ast.iter_fields(node):
+                if not isinstance(statements, list):
+                    continue
+                for index, statement in enumerate(statements):
+                    value = getattr(statement, "value", None)
+                    if not (isinstance(value, ast.Call)
+                            and isinstance(value.func, ast.Attribute)
+                            and value.func.attr in {"save_grading_cycle", "save_practice_attempt"}):
+                        continue
+                    writes += 1
+                    self.assertGreater(index, 0)
+                    self.assertEqual(ast.unparse(statements[index - 1]),
+                                     "st.session_state.pop('latest_home_snapshot', None)")
+        self.assertEqual(writes, 8)
+
     def setUp(self):
         self.st = MagicMock()
         self.st.session_state = SessionState()
@@ -73,7 +92,7 @@ class HomeSnapshotCacheTests(unittest.TestCase):
 
     def test_same_account_rerun_reuses_successful_snapshot(self):
         self.assertTrue(self.render(self.store, self.user))
-        self.clock.return_value = 114.9
+        self.clock.return_value = 159.9
         self.assertTrue(self.render(self.store, self.user))
         self.store.get_home_snapshot.assert_called_once_with(self.user)
         self.assertEqual(self.card.call_count, 2)
@@ -81,7 +100,7 @@ class HomeSnapshotCacheTests(unittest.TestCase):
 
     def test_ttl_expiry_loads_current_pending_task(self):
         self.render(self.store, self.user)
-        self.clock.return_value = 115.0
+        self.clock.return_value = 160.0
         self.store.get_home_snapshot.return_value = snapshot("run-new", pending=True)
         self.render(self.store, self.user)
         self.assertEqual(self.store.get_home_snapshot.call_count, 2)
@@ -117,7 +136,7 @@ class HomeSnapshotCacheTests(unittest.TestCase):
     def test_failed_refresh_never_falls_back_to_expired_pending_task(self):
         self.store.get_home_snapshot.return_value = snapshot("run-stale", pending=True)
         self.render(self.store, self.user)
-        self.clock.return_value = 116.0
+        self.clock.return_value = 161.0
         self.store.get_home_snapshot.side_effect = [CloudStoreError("offline"), snapshot("run-new")]
         self.render(self.store, self.user)
         self.assertNotIn("latest_home_snapshot", self.st.session_state)
@@ -177,19 +196,32 @@ class HomeSnapshotAppTests(unittest.TestCase):
         self.assertTrue(app.session_state["visitor_hash"])
         self.assertEqual(load.call_count, 1)
 
-    def test_leaving_for_write_then_returning_loads_new_pending_task(self):
-        app, load = self.signed_in_app(visitor_values=["", "", ""])
+    def test_leaving_for_write_then_returning_reuses_snapshot_and_preserves_draft(self):
+        app, load = self.signed_in_app(visitor_values=["", "", "", ""])
         app.run()
         self.assertEqual(len(app.exception), 0)
         self.assertIn("latest_home_snapshot", app.session_state)
-        app.query_params["page"] = "write"
-        app.run()
+        app.button(key="mobile_nav_write").click().run()
         self.assertEqual(len(app.exception), 0)
-        self.assertNotIn("latest_home_snapshot", app.session_state)
+        self.assertIn("latest_home_snapshot", app.session_state)
         self.assertEqual(load.call_count, 1)
-        load.return_value = snapshot("run-new", pending=True)
-        app.query_params["page"] = "home"
+        app.text_area(key="topic_input").set_value("A navigation test topic.")
+        app.text_area(key="essay_input").set_value("My unfinished essay stays here.")
+        app.button(key="mobile_nav_home").click().run()
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(load.call_count, 1)
+        app.button(key="mobile_nav_write").click().run()
+        self.assertEqual(len(app.exception), 0)
+        self.assertEqual(app.text_area(key="essay_input").value, "My unfinished essay stays here.")
+        self.assertEqual(app.text_area(key="topic_input").value, "A navigation test topic.")
+
+    def test_invalidated_snapshot_loads_new_pending_task_on_return(self):
+        app, load = self.signed_in_app(visitor_values=["", "", ""])
         app.run()
+        app.button(key="mobile_nav_write").click().run()
+        del app.session_state["latest_home_snapshot"]
+        load.return_value = snapshot("run-new", pending=True)
+        app.button(key="mobile_nav_home").click().run()
         self.assertEqual(len(app.exception), 0)
         self.assertEqual(load.call_count, 2)
         html = "\n".join(str(item.proto.body) for item in app.get("html"))

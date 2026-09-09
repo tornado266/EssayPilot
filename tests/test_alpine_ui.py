@@ -11,12 +11,16 @@ from ui.alpine import (
 class AlpineUiTests(unittest.TestCase):
     def test_home_snow_background_is_local_and_scoped(self):
         self.assertTrue(HOME_DAWN_PATH.exists())
-        self.assertLess(HOME_DAWN_PATH.stat().st_size, 2_000_000)
+        self.assertLess(HOME_DAWN_PATH.stat().st_size, 200_000)
         with patch("ui.alpine.st.html") as rendered:
             inject_home_background()
         markup = rendered.call_args.args[0]
         self.assertIn(':has(.ep-home-heading, .ep-home-welcome)', markup)
-        self.assertIn('data:image/png;base64,', markup)
+        self.assertIn('app/static/home-snow-dawn.jpg', markup)
+        self.assertNotIn('base64', markup)
+        self.assertLess(len(markup), 250)
+        self.assertIn('enableStaticServing = true',
+                      (CSS_PATH.parent.parent / '.streamlit/config.toml').read_text())
         self.assertTrue(markup.startswith('<style>'))
         css = CSS_PATH.read_text(encoding="utf-8")
         self.assertIn('var(--ep-home-dawn,', css)

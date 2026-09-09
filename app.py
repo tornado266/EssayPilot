@@ -1179,6 +1179,7 @@ def claim_guest_result(store: SupabaseStore, user: CloudUser) -> bool:
     if not isinstance(pending, dict):
         return True
     try:
+        st.session_state.pop("latest_home_snapshot", None)
         cloud_ids = store.save_grading_cycle(
             user,
             question=str(pending["topic"]),
@@ -2600,6 +2601,7 @@ def render_sentence_practice(
                 and grading_run_id
             ):
                 try:
+                    st.session_state.pop("latest_home_snapshot", None)
                     persisted_attempt = cloud_store.save_practice_attempt(
                         cloud_user,
                         grading_run_id=grading_run_id,
@@ -2758,6 +2760,7 @@ def render_sentence_practice(
                                 )
                                 if cloud_store and cloud_user and grading_run_id:
                                     try:
+                                        st.session_state.pop("latest_home_snapshot", None)
                                         persisted_attempt = cloud_store.save_practice_attempt(
                                             cloud_user,
                                             grading_run_id=grading_run_id,
@@ -2828,6 +2831,7 @@ def render_sentence_practice(
                     else:
                         if cloud_store and cloud_user and grading_run_id:
                             try:
+                                st.session_state.pop("latest_home_snapshot", None)
                                 cloud_store.save_practice_attempt(
                                     cloud_user,
                                     grading_run_id=grading_run_id,
@@ -2974,6 +2978,7 @@ def render_logic_practice(
                 and grading_run_id
             ):
                 try:
+                    st.session_state.pop("latest_home_snapshot", None)
                     persisted_attempt = cloud_store.save_practice_attempt(
                         cloud_user,
                         grading_run_id=grading_run_id,
@@ -3131,6 +3136,7 @@ def render_logic_practice(
                                 )
                                 if cloud_store and cloud_user and grading_run_id:
                                     try:
+                                        st.session_state.pop("latest_home_snapshot", None)
                                         persisted_attempt = cloud_store.save_practice_attempt(
                                             cloud_user,
                                             grading_run_id=grading_run_id,
@@ -3201,6 +3207,7 @@ def render_logic_practice(
                     else:
                         if cloud_store and cloud_user and grading_run_id:
                             try:
+                                st.session_state.pop("latest_home_snapshot", None)
                                 cloud_store.save_practice_attempt(
                                     cloud_user,
                                     grading_run_id=grading_run_id,
@@ -3306,14 +3313,14 @@ def render_history(user_id: str) -> None:
 def render_learning_dashboard(store: SupabaseStore, user: CloudUser) -> bool:
     """Render the action-first signed-in home page from a minimal cloud snapshot."""
     # Browser components trigger an extra rerun when their initial value arrives.
-    # Reuse this display-only snapshot briefly within one user's page visit.
+    # Keep this per-user display snapshot across navigation; writes invalidate it.
     cached = st.session_state.get("latest_home_snapshot")
     loading = st.empty()
     try:
         if (
             isinstance(cached, dict)
             and cached.get("user_id") == user.id
-            and 0 <= time.monotonic() - cached["fetched_at"] < 15
+            and 0 <= time.monotonic() - cached["fetched_at"] < 60
         ):
             runs, pending = cached["snapshot"]
         else:
@@ -3559,6 +3566,10 @@ APP_ROUTES = {
 
 def navigate(route: str, run_id: str = "", mode: str = "") -> None:
     """Switch the visible product page and preserve a shareable run context."""
+    # Detach drafts from widget cleanup when the writing page is unmounted.
+    for key in ("topic_input", "essay_input"):
+        if key in st.session_state:
+            st.session_state[key] = st.session_state[key]
     route = route if route in APP_ROUTES else "home"
     st.session_state.page_mode = route
     st.query_params["page"] = route
@@ -3803,12 +3814,17 @@ def render_app_navigation(user: CloudUser | None, *, store: SupabaseStore) -> No
     active = str(st.session_state.get("page_mode", "home"))
     short_labels = {"home": "首页", "write": "写作", "report": "报告", "training": "训练", "growth": "档案"}
     run_id = str(st.query_params.get("run_id") or st.session_state.get("active_run_id") or st.session_state.get("latest_cloud_ids", {}).get("grading_run_id", ""))
-    links: list[str] = []
-    for route in APP_ROUTES:
-        query = f"?page={route}" + (f"&run_id={html.escape(run_id)}" if run_id else "")
-        active_class = " active" if route == active else ""
-        links.append(f'<a class="{active_class.strip()}" href="{query}">{short_labels[route]}</a>')
-    st.markdown(f'<nav class="mobile-product-nav">{"".join(links)}</nav>', unsafe_allow_html=True)
+    with st.container(key="mobile_product_nav"):
+        for column, route in zip(st.columns(len(APP_ROUTES), gap=None), APP_ROUTES):
+            with column:
+                st.button(
+                    short_labels[route],
+                    key=f"mobile_nav_{route}",
+                    type="primary" if route == active else "secondary",
+                    on_click=navigate,
+                    args=(route, run_id),
+                    use_container_width=True,
+                )
 
 
 def _run_priority(structured: dict[str, object]) -> str:
@@ -4032,6 +4048,7 @@ def grade_submission(
         )
     if user is not None and not cloud_ids:
         try:
+            st.session_state.pop("latest_home_snapshot", None)
             cloud_ids = store.save_grading_cycle(
                 user, question=topic, essay=essay, word_count=word_count,
                 package=package, content_hash=fingerprint,
@@ -5608,10 +5625,6 @@ if (
 cloud_user = restore_cloud_user_session(cloud_store)
 if home_entry_preview is not None:
     home_entry_preview.empty()
-
-if admin_requested or (requested_page or st.session_state.page_mode) != "home":
-    # Leaving home (including demo/login/admin) must refresh pending work on return.
-    st.session_state.pop("latest_home_snapshot", None)
 
 if admin_requested:
     if cloud_user is None:

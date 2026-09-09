@@ -398,6 +398,7 @@ class MembershipGradingFlowTests(unittest.TestCase):
 
     def test_guest_claim_moves_cache_to_logged_in_actor(self):
         st = FakeStreamlit()
+        st.session_state.latest_home_snapshot = {"snapshot": ([], [])}
         fingerprint = "f" * 64
         guest_key = ("guest", "visitor", fingerprint)
         st.session_state.pending_guest_claim = {
@@ -427,6 +428,7 @@ class MembershipGradingFlowTests(unittest.TestCase):
             }
         )
         self.assertTrue(claim(Store(), user))
+        self.assertNotIn("latest_home_snapshot", st.session_state)
         self.assertNotIn(guest_key, st.session_state.grading_cache)
         claimed = st.session_state.grading_cache[("user", "user-a", fingerprint)]
         self.assertEqual(claimed["cloud_user_id"], "user-a")
