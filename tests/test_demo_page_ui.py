@@ -37,8 +37,10 @@ class DemoPageUiTests(unittest.TestCase):
         ]
         self.assertEqual(top_level, ["① 输入", "② 报告", "③ 训练", "④ 第二稿"])
         markdown = "\n".join(item.value for item in app.markdown)
-        self.assertIn("CURRENT PRODUCT WALKTHROUGH", markdown)
-        self.assertIn("0 TOKEN", markdown)
+        self.assertIn("免费示例 · 完整训练流程", markdown)
+        self.assertNotIn("0 TOKEN", markdown)
+        self.assertIn("总分如何计算？", markdown)
+        self.assertIn("产品估分调整：+0.5", markdown)
 
     def test_demo_renderer_has_no_model_or_cloud_side_effect_path(self):
         source = (ROOT / "app.py").read_text(encoding="utf-8")

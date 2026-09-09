@@ -157,7 +157,7 @@ def render_hero(*, variant: str = "home") -> None:
         "demo": (
             "零 TOKEN 完整示范",
             "看懂一篇作文，如何一步步改善",
-            "浏览输入、评分、诊断、训练与第二稿的完整流程；本页不会调用模型，也不消耗 Token。",
+            "免费浏览输入、评分、诊断、训练与第二稿的完整流程，不占用批改额度。",
             "静态示范展示真实产品流程，不制造虚假进度。",
         ),
         "login": (
@@ -343,10 +343,10 @@ def render_guest_home_intro(
         f'href="{html.escape(str(secondary_href), quote=True)}">{html.escape(str(secondary_label))}</a>'
         '</div></div>'
         f'<a class="ep-home-preview" href="{html.escape(str(preview_href), quote=True)}" '
-        f'aria-label="{html.escape(str(preview_label), quote=True)}，零 Token 静态示例">'
-        '<span>0 TOKEN · 静态示例</span>'
+        f'aria-label="{html.escape(str(preview_label), quote=True)}，免费示例">'
+        '<span>免费示例 · 随时查看</span>'
         f'<strong>{html.escape(str(preview_label))}</strong>'
-        '<small>先看评分证据、问题地图、训练和第二稿，不会调用模型。</small>'
+        '<small>先看评分依据、针对性练习和第二稿，不占用批改额度。</small>'
         '<b>查看示例 <span aria-hidden="true">→</span></b>'
         '</a></section>'
     )
@@ -363,9 +363,9 @@ def render_home_preview_link(
         f"""
         <a class="ep-home-preview ep-home-preview--inline"
            href="{html.escape(str(href), quote=True)}">
-            <span>0 TOKEN</span>
+            <span>免费示例</span>
             <strong>{html.escape(str(label))}</strong>
-            <small>静态示例 · 不调用模型</small>
+            <small>仅供浏览 · 不占批改额度</small>
             <b aria-hidden="true">→</b>
         </a>
         """

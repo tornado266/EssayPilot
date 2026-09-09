@@ -1,19 +1,29 @@
 :root {
-  --ep-bg: #f4f7fa;
-  --ep-surface: #ffffff;
-  --ep-surface-alt: #eaf1f6;
+  --ep-bg: #f9fcff;
+  --ep-surface: rgba(255, 255, 255, 0.68);
+  --ep-surface-alt: rgba(237, 246, 255, 0.54);
+  --ep-glass: linear-gradient(125deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.36) 48%, rgba(238, 248, 255, 0.28));
+  --ep-glass-border: rgba(255, 255, 255, 0.94);
+  --ep-reading-surface: rgba(255, 255, 255, 0.94);
   --ep-primary: #1769aa;
   --ep-primary-hover: #10578f;
-  --ep-primary-soft: #ddecf7;
+  --ep-button-silk:
+    radial-gradient(ellipse at 78% 12%, rgba(18, 33, 68, 0.88) 0%, rgba(27, 47, 86, 0.48) 9%, transparent 25%),
+    radial-gradient(ellipse at 12% 112%, rgba(19, 34, 68, 0.9) 0%, transparent 35%),
+    radial-gradient(ellipse at 43% -40%, rgba(114, 156, 205, 0.7) 0%, transparent 49%),
+    radial-gradient(ellipse at 93% 105%, rgba(99, 146, 199, 0.7) 0%, transparent 42%),
+    radial-gradient(ellipse at 49% 112%, rgba(35, 62, 107, 0.5) 0%, transparent 37%),
+    linear-gradient(112deg, #385786, #4a70a4 46%, #38598d);
+  --ep-primary-soft: #edf5fc;
   --ep-mountain: #0e3b5f;
-  --ep-text: #172b3a;
-  --ep-text-muted: #5c7182;
-  --ep-border: #d7e1e8;
+  --ep-text: #153451;
+  --ep-text-muted: #4d6680;
+  --ep-border: rgba(165, 193, 218, 0.24);
   --ep-success: #247a72;
   --ep-warning: #b06c22;
   --ep-danger: #c84c55;
-  --ep-shadow-sm: 0 1px 2px rgba(14, 59, 95, 0.05), 0 8px 24px rgba(14, 59, 95, 0.06);
-  --ep-shadow-md: 0 18px 50px rgba(14, 59, 95, 0.1);
+  --ep-shadow-sm: inset 0 1px 1px #ffffff, inset 0 -1px 0 rgba(183, 207, 230, 0.12), 0 4px 16px rgba(70, 115, 153, 0.035);
+  --ep-shadow-md: inset 1px 1px 1px #ffffff, inset -1px -1px 1px rgba(181, 208, 232, 0.15), 0 12px 36px rgba(70, 115, 153, 0.045);
   --ep-radius-sm: 10px;
   --ep-radius-md: 16px;
   --ep-radius-lg: 24px;
@@ -34,13 +44,21 @@ body,
 }
 
 [data-testid="stAppViewContainer"] {
-  background: var(--ep-bg);
+  background:
+    linear-gradient(118deg, transparent 36%, rgba(255, 255, 255, 0.88) 40%, transparent 46%),
+    linear-gradient(155deg, transparent 60%, rgba(255, 255, 255, 0.8) 64%, transparent 71%),
+    radial-gradient(ellipse at 100% 35%, rgba(207, 230, 252, 0.42), transparent 48%),
+    radial-gradient(ellipse at 12% 94%, rgba(220, 237, 252, 0.48), transparent 42%),
+    radial-gradient(ellipse at 75% 82%, rgba(255, 237, 214, 0.22), transparent 28%),
+    linear-gradient(130deg, #ffffff 8%, var(--ep-bg) 54%, #f4faff);
+  background-attachment: fixed;
 }
 
 [data-testid="stHeader"] {
-  background: rgba(244, 247, 250, 0.9);
-  border-bottom: 1px solid rgba(215, 225, 232, 0.72);
-  backdrop-filter: blur(10px);
+  background: rgba(255, 255, 255, 0.58);
+  border-bottom: 1px solid var(--ep-glass-border);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
 }
 
 .ep-global-site-entry {
@@ -124,12 +142,15 @@ a {
 }
 
 [data-testid="stSidebar"] {
-  background: var(--ep-surface);
-  border-right: 1px solid var(--ep-border);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.72), rgba(245, 251, 255, 0.34));
+  border-right: 1px solid var(--ep-glass-border);
+  box-shadow: 1px 0 0 rgba(206, 226, 242, 0.15), 8px 0 36px rgba(80, 127, 167, 0.018);
+  -webkit-backdrop-filter: blur(22px);
+  backdrop-filter: blur(22px);
 }
 
 [data-testid="stSidebar"] > div:first-child {
-  background: var(--ep-surface);
+  background: transparent;
 }
 
 [data-testid="stSidebar"] h2 {
@@ -157,7 +178,7 @@ div[data-testid="stTextInput"] input,
   color: var(--ep-text);
   border: 1px solid var(--ep-border);
   border-radius: var(--ep-radius-sm);
-  background: var(--ep-surface);
+  background: var(--ep-reading-surface);
   box-shadow: none;
   transition: border-color 180ms ease, box-shadow 180ms ease;
 }
@@ -805,7 +826,7 @@ div[class*="st-key-correction_history_card_"] [data-testid="stVerticalBlockBorde
   color: var(--ep-mountain);
   font-size: clamp(2.25rem, 5.3vw, 4rem);
   letter-spacing: -0.045em;
-  line-height: 1.02;
+  line-height: 1.16;
 }
 
 .ep-home-welcome__copy > p {
@@ -2460,6 +2481,274 @@ div[class*="st-key-correction_history_card_"] [data-testid="stVerticalBlockBorde
 
   .mobile-product-nav a {
     font-size: 0.68rem;
+  }
+}
+
+/* Frosted chrome; dense writing and evidence retain a quieter reading surface. */
+.ep-home-welcome,
+.ep-home-action,
+.ep-demo-intro,
+.ep-bento__card,
+.score-card,
+.dashboard-stat-card,
+.ep-stepper,
+.ep-loader-panel,
+.ep-overall-card,
+.ep-topic-home-entry,
+.feature-chip,
+.st-key-essay_editor,
+.st-key-desktop_account_bar,
+.st-key-mobile_account_bar,
+.mobile-product-nav {
+  border-color: var(--ep-glass-border);
+  background: var(--ep-glass);
+  box-shadow: var(--ep-shadow-md);
+  -webkit-backdrop-filter: blur(18px) saturate(105%);
+  backdrop-filter: blur(18px) saturate(105%);
+}
+
+.ep-home-welcome,
+.ep-home-action {
+  border-radius: 28px;
+}
+
+.st-key-desktop_account_bar:not(:has(button)):not(:has(p)) {
+  display: none;
+}
+
+.ep-home-welcome {
+  padding-top: clamp(2rem, 4vw, 3.5rem);
+  padding-bottom: clamp(2rem, 4vw, 3.5rem);
+}
+
+.ep-home-welcome::before {
+  background: rgba(220, 239, 255, 0.16);
+}
+
+.ep-home-preview {
+  padding-top: 150px;
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.72), rgba(239, 249, 255, 0.22));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.92), 0 8px 28px rgba(83, 132, 172, 0.04);
+}
+
+/* A code-drawn glass ring: decorative only, never over the copy or controls. */
+.ep-home-preview:not(.ep-home-preview--inline)::before {
+  content: "";
+  position: absolute;
+  top: 26px;
+  right: 28px;
+  width: 100px;
+  height: 100px;
+  box-sizing: border-box;
+  border: 17px solid rgba(255, 255, 255, 0.42);
+  border-radius: 50%;
+  background: linear-gradient(135deg, rgba(199, 224, 254, 0.18), rgba(255, 255, 255, 0.04));
+  box-shadow: inset 3px 3px 6px rgba(255, 255, 255, 0.95), inset -3px -3px 8px rgba(145, 181, 226, 0.32), 2px 2px 0 rgba(255, 255, 255, 0.86), -2px -2px 0 rgba(160, 193, 234, 0.24), 8px 14px 24px rgba(93, 133, 184, 0.12);
+  transform: rotate(-24deg) scaleX(0.84);
+  pointer-events: none;
+}
+
+.ep-home-preview--inline {
+  padding-top: 0.85rem;
+}
+
+.ep-home-action__link--primary,
+.ep-topic-home-entry a,
+[data-testid="stBaseButton-primary"],
+button[kind="primary"] {
+  /* Soft overlapping folds, scaled for a short button rather than a hero image. */
+  background: var(--ep-button-silk) !important;
+  background-size: 115% 150% !important;
+  background-position: 50% 45% !important;
+  border-color: rgba(62, 94, 144, 0.28) !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 1px 0 rgba(216, 234, 255, 0.24), inset 0 -1px 0 rgba(24, 43, 80, 0.12), 0 8px 22px rgba(40, 71, 116, 0.12) !important;
+  transition: background-position 280ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+
+.ep-home-action__link--primary:hover,
+.ep-topic-home-entry a:hover,
+[data-testid="stBaseButton-primary"]:hover:not(:disabled),
+button[kind="primary"]:hover:not(:disabled) {
+  background: var(--ep-button-silk) !important;
+  background-size: 115% 150% !important;
+  background-position: 62% 55% !important;
+  box-shadow: inset 0 1px 0 rgba(224, 240, 255, 0.34), 0 10px 26px rgba(40, 71, 116, 0.18) !important;
+}
+
+.ep-home-action__link--primary:focus-visible,
+.ep-topic-home-entry a:focus-visible,
+button[kind="primary"]:focus-visible {
+  outline: 2px solid #426fa9;
+  outline-offset: 3px;
+}
+
+button[kind="primary"]:disabled {
+  opacity: 0.5;
+}
+
+.ep-home-action__link--secondary,
+div.stButton > button[kind="secondary"],
+div.stDownloadButton > button {
+  background: rgba(255, 255, 255, 0.58);
+}
+
+[data-testid="stExpander"],
+[data-testid="stVerticalBlockBorderWrapper"],
+.ep-result-summary,
+.issue-map,
+.issue-map-tree,
+.ep-diff,
+.ep-paragraph-diff {
+  background: var(--ep-reading-surface);
+}
+
+[data-testid="stExpander"] summary {
+  background: rgba(235, 244, 254, 0.5);
+}
+
+[data-testid="stTabs"] [data-baseweb="tab-list"] {
+  border: 1px solid var(--ep-glass-border);
+  background: rgba(242, 248, 255, 0.58);
+}
+
+/* Floating menus need an opaque background above other content. */
+[data-baseweb="popover"] [role="listbox"],
+[data-baseweb="popover"] [role="menu"],
+[data-testid="stDialog"] [role="dialog"] {
+  background: #f9fbff;
+  color: var(--ep-text);
+}
+
+@media (max-width: 768px) {
+  .ep-home-welcome,
+  .ep-home-action {
+    border-radius: 20px;
+  }
+
+  .ep-home-preview:not(.ep-home-preview--inline) {
+    min-height: 0;
+    padding-top: 1.15rem;
+  }
+
+  .ep-home-preview:not(.ep-home-preview--inline)::before {
+    display: none;
+  }
+
+  .ep-stepper {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.2rem;
+    padding: 0.8rem 0.5rem;
+  }
+
+  .ep-stepper li {
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.72rem;
+  }
+
+  .ep-stepper li:not(:last-child)::after {
+    display: none;
+  }
+}
+
+/* Editorial empty state: purposeful space, sculpted glass, clear next action. */
+.ep-report-start {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  align-items: center;
+  min-height: 510px;
+  gap: 1rem;
+  padding: 2.5rem 1rem 1.5rem;
+}
+.ep-report-start__eyebrow {
+  color: #617e9d;
+  font-size: .72rem;
+  font-weight: 650;
+  letter-spacing: .18em;
+  margin-bottom: 1.5rem;
+}
+.ep-report-start h1 {
+  font-size: clamp(2rem, 3.6vw, 3.2rem);
+  line-height: 1.35;
+  letter-spacing: -.04em;
+  font-weight: 700;
+  padding: 0;
+  margin: 0 0 1.6rem;
+}
+.ep-report-start__lead { font-size: 1.04rem; margin-bottom: .65rem; color: #375773; }
+.ep-report-start__description { font-size: .88rem; line-height: 1.95; color: #637b92; }
+.ep-report-start__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 1.5rem; margin-top: 2rem; }
+.ep-report-start__actions .ep-home-action__link { min-width: 150px; border-radius: 14px; justify-content: space-between; gap: 1.6rem; }
+.ep-report-start__demo { color: #3c6084; font-size: .85rem; text-decoration: none; padding: .75rem 0; }
+.ep-report-start__demo:hover { text-decoration: underline; }
+.ep-report-start__art { position: relative; height: 380px; isolation: isolate; pointer-events: none; }
+.ep-glass-orbit {
+  position: absolute; width: 235px; height: 275px; right: 2%; top: 10px;
+  border: 24px solid rgba(255,255,255,.42); border-radius: 50%;
+  background: linear-gradient(130deg, rgba(223,240,255,.15), rgba(255,255,255,.04));
+  box-shadow: inset 4px 3px 5px #fff, inset -6px -4px 12px #a9c4e26b, 2px 1px 1px #fff, -2px -2px 2px #adc6e188, 16px 25px 35px #547dab1c;
+  transform: rotate(28deg);
+}
+.ep-glass-sheet {
+  position: absolute; width: 240px; height: 285px; left: 8%; top: 55px;
+  border: 1px solid rgba(255,255,255,.96); border-radius: 20px;
+  background: linear-gradient(125deg, #ffffffab, #f7fbff33 50%, #c9dff455);
+  box-shadow: inset 2px 2px 1px #ffffffd9, inset -1px -1px 2px #97b5d566, 15px 28px 40px #537daa26;
+  backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
+}
+.ep-glass-sheet--back { transform: rotate(-20deg) translate(-12px, 5px); opacity: .65; }
+.ep-glass-sheet--front { transform: rotate(10deg); padding: 25px; box-sizing: border-box; }
+.ep-glass-sheet__mark { display: block; font-size: .85rem; letter-spacing: .18em; color: #477299; margin-bottom: 34px; }
+.ep-glass-sheet i { display: block; height: 4px; border-radius: 9px; background: #8faecc40; margin: 15px 0; }
+.ep-glass-sheet i:nth-of-type(2) { width: 80%; }
+.ep-glass-sheet i:nth-of-type(4) { width: 65%; }
+.ep-glass-sheet__note { display: block; margin-top: 32px; font-size: .58rem; letter-spacing: .05em; color: #557796; }
+.ep-glass-spark { position: absolute; bottom: 15px; right: 8%; color: #fff; font-size: 4rem; text-shadow: 1px 2px 2px #9abadd, 0 0 24px white; }
+.ep-report-start__path { display: grid; grid-template-columns: repeat(3,1fr); border-top: 1px solid #a8bfd33d; padding: 1.75rem 1rem; gap: 1.5rem; }
+.ep-report-start__path > div { display: grid; grid-template-columns: 24px 1fr; column-gap: .6rem; align-items: baseline; }
+.ep-report-start__path span { color: #7996b1; font-size: .7rem; }
+.ep-report-start__path strong { color: #284d6d; font-size: .92rem; font-weight: 600; }
+.ep-report-start__path small { grid-column: 2; color: #6c8297; font-size: .72rem; margin-top: .4rem; line-height: 1.6; }
+
+@media (max-width: 768px) {
+  .st-key-mobile_account_bar:not(:has(button)) { display: none; }
+  .mobile-product-nav { border-radius: 15px; padding: .2rem; box-shadow: inset 0 1px 0 #fff, 0 5px 20px #4973a10a; }
+  .mobile-product-nav a { padding: .6rem .18rem; font-size: .76rem; }
+  [data-testid="stElementContainer"]:has(.mobile-product-nav) { margin-bottom: .25rem; }
+  .ep-report-start { grid-template-columns: 1fr; gap: 0; padding: 1.25rem .25rem 0; min-height: 0; }
+  .ep-report-start__eyebrow { margin-bottom: 1rem; font-size: .63rem; }
+  .ep-report-start h1 { font-size: clamp(1.8rem, 7.7vw, 2.7rem); margin-bottom: 1rem; }
+  .ep-report-start__lead { font-size: .92rem; }
+  .ep-report-start__description { font-size: .8rem; }
+  .ep-desktop-break { display: none; }
+  .ep-report-start__actions { gap: 1rem; margin-top: 1.25rem; }
+  .ep-report-start__actions .ep-home-action__link { min-width: 135px; width: auto; }
+  .ep-report-start__demo { font-size: .78rem; }
+  .ep-report-start__art { height: 245px; width: 285px; max-width: 100%; margin: .5rem auto 0; }
+  .ep-glass-orbit { width: 150px; height: 175px; border-width: 17px; right: 7%; top: 14px; }
+  .ep-glass-sheet { width: 158px; height: 185px; top: 28px; left: 14%; border-radius: 14px; }
+  .ep-glass-sheet--front { padding: 17px; }
+  .ep-glass-sheet__mark { font-size: .6rem; margin-bottom: 20px; }
+  .ep-glass-sheet i { height: 3px; margin: 10px 0; }
+  .ep-glass-sheet__note { font-size: .4rem; margin-top: 18px; }
+  .ep-glass-spark { font-size: 2.6rem; right: 11%; bottom: 8px; }
+  .ep-report-start__path { gap: .6rem; padding: 1rem .25rem; }
+  .ep-report-start__path > div { display: flex; flex-direction: column; gap: .35rem; }
+  .ep-report-start__path strong { font-size: .76rem; }
+  .ep-report-start__path small { font-size: .65rem; margin: 0; }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --ep-glass: #f4f8fe;
+    --ep-surface: #ffffff;
+  }
+
+  [data-testid="stSidebar"],
+  [data-testid="stHeader"] {
+    background: #f4f8fe;
   }
 }
 

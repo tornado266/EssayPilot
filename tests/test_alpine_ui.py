@@ -9,6 +9,15 @@ from ui.alpine import (
 
 
 class AlpineUiTests(unittest.TestCase):
+    def test_primary_buttons_share_silk_surface_and_keep_states(self):
+        css = Path(CSS_PATH).read_text(encoding="utf-8")
+        self.assertIn("--ep-button-silk:", css)
+        self.assertIn("background: var(--ep-button-silk) !important", css)
+        self.assertIn('.ep-topic-home-entry a,\n[data-testid="stBaseButton-primary"]', css)
+        self.assertIn('button[kind="primary"]:hover:not(:disabled)', css)
+        self.assertIn('button[kind="primary"]:focus-visible', css)
+        self.assertIn('button[kind="primary"]:disabled', css)
+
     def test_local_assets_and_theme_tokens_exist(self):
         self.assertTrue(HERO_JPG_PATH.exists())
         self.assertTrue(HERO_WEBP_PATH.exists())
@@ -17,11 +26,23 @@ class AlpineUiTests(unittest.TestCase):
 
         css = Path(CSS_PATH).read_text(encoding="utf-8")
         for token in (
-            "--ep-bg: #f4f7fa",
+            "--ep-bg: #f9fcff",
             "--ep-primary: #1769aa",
             "--ep-mountain: #0e3b5f",
             "--ep-danger: #c84c55",
             "@media (prefers-reduced-motion: reduce)",
+        ):
+            self.assertIn(token, css)
+
+    def test_glass_theme_preserves_reading_and_mobile_surfaces(self):
+        css = Path(CSS_PATH).read_text(encoding="utf-8")
+        for token in (
+            "--ep-glass:",
+            "--ep-reading-surface: rgba(255, 255, 255, 0.94)",
+            "background: var(--ep-reading-surface)",
+            "-webkit-backdrop-filter: blur(18px)",
+            "@supports not ((backdrop-filter:",
+            '.ep-home-preview:not(.ep-home-preview--inline)::before',
         ):
             self.assertIn(token, css)
 

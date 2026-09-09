@@ -1251,7 +1251,7 @@ def render_login_page(store: SupabaseStore) -> None:
                 except CloudStoreError as exc:
                     st.error(f"验证码发送失败：{exc}")
     with demo_col:
-        st.button("先看零 Token 完整示例", on_click=show_demo, use_container_width=True)
+        st.button("免费查看完整示例", on_click=show_demo, use_container_width=True)
     if st.session_state.get("login_code_sent"):
         code = st.text_input("请输入邮箱验证码", key="login_code")
         if st.button("登录并进入学习档案", use_container_width=True):
@@ -2249,15 +2249,31 @@ def extract_paragraph_strengths(markdown: str) -> list[str]:
     return strengths
 
 
-def render_overall_band(score: float | None) -> None:
+def render_overall_band(score: float | None, structured: dict[str, object] | None = None) -> None:
     """Render the program-calculated point Overall for the learner."""
     score_text = html.escape(format_overall_band(score))
+    calculation_html = ""
+    if isinstance(structured, dict):
+        raw = structured.get("raw_overall_band")
+        offset = structured.get("overall_calibration_offset")
+        if isinstance(raw, (int, float)) and isinstance(offset, (int, float)):
+            raw_text = html.escape(format_overall_band(raw))
+            offset_text = html.escape(f"{offset:+.1f}")
+            calculation_html = (
+                '<details class="ep-overall-card__note"><summary>总分如何计算？</summary>'
+                f'<p>四项分数等权汇总并按半分取整：{raw_text}；'
+                f'本报告采用的产品估分调整：{offset_text}。'
+                f'调整后展示为 {score_text}，最高为 9.0。'
+                '这项调整属于 EssayPilot 的练习估分规则，不是 IELTS 官方加分规则。</p>'
+                '</details>'
+            )
     st.markdown(
         f"""
         <div class="ep-overall-card">
             <div class="ep-overall-card__label">雅思写作练习 Overall</div>
             <div class="ep-overall-card__value">{score_text}</div>
             <div class="ep-overall-card__note">AI 练习估分，不是 IELTS 官方成绩；四项整数分可继续查看</div>
+            {calculation_html}
         </div>
         """,
         unsafe_allow_html=True,
@@ -3372,7 +3388,7 @@ def render_demo_page() -> None:
     try:
         package = load_demo_package()
     except DemoPackageError:
-        st.error("零 Token 示例暂时无法读取，你仍可正常开始自己的写作练习。")
+        st.error("示例暂时无法读取，你仍可正常开始自己的写作练习。")
         st.button("去写作批改", type="primary", on_click=navigate, args=("write",))
         return
 
@@ -3381,9 +3397,9 @@ def render_demo_page() -> None:
     st.markdown(
         """
         <section class="ep-demo-intro">
-            <span>0 TOKEN · CURRENT PRODUCT WALKTHROUGH</span>
+            <span>免费示例 · 完整训练流程</span>
             <h1>先看一篇作文，如何走完整个提分闭环</h1>
-            <p>这份示例使用当前评分结构与页面组件，展示原文证据、问题地图、词汇卡、训练和第二稿；浏览不会调用模型。</p>
+            <p>跟着一篇作文，了解如何看懂评分依据、完成针对性练习，再写出自己的第二稿。</p>
             <div><b>输入</b><i>→</i><b>报告</b><i>→</i><b>训练</b><i>→</i><b>第二稿</b></div>
         </section>
         """,
@@ -3408,7 +3424,7 @@ def render_demo_page() -> None:
             key="demo_fill_top",
         )
 
-    st.caption("静态示例 · 当前报告格式 · 不调用模型 · 不写入学习档案")
+    st.caption("示例仅供浏览，不占用批改额度，也不会加入你的学习档案。")
     input_tab, report_tab, training_tab, draft_tab = st.tabs(
         ["① 输入", "② 报告", "③ 训练", "④ 第二稿"]
     )
@@ -3427,7 +3443,7 @@ def render_demo_page() -> None:
     with report_tab:
         structured = package.structured
         st.subheader("先看分数，再核对原文证据")
-        render_overall_band(float(structured.get("overall_band") or 0))
+        render_overall_band(float(structured.get("overall_band") or 0), structured)
         priorities = [
             item for item in structured.get("priorities", [])
             if isinstance(item, dict)
@@ -3528,7 +3544,7 @@ def render_demo_page() -> None:
                 if value:
                     st.markdown(f"- **{labels[key]}：** {value}")
 
-    st.success("这份静态示例已按当前产品流程更新；查看全过程不消耗 Token。")
+    st.success("示例展示了完整训练流程，你可以随时回到首页，开始自己的练习。")
 
 
 APP_ROUTES = {
@@ -3678,7 +3694,7 @@ def render_app_navigation(user: CloudUser | None, *, store: SupabaseStore) -> No
                 args=(user is not None,),
             )
         st.divider()
-        st.caption(f"固定评分模型 · {PRODUCTION_MODEL}")
+        st.caption("IELTS Task 2 · 写作训练")
         st.markdown(
             '<small>学习词典卡：EssayPilot 按作文语境整理；旧报告可由 '
             '<a href="https://github.com/globalwordnet/english-wordnet" '
@@ -4149,7 +4165,7 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
     st.markdown('<div class="section-kicker">写作批改</div>', unsafe_allow_html=True)
     st.title("提交 IELTS Writing Task 2 作文")
     render_training_stepper(active=1)
-    st.caption(f"评分固定使用 {PRODUCTION_MODEL}；失败后保留题目和正文，不切换模型。")
+    st.caption("请粘贴题目与正文，保留原有段落。批改失败时，已填写的内容会保留在当前页面。")
     if st.session_state.pop("cloud_cache_warning", False):
         st.warning("云端历史暂时无法读取，本次仍可继续批改。")
     if st.session_state.pop("cloud_save_warning", False):
@@ -4163,7 +4179,7 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
     with st.container(key="essay_editor"):
         st.markdown(
             '<div class="ep-editor-note"><span>Task 2 · 题目与正文保持原始段落</span>'
-            '<span>唯一主操作：开始批改</span></div>',
+            '<span>准备好后，点击下方开始批改</span></div>',
             unsafe_allow_html=True,
         )
         topic = st.text_area(
@@ -4183,12 +4199,12 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
         with col_words:
             render_score_card("当前词数", str(word_count), "Task 2 建议 250 词以上")
         with col_model:
-            render_score_card("固定模型", "gpt", "评分标准保持一致")
+            render_score_card("评分维度", "4 项", "任务回应 · 衔接 · 词汇 · 语法")
         warning = word_count_warning("Task 2", word_count) if essay.strip() else ""
         if warning:
             st.warning(warning)
         label = (
-            f"使用 {PRODUCTION_MODEL} 重新评分"
+            "重新尝试批改"
             if st.session_state.get("grading_failed")
             else "开始批改作文"
         )
@@ -4552,8 +4568,35 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
     report = str(st.session_state.get("latest_report") or "")
     structured = st.session_state.get("latest_structured")
     if not report or not isinstance(structured, dict) or not structured:
-        st.info("还没有可显示的批改报告。")
-        st.button("去提交作文", type="primary", on_click=navigate, args=("write",))
+        st.html('''
+<section class="ep-report-start" aria-labelledby="report-start-title">
+  <div class="ep-report-start__copy">
+    <p class="ep-report-start__eyebrow">ESSAYPILOT / 写作报告</p>
+    <h1 id="report-start-title">每一次进步，<br>从看懂自己开始。</h1>
+    <p class="ep-report-start__lead">你的第一份报告，还在等一篇作文。</p>
+    <p class="ep-report-start__description">写下现在的想法。我们一起找出值得保留的表达，<br class="ep-desktop-break">和下一次可以写得更好的地方。</p>
+    <div class="ep-report-start__actions">
+      <a class="ep-home-action__link ep-home-action__link--primary" href="?page=write">开始写作 <span aria-hidden="true">↗</span></a>
+      <a class="ep-report-start__demo" href="?page=demo">先看看示例报告 <span aria-hidden="true">→</span></a>
+    </div>
+  </div>
+  <div class="ep-report-start__art" aria-hidden="true">
+    <div class="ep-glass-orbit"></div>
+    <div class="ep-glass-sheet ep-glass-sheet--back"></div>
+    <div class="ep-glass-sheet ep-glass-sheet--front">
+      <span class="ep-glass-sheet__mark">E / P</span>
+      <i></i><i></i><i></i><i></i><i></i>
+      <span class="ep-glass-sheet__note">Your words. Your progress.</span>
+    </div>
+    <div class="ep-glass-spark">✦</div>
+  </div>
+</section>
+<div class="ep-report-start__path" aria-label="报告内容">
+  <div><span>01</span><strong>看懂评分</strong><small>四项标准，找到依据</small></div>
+  <div><span>02</span><strong>找到重点</strong><small>从原句出发，明确修改方向</small></div>
+  <div><span>03</span><strong>带着方向再写</strong><small>把反馈变成下一次的进步</small></div>
+</div>
+''')
         return
     report = learner_safe_report_markdown(report, structured.get("overall_band"))
     ensure_learning_assets(store, user)
@@ -4573,13 +4616,13 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
     st.title("先看最影响提分的问题")
     render_training_stepper(active=2)
     if st.session_state.pop("reused_result_notice", False):
-        st.info("已复用相同作文的当前中文版评分结果，本次未消耗 Token。")
+        st.info("已找到这篇作文的已有报告，本次无需重新批改。")
     if st.session_state.pop("guest_trial_completion_warning", False):
         st.warning("报告已经完整保留。游客额度状态暂时无法同步；请登录保存本次结果，不会重新评分。")
     if st.session_state.pop("first_report_settlement_warning", False):
         st.warning("报告内容已经保留，权益状态仍在确认；使用相同内容重试不会再次调用模型。")
     priorities = [item for item in structured.get("priorities", []) if isinstance(item, dict)]
-    render_overall_band(float(structured.get("overall_band") or 0))
+    render_overall_band(float(structured.get("overall_band") or 0), structured)
     if priorities:
         summary = str(priorities[0].get("title") or priorities[0].get("why") or "")
         if summary:
@@ -4602,6 +4645,27 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
                     st.success(str(item.get("action", "")))
                     if item.get("success_check"):
                         st.caption(f"完成检查：{item['success_check']}")
+    st.markdown("### 下一步：用练习和第二稿落实这些修改")
+    st.caption("专项训练和第二稿验证需相应训练权益；下面仍可继续阅读完整诊断。")
+    primary_col, practice_col = st.columns([1.25, 1])
+    if user is None:
+        with primary_col:
+            if st.button("登录并保存本次报告", type="primary", use_container_width=True):
+                open_cloud_login("training", "draft")
+                st.rerun()
+        with practice_col:
+            if st.button("登录后查看训练权益", use_container_width=True):
+                open_cloud_login("training", "practice")
+                st.rerun()
+    else:
+        with primary_col:
+            if st.button("开始第二稿训练", type="primary", use_container_width=True):
+                navigate("training", run_id, "draft")
+                st.rerun()
+        with practice_col:
+            if st.button("先做专项训练", use_container_width=True):
+                navigate("training", run_id, "practice")
+                st.rerun()
     raw_corrections = structured.get("sentence_corrections")
     corrections = (
         [item for item in raw_corrections if isinstance(item, dict)]
@@ -4786,29 +4850,11 @@ def render_report_page(store: SupabaseStore, user: CloudUser | None) -> None:
             ),
         )
 
-    st.markdown("### 下一步：用第二稿验证这次反馈")
-    primary_col, practice_col = st.columns([1.25, 1])
     if user is None:
-        with primary_col:
-            if st.button("登录并保存本次报告", type="primary", use_container_width=True):
-                open_cloud_login("training", "draft")
-                st.rerun()
-        with practice_col:
-            if st.button("登录后查看训练权益", use_container_width=True):
-                open_cloud_login("training", "practice")
-                st.rerun()
         if st.button("练习本篇表达", key="guest_report_expressions", use_container_width=True):
             open_cloud_login("growth", "expressions-from-report")
             st.rerun()
     else:
-        with primary_col:
-            if st.button("开始第二稿训练", type="primary", use_container_width=True):
-                navigate("training", run_id, "draft")
-                st.rerun()
-        with practice_col:
-            if st.button("先做专项训练", use_container_width=True):
-                navigate("training", run_id, "practice")
-                st.rerun()
         auxiliary_col, expression_col = st.columns(2)
         with auxiliary_col:
             st.caption("报告下载在“完整报告与下载”中")
@@ -5076,7 +5122,7 @@ def render_expression_library(
         key="expression_library_view", label_visibility="collapsed",
     )
     if view == EXPRESSION_VIEW_CURATED:
-        st.caption("10 个 Task 2 高频题材，共 150 条内置精选表达；浏览、搜索和查看例句均为 0 Token。")
+        st.caption("10 个 Task 2 高频题材，共 150 条精选表达；浏览、搜索和查看例句均免费。")
         mastered_topics = Counter(
             str(item.get("topic_category")) for item in personal if item.get("status") == "mastered"
         )

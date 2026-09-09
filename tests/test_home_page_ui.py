@@ -259,7 +259,7 @@ class HomePageUiTests(unittest.TestCase):
         self.assertIn("先看完整效果", body)
         self.assertIn("?page=write&amp;mode=topics", body)
         self.assertIn("?page=demo", body)
-        self.assertIn("不会调用模型", body)
+        self.assertIn("不占用批改额度", body)
         self.assertEqual(captured["kwargs"], {})
 
     def test_inline_demo_preview_is_a_shareable_route(self):
