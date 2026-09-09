@@ -129,6 +129,7 @@ from src.topic_bank import (
 from src.visitor_identity import browser_visitor_id, visitor_hash
 from ui.alpine import (
     inject_alpine_theme,
+    inject_home_background,
     render_guest_home_intro,
     render_home_action_card,
     render_home_heading,
@@ -3831,6 +3832,7 @@ def render_home_page(store: SupabaseStore, user: CloudUser | None) -> None:
         )
         return
 
+    inject_home_background()
     if user is not None:
         if render_learning_dashboard(store, user):
             return

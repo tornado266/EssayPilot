@@ -3,12 +3,25 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ui.alpine import (
-    CSS_PATH, HERO_JPG_PATH, HERO_WEBP_PATH, align_draft_paragraphs,
+    CSS_PATH, HERO_JPG_PATH, HERO_WEBP_PATH, HOME_DAWN_PATH, inject_home_background, align_draft_paragraphs,
     paragraph_diff_html, render_text_diff, split_draft_paragraphs,
 )
 
 
 class AlpineUiTests(unittest.TestCase):
+    def test_home_snow_background_is_local_and_scoped(self):
+        self.assertTrue(HOME_DAWN_PATH.exists())
+        self.assertLess(HOME_DAWN_PATH.stat().st_size, 2_000_000)
+        with patch("ui.alpine.st.html") as rendered:
+            inject_home_background()
+        markup = rendered.call_args.args[0]
+        self.assertIn(':has(.ep-home-heading, .ep-home-welcome)', markup)
+        self.assertIn('data:image/png;base64,', markup)
+        self.assertTrue(markup.startswith('<style>'))
+        css = CSS_PATH.read_text(encoding="utf-8")
+        self.assertIn('var(--ep-home-dawn,', css)
+        self.assertIn('background-position: 68% bottom', css)
+
     def test_primary_buttons_share_silk_surface_and_keep_states(self):
         css = Path(CSS_PATH).read_text(encoding="utf-8")
         self.assertIn("--ep-button-silk:", css)
