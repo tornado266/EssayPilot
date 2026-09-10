@@ -3568,10 +3568,6 @@ APP_ROUTES = {
 
 def navigate(route: str, run_id: str = "", mode: str = "") -> None:
     """Switch the visible product page and preserve a shareable run context."""
-    # Detach drafts from widget cleanup when the writing page is unmounted.
-    for key in ("topic_input", "essay_input"):
-        if key in st.session_state:
-            st.session_state[key] = st.session_state[key]
     route = route if route in APP_ROUTES else "home"
     st.session_state.page_mode = route
     st.query_params["page"] = route
@@ -4235,7 +4231,7 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
             if st.session_state.get("grading_failed")
             else "开始批改作文"
         )
-        if st.button(label, type="primary", use_container_width=True):
+        if st.button(label, key="first_report_submit", type="primary", use_container_width=True):
             if not topic.strip() or not essay.strip():
                 st.error("请同时填写英文作文题目和作文正文。")
                 return
@@ -5607,6 +5603,13 @@ def render_product_route(store: SupabaseStore, user: CloudUser | None) -> None:
     elif route == "growth":
         render_growth_page(store, user)
 
+
+# Preserve drafts before widgets are instantiated, including the rerun after
+# grading. navigate() can also run after the editor is rendered, when writing
+# its widget keys is forbidden by Streamlit.
+for draft_key in ("topic_input", "essay_input"):
+    if draft_key in st.session_state:
+        st.session_state[draft_key] = st.session_state[draft_key]
 
 navigation_event = internal_navigation_event()
 if navigation_event:
