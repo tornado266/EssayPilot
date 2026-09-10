@@ -1095,6 +1095,8 @@ class AuthSessionTests(unittest.TestCase):
                     ),
                 ), patch(
                     "src.visitor_identity.browser_visitor_id", return_value=""
+                ), patch.object(
+                    SupabaseStore, "get_home_snapshot", return_value=([], [])
                 ):
                     app.run()
 

@@ -17,7 +17,9 @@ class EntryLoadingTests(unittest.TestCase):
         self.st = MagicMock()
         self.st.session_state = {}
         self.st.query_params = {"run_id": "run-bookmarked"}
-        self.st.columns.return_value = [MagicMock(), MagicMock(), MagicMock()]
+        self.st.columns.side_effect = lambda spec, **kwargs: [
+            MagicMock() for _ in range(spec if isinstance(spec, int) else len(spec))
+        ]
         self.store = Mock(spec=SupabaseStore)
         self.store.enabled = False
         self.user = CloudUser("user-a", "a@example.com", "token")
@@ -70,10 +72,13 @@ class EntryLoadingTests(unittest.TestCase):
     def test_mobile_navigation_retains_the_unloaded_bookmarked_run(self):
         self.st.session_state.update(page_mode="home", active_run_id="run-previous")
         self.namespace["render_app_navigation"](self.user, store=self.store)
-        rendered = "\n".join(str(call.args[0]) for call in self.st.markdown.call_args_list)
-        self.assertIn("?page=report&run_id=run-bookmarked", rendered)
-        self.assertIn("?page=training&run_id=run-bookmarked", rendered)
-        self.assertNotIn("run-previous", rendered)
+        buttons = {call.kwargs.get("key"): call.kwargs
+                   for call in self.st.button.call_args_list}
+        for route in ("report", "training"):
+            self.assertEqual(buttons[f"mobile_nav_{route}"]["args"],
+                             (route, "run-bookmarked"))
+            self.assertIs(buttons[f"mobile_nav_{route}"]["on_click"],
+                          self.namespace["navigate"])
 
 
 if __name__ == "__main__":

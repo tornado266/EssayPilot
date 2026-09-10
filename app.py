@@ -10,6 +10,7 @@ import os
 import re
 import time
 import uuid
+from copy import deepcopy
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -127,6 +128,7 @@ from src.topic_bank import (
     load_topic_bank,
 )
 from src.visitor_identity import browser_visitor_id, visitor_hash
+from src.internal_navigation import internal_navigation_event
 from ui.alpine import (
     inject_alpine_theme,
     inject_home_background,
@@ -3574,7 +3576,6 @@ def navigate(route: str, run_id: str = "", mode: str = "") -> None:
     st.session_state.page_mode = route
     st.query_params["page"] = route
     if run_id:
-        st.session_state.active_run_id = run_id
         st.query_params["run_id"] = run_id
     elif route == "write":
         st.query_params.pop("run_id", None)
@@ -3674,8 +3675,15 @@ def ensure_learning_assets(store: SupabaseStore, user: CloudUser | None) -> None
         structured, user_id=user.id, grading_run_id=run_id,
         question=str(st.session_state.get("topic_input") or ""),
     )
+    # These are insert-if-missing assets, not live progress reads. Once this
+    # exact batch succeeded, revisiting the report need not POST it again.
+    batch = (user.id, run_id, rows)
+    if st.session_state.get("learning_assets_synced_batch") == batch:
+        st.session_state.learning_assets_ready = True
+        return
     try:
         store.upsert_learning_items(user, rows)
+        st.session_state.learning_assets_synced_batch = deepcopy(batch)
         st.session_state.learning_assets_ready = True
     except (CloudStoreError, AttributeError):
         st.session_state.learning_assets_ready = False
@@ -5599,6 +5607,14 @@ def render_product_route(store: SupabaseStore, user: CloudUser | None) -> None:
     elif route == "growth":
         render_growth_page(store, user)
 
+
+navigation_event = internal_navigation_event()
+if navigation_event:
+    destination, destination_run, destination_mode = navigation_event
+    if destination == "demo":
+        st.query_params["page"] = "demo"
+    else:
+        navigate(destination, destination_run, destination_mode)
 
 cloud_store = SupabaseStore()
 cloud_store.bind_auth_session(
