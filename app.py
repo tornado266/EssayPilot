@@ -1926,7 +1926,9 @@ def render_draft_2_training(
                 )
                 cached_generation["submitted_recorded"] = True
             with st.spinner("正在评分第二稿并生成两稿对比报告..."):
-                render_scoring_loader()
+                scoring_loader = st.empty()
+                with scoring_loader.container():
+                    render_scoring_loader()
                 try:
                     draft_2_package, progress_report = generate_draft_2_feedback(
                         provider=provider,
@@ -2078,6 +2080,8 @@ def render_draft_2_training(
                         )
                     st.error("第二稿训练出现意外错误。")
                     st.code(f"{type(exc).__name__}: {exc}", language="text")
+                finally:
+                    scoring_loader.empty()
 
     result = st.session_state.get("draft_2_result")
     if isinstance(result, dict):
