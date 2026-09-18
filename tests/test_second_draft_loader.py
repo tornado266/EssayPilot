@@ -77,7 +77,7 @@ class SecondDraftLoaderTests(unittest.TestCase):
 
     def test_model_failure_shows_error_without_loader(self):
         app = self.submit('model')
-        self.assertTrue(any('第二稿评分失败' in item.value for item in app.error))
+        self.assertTrue(any('第二稿：评分服务暂时不可用' in item.value for item in app.error))
         self.assert_no_loader(app)
 
     def test_unexpected_failure_shows_error_without_loader(self):
