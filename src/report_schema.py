@@ -12,7 +12,7 @@ from typing import Any
 
 SCHEMA_VERSION = "2.9"
 SCORING_PROMPT_VERSION = "task2-score-zh-official-claimed-audit-v10-2026-08-11"
-FEEDBACK_PROMPT_VERSION = "task2-feedback-vocabulary-panel-v6-2026-08-20"
+FEEDBACK_PROMPT_VERSION = "task2-feedback-linked-priority-v7-2026-09-18"
 REPORT_PROMPT_VERSION = f"{SCORING_PROMPT_VERSION}+{FEEDBACK_PROMPT_VERSION}"
 PROMPT_VERSION = SCORING_PROMPT_VERSION  # score-only compatibility API
 SCORING_SKILL_VERSION = "ielts-writing-task2-official-v4"
@@ -380,6 +380,55 @@ del TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["properties"]["criteria"]
 
 class ExaminerResultError(ValueError):
     """Raised when a structured examiner response is incomplete or inconsistent."""
+
+
+def build_linked_teaching_schema(scoring: dict[str, Any]) -> dict[str, Any]:
+    """Constrain the primary coaching choice to its locked criterion's evidence.
+
+    Separate transport fields enforce ordering without unsupported tuple schemas.
+    The stored/UI report still uses the original two-item priorities array.
+    """
+    schema = deepcopy(TEACHING_FEEDBACK_JSON_SCHEMA)
+    body = schema["schema"]
+    branches = []
+    by_criterion = {item["criterion"]: item for item in scoring["criteria"]}
+    for short, full in COACHING_TO_SCORING_CRITERION.items():
+        quotes = by_criterion.get(full, {}).get("limitation_evidence", [])
+        if not quotes:
+            continue
+        branch = deepcopy(body["$defs"]["coaching_item"])
+        branch["properties"]["criterion"] = {"type": "string", "enum": [short]}
+        branch["properties"]["evidence"] = {
+            "type": "string", "enum": list(dict.fromkeys(quotes)),
+        }
+        branches.append(branch)
+    if not branches:
+        raise ExaminerResultError("The locked scoring decision has no limitation evidence for coaching.")
+    properties = {}
+    for key, value in body["properties"].items():
+        if key == "priorities":
+            properties["primary_priority"] = {"anyOf": branches}
+            properties["secondary_priority"] = {"$ref": "#/$defs/coaching_item"}
+        else:
+            properties[key] = value
+    body["properties"] = properties
+    body["required"].remove("priorities")
+    body["required"].extend(["primary_priority", "secondary_priority"])
+    return schema
+
+
+def restore_teaching_priorities(teaching: dict[str, Any]) -> dict[str, Any]:
+    """Adapt the generation-only fields without changing evidence or actions."""
+    if "primary_priority" not in teaching and "secondary_priority" not in teaching:
+        return teaching
+    if "priorities" in teaching or not all(
+        isinstance(teaching.get(key), dict)
+        for key in ("primary_priority", "secondary_priority")
+    ):
+        raise ExaminerResultError("Teaching must contain one primary and one secondary priority.")
+    result = deepcopy(teaching)
+    result["priorities"] = [result.pop("primary_priority"), result.pop("secondary_priority")]
+    return result
 
 
 class PriorityTrainingLinkError(ExaminerResultError):

@@ -24,7 +24,9 @@ from src.report_schema import (
     SCORING_SKILL_VERSION,
     SCORING_DECISION_JSON_SCHEMA,
     SKILL_VERSION,
-    TEACHING_FEEDBACK_JSON_SCHEMA,
+    ExaminerResultError,
+    build_linked_teaching_schema,
+    restore_teaching_priorities,
     drop_unverified_optional_teaching_items,
     estimated_band_range,
     restore_score_evidence_roles,
@@ -79,6 +81,12 @@ def get_runtime_setting(name: str, default: str | None = None) -> str | None:
 
 class AIGraderError(Exception):
     """Detailed error raised when an AI provider request fails."""
+
+    @property
+    def user_message(self) -> str:
+        if isinstance(self.original_error, ExaminerResultError):
+            return "报告内容未通过一致性校验，本次未生成完整报告。题目和作文已经保留，可以重试。"
+        return "评分服务暂时不可用。题目和作文已经保留，可以直接重试。"
 
     def __init__(
         self,
@@ -442,6 +450,7 @@ def grade_essay_package(
     def validate_teaching(teaching: dict[str, Any], attempt: int) -> dict[str, Any]:
         if "criteria" in teaching or "overall_band" in teaching:
             raise ValueError("The teaching stage attempted to modify locked scores.")
+        teaching = restore_teaching_priorities(teaching)
         if attempt == 2:
             teaching, removed = drop_unverified_optional_teaching_items(teaching, essay)
             sanitized_teaching_fields.extend(removed)
@@ -457,7 +466,7 @@ def grade_essay_package(
             config=teaching_config,
             stage="teaching",
             messages=teaching_messages,
-            response_schema=TEACHING_FEEDBACK_JSON_SCHEMA,
+            response_schema=build_linked_teaching_schema(scoring),
             max_completion_tokens=14000,
             validator=validate_teaching,
             audit_hook=audit_hook,

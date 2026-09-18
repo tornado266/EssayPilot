@@ -18,6 +18,9 @@ from src.report_schema import (
     SCORING_PROMPT_VERSION,
     SCORING_SKILL_VERSION,
     TEACHING_FEEDBACK_JSON_SCHEMA,
+    ExaminerResultError,
+    build_linked_teaching_schema,
+    restore_teaching_priorities,
     validate_scoring_decision,
 )
 from test_report_schema import ESSAY, valid_result
@@ -40,6 +43,84 @@ class FakeCompletions:
 
 
 class TwoStageGraderTests(unittest.TestCase):
+    def test_primary_schema_binds_each_criterion_to_its_own_locked_evidence(self):
+        scoring = validate_scoring_decision(self.scoring_payload(), ESSAY)
+        scoring["criteria"][0]["limitation_evidence"] = ["Public transport reduces traffic."]
+        before = deepcopy(TEACHING_FEEDBACK_JSON_SCHEMA)
+        schema = build_linked_teaching_schema(scoring)["schema"]
+        self.assertNotIn("priorities", schema["properties"])
+        self.assertIn("primary_priority", schema["required"])
+        self.assertIn("secondary_priority", schema["required"])
+        branches = schema["properties"]["primary_priority"]["anyOf"]
+        self.assertEqual(len(branches), 4)
+        for branch, item in zip(branches, scoring["criteria"], strict=True):
+            self.assertEqual(branch["properties"]["evidence"]["enum"], item["limitation_evidence"])
+            self.assertEqual(len(branch["properties"]["criterion"]["enum"]), 1)
+            self.assertFalse(branch["additionalProperties"])
+        self.assertEqual(branches[0]["properties"]["criterion"]["enum"], ["TR"])
+        self.assertEqual(TEACHING_FEEDBACK_JSON_SCHEMA, before)
+        self.assertEqual(
+            schema["properties"]["secondary_priority"], {"$ref": "#/$defs/coaching_item"}
+        )
+
+    def test_linked_generation_preserves_report_scores_and_training(self):
+        teaching = self.teaching_payload()
+        expected = deepcopy(teaching)
+        priorities = teaching.pop("priorities")
+        teaching["primary_priority"], teaching["secondary_priority"] = priorities
+        teaching["sentence_training"] = []
+        completions = FakeCompletions([
+            json.dumps(self.scoring_payload()), json.dumps(teaching),
+        ])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        with patch("src.ai_grader.build_client", return_value=client):
+            package = grade_essay_package(task_type="Task 2", topic="Question", essay=ESSAY)
+        result = package["structured"]
+        self.assertEqual(result["priorities"], expected["priorities"])
+        self.assertNotIn("primary_priority", result)
+        self.assertNotIn("secondary_priority", result)
+        originals = {
+            task["original"] for field in ("sentence_training", "logic_training")
+            for task in result[field]
+        }
+        self.assertTrue(all(item["evidence"] in originals for item in result["priorities"]))
+        self.assertEqual(result["overall_band"], 7.0)
+        self.assertEqual(len(completions.calls), 2)
+        sent = completions.calls[1]["response_format"]["json_schema"]["schema"]
+        self.assertIn("anyOf", sent["properties"]["primary_priority"])
+
+    def test_linked_generation_still_rejects_unlocked_primary_evidence(self):
+        teaching = self.teaching_payload()
+        priorities = teaching.pop("priorities")
+        teaching["primary_priority"], teaching["secondary_priority"] = priorities
+        teaching["primary_priority"]["evidence"] = "Public transport reduces traffic."
+        completions = FakeCompletions([
+            json.dumps(self.scoring_payload()), json.dumps(teaching), json.dumps(teaching),
+        ])
+        client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+        with (
+            patch("src.ai_grader.build_client", return_value=client),
+            patch("src.ai_grader.get_provider_config", return_value=("OPENAI_API_KEY", "key", "https://api.openai.com/v1")),
+        ):
+            with self.assertRaisesRegex(AIGraderError, "first priority evidence must equal"):
+                grade_essay_package(task_type="Task 2", topic="Question", essay=ESSAY)
+        self.assertEqual(len(completions.calls), 3)
+
+    def test_transport_requires_both_priorities_and_rejects_ambiguous_payload(self):
+        for payload in (
+            {"primary_priority": {}},
+            {"primary_priority": {}, "secondary_priority": {}, "priorities": []},
+        ):
+            with self.assertRaises(ExaminerResultError):
+                restore_teaching_priorities(payload)
+
+    def test_validation_failure_is_not_reported_as_service_outage(self):
+        validation = AIGraderError("OpenAI", "test", "test", True, ExaminerResultError("bad quote"))
+        network = AIGraderError("OpenAI", "test", "test", True, RuntimeError("offline"))
+        self.assertIn("一致性校验", validation.user_message)
+        self.assertNotIn("服务暂时不可用", validation.user_message)
+        self.assertIn("服务暂时不可用", network.user_message)
+
     def test_missing_api_key_fails_locally_without_a_provider_call(self):
         with patch(
             "src.ai_grader.get_provider_config",

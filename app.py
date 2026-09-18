@@ -2054,7 +2054,7 @@ def render_draft_2_training(
                                 "duration_ms": int((time.perf_counter() - draft_2_started_at) * 1000),
                             },
                         )
-                    st.error("第二稿评分失败。完整诊断信息如下。")
+                    st.error(f"第二稿：{exc.user_message}")
                     st.code(str(exc), language="text")
                 except Exception as exc:
                     if draft_2_ticket and cloud_store and cloud_user:
@@ -4423,7 +4423,7 @@ def render_write_page(store: SupabaseStore, user: CloudUser | None) -> None:
                             "duration_ms": grading_duration_ms,
                         },
                     )
-                    st.error("评分服务暂时不可用。题目和作文已经保留，可以直接重试。")
+                    st.error(exc.user_message)
                     with st.expander("查看技术诊断"):
                         st.code(str(exc), language="text")
                 except CloudStoreError as exc:

@@ -65,7 +65,7 @@ class PromptTests(unittest.TestCase):
         self.assertIn("Do not output `criteria`", prompt)
         self.assertNotIn("criteria", TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["properties"])
         self.assertNotIn("criteria", TEACHING_FEEDBACK_JSON_SCHEMA["schema"]["required"])
-        self.assertIn("Return exactly two `priorities`", prompt)
+        self.assertIn("Return `primary_priority` and `secondary_priority`", prompt)
         self.assertIn("learning_replacements", prompt)
         self.assertIn("vocabulary_recommendations", prompt)
         self.assertIn("4-6", prompt)
