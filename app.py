@@ -5024,21 +5024,21 @@ def _normalise_expression(item: dict[str, object]) -> dict[str, object]:
     run = item.get("grading_runs") if isinstance(item.get("grading_runs"), dict) else {}
     essay = run.get("essays") if isinstance(run.get("essays"), dict) else {}
     return {
-        "learning_item_id": item.get("id"),
+        "learning_item_id": item.get("id") or item.get("learning_item_id"),
         "grading_run_id": item.get("grading_run_id"),
         "item_type": item.get("item_type") or "expression",
         "item_key": item.get("item_key"),
         "origin": item.get("origin") or "report",
         "topic_category": item.get("topic_category") or "society_family",
         "function_category": item.get("function_category") or "core_collocation",
-        "expression": item.get("source_text") or "",
-        "meaning": item.get("explanation") or "",
+        "expression": item.get("source_text") or item.get("expression") or "",
+        "meaning": item.get("explanation") or item.get("meaning") or "",
         "usage_note": item.get("usage_note") or "",
-        "example": item.get("target_text") or "",
+        "example": item.get("target_text") or item.get("example") or "",
         "favorite": bool(item.get("favorite")),
         "status": item.get("status") or "new",
         "created_at": item.get("created_at") or "",
-        "source_question": essay.get("question") or "",
+        "source_question": essay.get("question") or item.get("source_question") or "",
     }
 
 
