@@ -5,6 +5,11 @@ import logging
 import re
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import test_membership_grading_flow as grading_fixtures
+from src import grading_workflow
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,24 +58,45 @@ class MembershipAppWiringTests(unittest.TestCase):
         cls.source = (ROOT / "app.py").read_text(encoding="utf-8")
 
     def test_first_report_reserves_only_after_all_cache_checks(self):
-        grading = self.source.split("def grade_submission", 1)[1].split(
-            "def render_topic_bank_picker", 1
-        )[0]
-        reservation_call = grading.index("dict(reserve_model_access")
-        self.assertLess(grading.index("find_cached_grading"), reservation_call)
-        self.assertLess(grading.index("find_cached_scoring"), reservation_call)
-        self.assertLess(reservation_call, grading.index("grade_essay_package"))
+        events = []
+        grade, _, _ = grading_fixtures.MembershipGradingFlowTests().build(
+            lambda **kw: events.append("teach") or grading_fixtures.valid_package(),
+            lambda **kw: events.append("score") or grading_fixtures.valid_scoring_package(),
+        )
+        store = SimpleNamespace(
+            find_cached_grading=lambda *a: events.append("report-cache"),
+            find_cached_scoring=lambda *a: events.append("score-cache"),
+            save_grading_cycle=lambda *a, **kw: {"grading_run_id": "run"},
+        )
+        grade(store, SimpleNamespace(id="user"), topic="topic", essay="essay",
+              reserve_model_access=lambda *a: events.append("reserve") or {},
+              complete_model_access=Mock())
+        self.assertEqual(events, ["report-cache", "score-cache", "reserve", "score", "teach"])
 
     def test_valid_report_is_cached_before_cloud_settlement(self):
-        grading = self.source.split("def grade_submission", 1)[1].split(
-            "def render_topic_bank_picker", 1
-        )[0]
-        self.assertLess(
-            grading.index("grading_cache[scoped_cache_key] = {"),
-            grading.index("save_grading_cycle"),
-        )
-        self.assertIn("pending_first_report_access", grading)
-        self.assertIn("GradingSettlementError", grading)
+        grade, st, _ = grading_fixtures.MembershipGradingFlowTests().build(
+            lambda **kw: grading_fixtures.valid_package())
+        ticket = {"kind": "membership", "flow_id": "flow"}
+
+        def save(*args, **kwargs):
+            entry = next(iter(st.session_state.grading_cache.values()))
+            self.assertEqual(entry["package"]["report"], "complete report")
+            return {"grading_run_id": "run"}
+
+        def complete(saved_ticket, run_id):
+            self.assertEqual(saved_ticket, ticket)
+            self.assertEqual(run_id, "run")
+            entry = next(iter(st.session_state.grading_cache.values()))
+            self.assertEqual(entry["cloud_ids"]["grading_run_id"], "run")
+            raise grading_workflow.CloudStoreError("uncertain completion")
+
+        store = SimpleNamespace(find_cached_grading=lambda *a: None,
+                                find_cached_scoring=lambda *a: None, save_grading_cycle=save)
+        with self.assertRaises(grading_workflow.GradingSettlementError):
+            grade(store, SimpleNamespace(id="user"), topic="topic", essay="essay",
+                  reserve_model_access=lambda *a: ticket, complete_model_access=complete)
+        self.assertEqual(list(st.session_state.pending_first_report_access.values()), [ticket])
+        self.assertNotIn("latest_report", st.session_state)
 
     def test_every_model_training_entry_has_a_server_reservation(self):
         self.assertIn("reserve_training_feedback_action(", self.source)
@@ -209,22 +235,20 @@ class MembershipAppWiringTests(unittest.TestCase):
             self.assertNotIn("complete_training_feedback_action", legacy_view)
 
     def test_second_draft_cache_preserves_the_original_reservation_ticket(self):
-        second_draft = self.source.split("def render_draft_2_training", 1)[1].split(
-            "def normalize_record", 1
-        )[0]
-        feedback_generation = self.source.split("def generate_draft_2_feedback", 1)[1].split(
-            "def persist_draft_2_cloud_result", 1
-        )[0]
-        self.assertIn("generate_draft_2_feedback(", second_draft)
-        self.assertIn('cached_generation["package"] = grade_essay_package(', feedback_generation)
-        self.assertIn(
-            'cached_generation["progress_report"] = comparison_future.result()',
-            feedback_generation,
+        ticket = {"flow_id": "original-flow"}
+        cache = {"access_ticket": ticket}
+        package = {"structured": {"overall_band": 7}, "report": "report"}
+        generate = lambda: grading_workflow.generate_second_draft(
+            provider="test", model="test", task_type="Task 2", topic="topic",
+            draft_1_text="original", draft_1_scores={}, draft_2_text="revision",
+            cached_generation=cache, score=lambda **kw: package,
+            teach=lambda **kw: package, compare=lambda **kw: "comparison",
+            prepare_comparison=lambda *a: (None, None), scores_from_report=lambda *a: {},
         )
-        self.assertNotIn(
-            'draft_2_cache[draft_2_fingerprint] = {"package": draft_2_package}',
-            second_draft,
-        )
+        self.assertEqual(generate(), (package, "comparison"))
+        self.assertIs(cache["access_ticket"], ticket)
+        self.assertEqual(generate(), (package, "comparison"))
+        self.assertIs(cache["access_ticket"], ticket)
 
     def test_offer_copy_discloses_first_and_renewal_prices_and_frozen_limits(self):
         offer = self.source.split("def render_founder_offer", 1)[1].split(

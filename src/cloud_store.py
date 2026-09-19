@@ -169,6 +169,7 @@ class SupabaseStore:
         prefer: str = "",
         api_key: str = "",
         timeout: float = 20,
+        count_only: bool = False,
     ) -> Any:
         if not self.enabled:
             raise CloudStoreError("Supabase is not configured.")
@@ -192,6 +193,11 @@ class SupabaseStore:
                 detail or f"Cloud request failed ({response.status_code}).",
                 status_code=response.status_code,
             )
+        if count_only:
+            total = str(response.headers.get("Content-Range", "")).rsplit("/", 1)[-1]
+            if not total.isdecimal():
+                raise CloudStoreError("Cloud response did not include an exact count.")
+            return int(total)
         if not response.content:
             return None
         try:
@@ -949,7 +955,8 @@ class SupabaseStore:
         )
 
     def list_grading_runs(
-        self, user: CloudUser, limit: int = 30, offset: int = 0
+        self, user: CloudUser, limit: int = 30, offset: int = 0,
+        *, summary: bool = False,
     ) -> list[dict[str, Any]]:
         params = {
             "select": "id,essay_id,overall_band,criteria,report_json,report_markdown,model,prompt_version,skill_version,draft_role,parent_run_id,created_at,essays(question,content,word_count)",
@@ -957,6 +964,8 @@ class SupabaseStore:
             "limit": str(limit),
             "offset": str(offset),
         }
+        if summary:
+            params["select"] = "id,essay_id,overall_band,criteria,draft_role,parent_run_id,created_at,essays(question,word_count)"
         try:
             result = self._authenticated_request(
                 user, "GET", "/rest/v1/grading_runs", params=params
@@ -967,10 +976,20 @@ class SupabaseStore:
             if not _missing_column_error(exc, "draft_role", "parent_run_id"):
                 raise
             params["select"] = "id,essay_id,overall_band,criteria,report_json,report_markdown,model,prompt_version,skill_version,created_at,essays(question,content,word_count)"
+            if summary:
+                params["select"] = "id,essay_id,overall_band,criteria,created_at,essays(question,word_count)"
             result = self._authenticated_request(
                 user, "GET", "/rest/v1/grading_runs", params=params
             )
         return result if isinstance(result, list) else []
+
+    def count_grading_runs(self, user: CloudUser) -> int:
+        """Count only the current owner's records, without downloading reports."""
+        return self._authenticated_request(
+            user, "HEAD", "/rest/v1/grading_runs",
+            params={"select": "id"}, prefer="count=exact", count_only=True,
+            timeout=5,
+        )
 
     def get_grading_run(self, user: CloudUser, grading_run_id: str) -> dict[str, Any] | None:
         """Load one owner-scoped grading run for a direct report link."""
@@ -1035,7 +1054,9 @@ class SupabaseStore:
         )
         return result[0] if isinstance(result, list) and result else {}
 
-    def list_learning_items(self, user: CloudUser, limit: int = 1000) -> list[dict[str, Any]]:
+    def list_learning_items(
+        self, user: CloudUser, limit: int = 1000, *, item_type: str = ""
+    ) -> list[dict[str, Any]]:
         result = self._authenticated_request(
             user,
             "GET",
@@ -1044,6 +1065,7 @@ class SupabaseStore:
                 "select": "id,grading_run_id,item_key,item_type,category,source_text,target_text,explanation,origin,topic_category,function_category,usage_note,favorite,status,review_count,last_reviewed_at,created_at,updated_at,grading_runs(created_at,essays(question))",
                 "order": "updated_at.desc",
                 "limit": str(limit),
+                **({"item_type": f"eq.{item_type}"} if item_type else {}),
             },
         )
         return result if isinstance(result, list) else []
@@ -1254,11 +1276,15 @@ class SupabaseStore:
         )
         return result if isinstance(result, list) else []
 
-    def list_draft_revisions(self, user: CloudUser, limit: int = 20) -> list[dict[str, Any]]:
+    def list_draft_revisions(
+        self, user: CloudUser, limit: int = 20, *, summary: bool = False
+    ) -> list[dict[str, Any]]:
         params = {
             "select": "id,essay_id,grading_run_id,revised_grading_run_id,draft_number,content,score_snapshot,report_json,report_markdown,progress_report,created_at,grading_runs!draft_revisions_grading_run_id_fkey(id,overall_band,report_json,report_markdown,essays(question,content)),revised_run:grading_runs!draft_revisions_revised_grading_run_id_fkey(id,overall_band,report_json,report_markdown,essays(question,content))",
             "order": "created_at.desc", "limit": str(limit),
         }
+        if summary:
+            params["select"] = "id,grading_run_id,revised_grading_run_id,score_snapshot,created_at,grading_runs!draft_revisions_grading_run_id_fkey(overall_band)"
         try:
             result = self._authenticated_request(
                 user, "GET", "/rest/v1/draft_revisions", params=params
@@ -1269,6 +1295,8 @@ class SupabaseStore:
             if not _missing_column_error(exc, "revised_grading_run_id"):
                 raise
             params["select"] = "id,essay_id,grading_run_id,draft_number,content,score_snapshot,report_json,report_markdown,progress_report,created_at,grading_runs(overall_band,report_json,report_markdown,essays(question,content))"
+            if summary:
+                params["select"] = "id,grading_run_id,score_snapshot,created_at,grading_runs(overall_band)"
             result = self._authenticated_request(
                 user, "GET", "/rest/v1/draft_revisions", params=params
             )

@@ -15,6 +15,7 @@ from streamlit.testing.v1 import AppTest
 from src import auth_session
 from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
 from src.home_dashboard import build_home_summary
+import test_membership_grading_flow as grading_fixtures
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,7 +52,25 @@ class HomeSnapshotCacheTests(unittest.TestCase):
                     self.assertGreater(index, 0)
                     self.assertEqual(ast.unparse(statements[index - 1]),
                                      "st.session_state.pop('latest_home_snapshot', None)")
-        self.assertEqual(writes, 8)
+        # First-report writes now live in the workflow; the seven remaining
+        # direct UI writes must still invalidate immediately before saving.
+        self.assertEqual(writes, 7)
+
+    def test_first_report_invalidates_snapshot_before_workflow_cloud_write(self):
+        grade, st, _ = grading_fixtures.MembershipGradingFlowTests().build(
+            lambda **kwargs: grading_fixtures.valid_package())
+        st.session_state.latest_home_snapshot = {"user_id": "user", "runs": ["old"]}
+        store = Mock()
+        store.find_cached_grading.return_value = None
+        store.find_cached_scoring.return_value = None
+
+        def save(*args, **kwargs):
+            self.assertNotIn("latest_home_snapshot", st.session_state)
+            return {"grading_run_id": "new"}
+
+        store.save_grading_cycle.side_effect = save
+        grade(store, SimpleNamespace(id="user"), topic="topic", essay="essay")
+        store.save_grading_cycle.assert_called_once()
 
     def setUp(self):
         self.st = MagicMock()

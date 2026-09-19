@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import test_ai_grader_pipeline as grader_fixtures
+from src import grading_workflow
 from src.ai_grader import AIGraderError, grade_essay_package, grade_scoring_decision
 from src.cloud_store import CloudStoreError, CloudUser, SupabaseStore
 from src.report_schema import SCORING_DECISION_JSON_SCHEMA, TEACHING_FEEDBACK_JSON_SCHEMA, score_snapshot
@@ -27,6 +28,7 @@ def load_app_function(name, namespace=None):
     module = ast.Module(body=[function], type_ignores=[])
     ast.fix_missing_locations(module)
     loaded = dict(namespace or {})
+    loaded["grading_workflow"] = grading_workflow
     exec(compile(module, str(ROOT / "app.py"), "exec"), loaded)
     return loaded[name]
 
@@ -97,6 +99,9 @@ class DraftTwoSessionTests(unittest.TestCase):
         self.assertEqual(result["draft_revision_id"], "revision-2")
         self.assertTrue(cache["settled"])
         self.assertNotIn("access_ticket", cache)
+        self.assertEqual(persist(store, object(), **kwargs), result)
+        self.assertEqual(store.save_calls, 1)
+        self.assertEqual(len(completion_calls), 2)
 
     def test_persisted_revision_hydrates_a_displayable_result(self):
         normalize = load_app_function(

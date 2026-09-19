@@ -19,6 +19,7 @@ import streamlit as st
 from unittest.mock import Mock
 from ui.alpine import render_scoring_loader
 from src.ai_grader import AIGraderError
+from src import grading_workflow
 
 scores = {'Overall Band': 6.5, 'TR': 6, 'CC': 6, 'LR': 7, 'GRA': 7}
 if 'draft_1_snapshot' not in st.session_state:

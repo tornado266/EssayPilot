@@ -4,6 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 
+from src import grading_workflow
+from src.cloud_store import CloudStoreError
+from src.grading_workflow import GradingSettlementError
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,15 +28,8 @@ class FakeStreamlit:
         self.session_state = AttrDict(user_id="visitor")
 
 
-class CloudStoreError(RuntimeError):
-    pass
-
-
-class GradingSettlementError(RuntimeError):
-    pass
-
-
 def load_grade_submission(namespace):
+    namespace["grading_workflow"] = grading_workflow
     tree = ast.parse((ROOT / "app.py").read_text(encoding="utf-8"))
     names = {
         "first_report_actor_key",
